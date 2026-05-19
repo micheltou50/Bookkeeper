@@ -170,6 +170,8 @@ export default function BookkeeperApp() {
   const [modal, setModal] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const dataRef = useRef(null);
+  const dataLoaded = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -178,30 +180,38 @@ export default function BookkeeperApp() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setLoading(false); return; }
+    if (!session || dataLoaded.current) { if (!session) setLoading(false); return; }
+    dataLoaded.current = true;
     (async () => {
       const { data: row } = await supabase.from("bk_app_data").select("data").eq("user_id", session.user.id).single();
       if (row?.data) {
         const d = row.data;
         if (!d.profiles) d.profiles = { mt: { ...DEFAULT_PROFILE, name: "MT Management" }, mworx: { ...DEFAULT_PROFILE, name: "Mworx Group" } };
         setData(d);
+        dataRef.current = d;
       } else {
         const defaults = { ...DEFAULT_DATA };
         await supabase.from("bk_app_data").upsert({ user_id: session.user.id, data: defaults, updated_at: new Date().toISOString() });
         setData(defaults);
+        dataRef.current = defaults;
       }
       setLoading(false);
     })();
   }, [session]);
 
-  const save = useCallback(async (newData) => {
-    setData(newData);
-    if (session) {
-      await supabase.from("bk_app_data").upsert({ user_id: session.user.id, data: newData, updated_at: new Date().toISOString() });
-    }
-  }, [session]);
+  const sessionRef = useRef(null);
+  useEffect(() => { sessionRef.current = session; }, [session]);
 
-  const logout = async () => { await supabase.auth.signOut(); setSession(null); setData(null); };
+  const save = useCallback((newData) => {
+    dataRef.current = newData;
+    setData(newData);
+    const s = sessionRef.current;
+    if (s) {
+      supabase.from("bk_app_data").upsert({ user_id: s.user.id, data: newData, updated_at: new Date().toISOString() });
+    }
+  }, []);
+
+  const logout = async () => { await supabase.auth.signOut(); setSession(null); setData(null); dataRef.current = null; dataLoaded.current = false; };
 
   const overdueChecked = useRef(false);
   useEffect(() => {
@@ -228,7 +238,7 @@ export default function BookkeeperApp() {
   const biz = data?.activeBusiness || "mt";
   const bizInfo = data?.businesses?.find((b) => b.id === biz);
   const accent = bizInfo?.accent || "#0d9488";
-  const switchBiz = (id) => save({ ...data, activeBusiness: id });
+  const switchBiz = (id) => { const d = latest(); save({ ...d, activeBusiness: id }); };
 
   const txns = data?.transactions?.[biz] || [];
   const contacts = data?.contacts?.[biz] || [];
@@ -238,14 +248,15 @@ export default function BookkeeperApp() {
 
   const jobNames = [...new Set([...invoices.map(i => i.job), ...txns.map(t => t.job)].filter(Boolean))].sort();
 
-  const addTransaction = (t) => { save({ ...data, transactions: { ...data.transactions, [biz]: [...txns, { ...t, id: uid() }] } }); setModal(null); };
-  const deleteTransaction = (id) => save({ ...data, transactions: { ...data.transactions, [biz]: txns.filter((t) => t.id !== id) } });
-  const addContact = (c, keepModal) => { save({ ...data, contacts: { ...data.contacts, [biz]: [...contacts, { ...c, id: uid() }] } }); if (!keepModal) setModal(null); };
-  const deleteContact = (id) => save({ ...data, contacts: { ...data.contacts, [biz]: contacts.filter((c) => c.id !== id) } });
-  const addInvoice = (inv) => { save({ ...data, invoices: { ...data.invoices, [biz]: [...invoices, { ...inv, id: uid() }] } }); setModal(null); setEditItem(null); };
-  const updateInvoice = (id, updates) => { save({ ...data, invoices: { ...data.invoices, [biz]: invoices.map((i) => (i.id === id ? { ...i, ...updates } : i)) } }); setModal(null); setEditItem(null); };
-  const deleteInvoice = (id) => save({ ...data, invoices: { ...data.invoices, [biz]: invoices.filter((i) => i.id !== id) } });
-  const saveProfile = (p) => { save({ ...data, profiles: { ...data.profiles, [biz]: p } }); setModal(null); };
+  const latest = () => dataRef.current || data;
+  const addTransaction = (t) => { const d = latest(); save({ ...d, transactions: { ...d.transactions, [biz]: [...(d.transactions?.[biz] || []), { ...t, id: uid() }] } }); setModal(null); };
+  const deleteTransaction = (id) => { const d = latest(); save({ ...d, transactions: { ...d.transactions, [biz]: (d.transactions?.[biz] || []).filter((t) => t.id !== id) } }); };
+  const addContact = (c, keepModal) => { const d = latest(); save({ ...d, contacts: { ...d.contacts, [biz]: [...(d.contacts?.[biz] || []), { ...c, id: uid() }] } }); if (!keepModal) setModal(null); };
+  const deleteContact = (id) => { const d = latest(); save({ ...d, contacts: { ...d.contacts, [biz]: (d.contacts?.[biz] || []).filter((c) => c.id !== id) } }); };
+  const addInvoice = (inv) => { const d = latest(); save({ ...d, invoices: { ...d.invoices, [biz]: [...(d.invoices?.[biz] || []), { ...inv, id: uid() }] } }); setModal(null); setEditItem(null); };
+  const updateInvoice = (id, updates) => { const d = latest(); save({ ...d, invoices: { ...d.invoices, [biz]: (d.invoices?.[biz] || []).map((i) => (i.id === id ? { ...i, ...updates } : i)) } }); setModal(null); setEditItem(null); };
+  const deleteInvoice = (id) => { const d = latest(); save({ ...d, invoices: { ...d.invoices, [biz]: (d.invoices?.[biz] || []).filter((i) => i.id !== id) } }); };
+  const saveProfile = (p) => { const d = latest(); save({ ...d, profiles: { ...d.profiles, [biz]: p } }); setModal(null); };
 
   const downloadPDF = (inv) => {
     const html = buildInvoiceHTML(inv, profile, accent);
