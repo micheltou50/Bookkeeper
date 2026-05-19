@@ -25,22 +25,13 @@ const DEFAULT_ACCOUNTS = [
   { code: "7500", name: "Platform Commissions", type: "Expense" },
 ];
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bankName: "", bsb: "", accountNumber: "", logo: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", bsb: "", account_number: "", logo_url: "" };
 
-const DEFAULT_DATA = {
-  businesses: [
-    { id: "mt", name: "MT Management", accent: "#0d9488" },
-    { id: "mworx", name: "Mworx Group", accent: "#b45309" },
-  ],
-  accounts: { mt: [...DEFAULT_ACCOUNTS], mworx: [...DEFAULT_ACCOUNTS] },
-  transactions: { mt: [], mworx: [] },
-  contacts: { mt: [], mworx: [] },
-  invoices: { mt: [], mworx: [] },
-  profiles: { mt: { ...DEFAULT_PROFILE, name: "MT Management" }, mworx: { ...DEFAULT_PROFILE, name: "Mworx Group" } },
-  activeBusiness: "mt",
-};
+const BUSINESSES = [
+  { id: "mt", name: "MT Management", accent: "#0d9488" },
+  { id: "mworx", name: "Mworx Group", accent: "#b45309" },
+];
 
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
 const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
 const today = () => new Date().toISOString().split("T")[0];
@@ -113,17 +104,17 @@ function buildInvoiceHTML(inv, profile, accent) {
 
   const subtotal = (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
-  const logoHTML = profile.logo
-    ? `<img src="${profile.logo}" style="height:56px;border-radius:6px" />`
+  const logoHTML = profile.logo_url
+    ? `<img src="${profile.logo_url}" style="height:56px;border-radius:6px" crossorigin="anonymous" />`
     : `<div style="background:#1a1a2e;color:#fff;padding:12px 24px;border-radius:6px;font-size:18px;font-weight:800">${profile.name || "Company"}</div>`;
 
-  const bankHTML = (profile.bsb || profile.accountNumber) ? `
+  const bankHTML = (profile.bsb || profile.account_number) ? `
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin-bottom:16px">
       <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:${accent};margin-bottom:8px">Payment Details</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 28px;font-size:11px;color:#64748b">
-        ${profile.bankName ? `<div>Account Name: <span style="color:#1e293b;font-weight:600">${profile.bankName}</span></div>` : ""}
+        ${profile.bank_name ? `<div>Account Name: <span style="color:#1e293b;font-weight:600">${profile.bank_name}</span></div>` : ""}
         ${profile.bsb ? `<div>BSB: <span style="color:#1e293b;font-weight:600">${profile.bsb}</span></div>` : ""}
-        ${profile.accountNumber ? `<div>Account Number: <span style="color:#1e293b;font-weight:600">${profile.accountNumber}</span></div>` : ""}
+        ${profile.account_number ? `<div>Account Number: <span style="color:#1e293b;font-weight:600">${profile.account_number}</span></div>` : ""}
         <div>Reference: <span style="color:#1e293b;font-weight:600">${inv.number || ""}</span></div>
       </div>
     </div>` : "";
@@ -142,8 +133,8 @@ function buildInvoiceHTML(inv, profile, accent) {
     </div>
     <div style="display:flex;gap:44px;margin-bottom:36px">
       <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Issued</div><div style="font-size:12px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div></div>
-      ${inv.dueDate ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due</div><div style="font-size:12px;color:#1e293b">${fmtDate(inv.dueDate)}</div></div>` : ""}
-      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b;line-height:1.5"><strong>${inv.contact || ""}</strong>${inv.contactCompany ? `<br><span style="color:#64748b;font-size:11px">${inv.contactCompany}</span>` : ""}${inv.contactAbn ? `<br><span style="color:#64748b;font-size:10px">ABN ${inv.contactAbn}</span>` : ""}${inv.contactAddress ? `<br><span style="color:#64748b;font-size:10px">${inv.contactAddress}</span>` : ""}${inv.contactEmail ? `<br><span style="color:#64748b;font-size:10px">${inv.contactEmail}</span>` : ""}${inv.contactPhone ? `<br><span style="color:#64748b;font-size:10px">${inv.contactPhone}</span>` : ""}</div></div>
+      ${inv.due_date ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due</div><div style="font-size:12px;color:#1e293b">${fmtDate(inv.due_date)}</div></div>` : ""}
+      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b;line-height:1.5"><strong>${inv.contact_name || ""}</strong>${inv.contact_company ? `<br><span style="color:#64748b;font-size:11px">${inv.contact_company}</span>` : ""}${inv.contact_abn ? `<br><span style="color:#64748b;font-size:10px">ABN ${inv.contact_abn}</span>` : ""}${inv.contact_address ? `<br><span style="color:#64748b;font-size:10px">${inv.contact_address}</span>` : ""}${inv.contact_email ? `<br><span style="color:#64748b;font-size:10px">${inv.contact_email}</span>` : ""}${inv.contact_phone ? `<br><span style="color:#64748b;font-size:10px">${inv.contact_phone}</span>` : ""}</div></div>
       ${inv.job ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Job</div><div style="font-size:12px;color:#1e293b">${inv.job}</div></div>` : ""}
     </div>
     <div style="border-top:1px dashed #e2e8f0;margin-bottom:28px">${items}</div>
@@ -164,14 +155,21 @@ function buildInvoiceHTML(inv, profile, accent) {
 
 export default function BookkeeperApp() {
   const [session, setSession] = useState(undefined);
-  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const dataRef = useRef(null);
-  const dataLoaded = useRef(false);
+
+  const [biz, setBiz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mt");
+  const [contacts, setContacts] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [txns, setTxns] = useState([]);
+  const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
+
+  const bizInfo = BUSINESSES.find((b) => b.id === biz);
+  const accent = bizInfo?.accent || "#0d9488";
+  const accounts = DEFAULT_ACCOUNTS;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -179,84 +177,145 @@ export default function BookkeeperApp() {
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (!session || dataLoaded.current) { if (!session) setLoading(false); return; }
-    dataLoaded.current = true;
-    (async () => {
-      const { data: row } = await supabase.from("bk_app_data").select("data").eq("user_id", session.user.id).single();
-      if (row?.data) {
-        const d = row.data;
-        if (!d.profiles) d.profiles = { mt: { ...DEFAULT_PROFILE, name: "MT Management" }, mworx: { ...DEFAULT_PROFILE, name: "Mworx Group" } };
-        setData(d);
-        dataRef.current = d;
-      } else {
-        const defaults = { ...DEFAULT_DATA };
-        await supabase.from("bk_app_data").upsert({ user_id: session.user.id, data: defaults, updated_at: new Date().toISOString() });
-        setData(defaults);
-        dataRef.current = defaults;
+  const loadData = useCallback(async (businessId) => {
+    if (!session) return;
+    setLoading(true);
+    const [cRes, iRes, tRes, pRes] = await Promise.all([
+      supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
+      supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
+      supabase.from("bk_transactions").select("*").eq("business_id", businessId).order("date", { ascending: false }),
+      supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
+    ]);
+
+    const loadedInvoices = iRes.data || [];
+    if (loadedInvoices.length) {
+      const ids = loadedInvoices.map((i) => i.id);
+      const { data: items } = await supabase.from("bk_invoice_items").select("*").in("invoice_id", ids).order("sort_order");
+      const itemMap = {};
+      for (const item of items || []) {
+        (itemMap[item.invoice_id] ||= []).push(item);
       }
-      setLoading(false);
-    })();
+      for (const inv of loadedInvoices) {
+        inv.items = itemMap[inv.id] || [];
+      }
+    }
+
+    setContacts(cRes.data || []);
+    setInvoices(loadedInvoices);
+    setTxns(tRes.data || []);
+    setProfile(pRes.data || { ...DEFAULT_PROFILE, name: bizInfo?.name || "" });
+    setLoading(false);
+
+    // Mark overdue invoices server-side
+    await supabase.from("bk_invoices")
+      .update({ status: "overdue" })
+      .eq("business_id", businessId)
+      .eq("status", "sent")
+      .lt("due_date", today());
+    // Refresh invoices if any were updated
+    const { data: freshInv } = await supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false });
+    if (freshInv) {
+      for (const inv of freshInv) {
+        const existing = loadedInvoices.find((i) => i.id === inv.id);
+        inv.items = existing?.items || [];
+      }
+      setInvoices(freshInv);
+    }
   }, [session]);
 
-  const sessionRef = useRef(null);
-  useEffect(() => { sessionRef.current = session; }, [session]);
-
-  const save = useCallback((newData) => {
-    dataRef.current = newData;
-    setData(newData);
-    const s = sessionRef.current;
-    if (s) {
-      supabase.from("bk_app_data").upsert({ user_id: s.user.id, data: newData, updated_at: new Date().toISOString() });
-    }
-  }, []);
-
-  const logout = async () => { await supabase.auth.signOut(); setSession(null); setData(null); dataRef.current = null; dataLoaded.current = false; };
-
-  const overdueChecked = useRef(false);
   useEffect(() => {
-    if (!data || overdueChecked.current) return;
-    overdueChecked.current = true;
-    const now = new Date();
-    let changed = false;
-    const updated = { ...data, invoices: { ...data.invoices } };
-    for (const bizKey of Object.keys(updated.invoices)) {
-      updated.invoices[bizKey] = updated.invoices[bizKey].map((inv) => {
-        if (inv.status === "sent" && inv.dueDate && new Date(inv.dueDate) < now) {
-          changed = true;
-          return { ...inv, status: "overdue" };
-        }
-        return inv;
-      });
+    if (session) loadData(biz);
+  }, [session, biz, loadData]);
+
+  const switchBiz = (id) => {
+    setBiz(id);
+    localStorage.setItem("bk_activeBusiness", id);
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setContacts([]);
+    setInvoices([]);
+    setTxns([]);
+    setProfile({ ...DEFAULT_PROFILE });
+  };
+
+  const jobNames = [...new Set([...invoices.map((i) => i.job), ...txns.map((t) => t.job)].filter(Boolean))].sort();
+
+  // --- Mutation functions: each writes directly to its table ---
+
+  const addTransaction = async (t) => {
+    const row = { user_id: session.user.id, business_id: biz, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job };
+    const { data: inserted } = await supabase.from("bk_transactions").insert(row).select().single();
+    if (inserted) setTxns((prev) => [inserted, ...prev]);
+    setModal(null);
+  };
+
+  const deleteTransaction = async (id) => {
+    await supabase.from("bk_transactions").delete().eq("id", id);
+    setTxns((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const addContact = async (c, keepModal) => {
+    const row = { user_id: session.user.id, business_id: biz, name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
+    const { data: inserted } = await supabase.from("bk_contacts").insert(row).select().single();
+    if (inserted) setContacts((prev) => [...prev, inserted].sort((a, b) => a.name.localeCompare(b.name)));
+    if (!keepModal) setModal(null);
+    return inserted;
+  };
+
+  const deleteContact = async (id) => {
+    await supabase.from("bk_contacts").delete().eq("id", id);
+    setContacts((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const addInvoice = async (inv) => {
+    const items = inv.items || [];
+    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, notes: inv.notes, status: inv.status, total: inv.total };
+    const { data: inserted } = await supabase.from("bk_invoices").insert(row).select().single();
+    if (inserted) {
+      if (items.length) {
+        const itemRows = items.map((it, idx) => ({ invoice_id: inserted.id, description: it.description, note: it.note, qty: Number(it.qty) || 1, rate: Number(it.rate) || 0, sort_order: idx }));
+        const { data: insertedItems } = await supabase.from("bk_invoice_items").insert(itemRows).select();
+        inserted.items = insertedItems || [];
+      } else {
+        inserted.items = [];
+      }
+      setInvoices((prev) => [inserted, ...prev]);
     }
-    if (changed) save(updated);
-  }, [data]);
+    setModal(null);
+    setEditItem(null);
+  };
 
-  if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8" }}>Loading...</div>;
-  if (!session) return <LoginScreen />;
+  const updateInvoice = async (id, updates) => {
+    const dbUpdates = { ...updates };
+    const items = dbUpdates.items;
+    delete dbUpdates.items;
+    await supabase.from("bk_invoices").update(dbUpdates).eq("id", id);
+    if (items) {
+      await supabase.from("bk_invoice_items").delete().eq("invoice_id", id);
+      const itemRows = items.map((it, idx) => ({ invoice_id: id, description: it.description, note: it.note, qty: Number(it.qty) || 1, rate: Number(it.rate) || 0, sort_order: idx }));
+      const { data: newItems } = await supabase.from("bk_invoice_items").insert(itemRows).select();
+      setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates, items: newItems || [] } : i)));
+    } else {
+      setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates } : i)));
+    }
+    setModal(null);
+    setEditItem(null);
+  };
 
-  const biz = data?.activeBusiness || "mt";
-  const bizInfo = data?.businesses?.find((b) => b.id === biz);
-  const accent = bizInfo?.accent || "#0d9488";
-  const switchBiz = (id) => { const d = latest(); save({ ...d, activeBusiness: id }); };
+  const deleteInvoice = async (id) => {
+    await supabase.from("bk_invoices").delete().eq("id", id);
+    setInvoices((prev) => prev.filter((i) => i.id !== id));
+  };
 
-  const txns = data?.transactions?.[biz] || [];
-  const contacts = data?.contacts?.[biz] || [];
-  const accounts = data?.accounts?.[biz] || [];
-  const invoices = data?.invoices?.[biz] || [];
-  const profile = data?.profiles?.[biz] || { ...DEFAULT_PROFILE };
-
-  const jobNames = [...new Set([...invoices.map(i => i.job), ...txns.map(t => t.job)].filter(Boolean))].sort();
-
-  const latest = () => dataRef.current || data;
-  const addTransaction = (t) => { const d = latest(); save({ ...d, transactions: { ...d.transactions, [biz]: [...(d.transactions?.[biz] || []), { ...t, id: uid() }] } }); setModal(null); };
-  const deleteTransaction = (id) => { const d = latest(); save({ ...d, transactions: { ...d.transactions, [biz]: (d.transactions?.[biz] || []).filter((t) => t.id !== id) } }); };
-  const addContact = (c, keepModal) => { const d = latest(); save({ ...d, contacts: { ...d.contacts, [biz]: [...(d.contacts?.[biz] || []), { ...c, id: uid() }] } }); if (!keepModal) setModal(null); };
-  const deleteContact = (id) => { const d = latest(); save({ ...d, contacts: { ...d.contacts, [biz]: (d.contacts?.[biz] || []).filter((c) => c.id !== id) } }); };
-  const addInvoice = (inv) => { const d = latest(); save({ ...d, invoices: { ...d.invoices, [biz]: [...(d.invoices?.[biz] || []), { ...inv, id: uid() }] } }); setModal(null); setEditItem(null); };
-  const updateInvoice = (id, updates) => { const d = latest(); save({ ...d, invoices: { ...d.invoices, [biz]: (d.invoices?.[biz] || []).map((i) => (i.id === id ? { ...i, ...updates } : i)) } }); setModal(null); setEditItem(null); };
-  const deleteInvoice = (id) => { const d = latest(); save({ ...d, invoices: { ...d.invoices, [biz]: (d.invoices?.[biz] || []).filter((i) => i.id !== id) } }); };
-  const saveProfile = (p) => { const d = latest(); save({ ...d, profiles: { ...d.profiles, [biz]: p } }); setModal(null); };
+  const saveProfile = async (p) => {
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url };
+    const { data: saved } = await supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single();
+    if (saved) setProfile(saved);
+    setModal(null);
+  };
 
   const downloadPDF = (inv) => {
     const html = buildInvoiceHTML(inv, profile, accent);
@@ -272,8 +331,8 @@ export default function BookkeeperApp() {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
-    const body = `Hi ${inv.contact || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.dueDate ? `Payment is due by ${fmtDate(inv.dueDate)}.\n\n` : ""}${profile.bsb ? `Bank details:\nAccount: ${profile.bankName || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.accountNumber}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
-    window.open(`mailto:${inv.contactEmail || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    const body = `Hi ${inv.contact_name || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.\n\n` : ""}${profile.bsb ? `Bank details:\nAccount: ${profile.bank_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
+    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
   };
 
@@ -281,17 +340,19 @@ export default function BookkeeperApp() {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
-    const overdueDays = inv.dueDate ? Math.max(0, Math.floor((Date.now() - new Date(inv.dueDate)) / 86400000)) : 0;
-    const body = `Hi ${inv.contact || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\nAccount: ${profile.bankName || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.accountNumber}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
-    window.open(`mailto:${inv.contactEmail || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-    if (inv.dueDate && new Date(inv.dueDate) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+    const overdueDays = inv.due_date ? Math.max(0, Math.floor((Date.now() - new Date(inv.due_date)) / 86400000)) : 0;
+    const body = `Hi ${inv.contact_name || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\nAccount: ${profile.bank_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
+    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
   };
 
   const markPaid = (inv) => {
-    updateInvoice(inv.id, { status: "paid", paidDate: today() });
+    updateInvoice(inv.id, { status: "paid", paid_date: today() });
   };
 
-  if (loading || !data) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8", fontFamily: "'IBM Plex Sans', sans-serif" }}>Loading...</div>;
+  if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8" }}>Loading...</div>;
+  if (!session) return <LoginScreen />;
+  if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8", fontFamily: "'IBM Plex Sans', sans-serif" }}>Loading...</div>;
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
@@ -433,7 +494,7 @@ export default function BookkeeperApp() {
     const confirmReceipt = () => {
       if (!extracted) return;
       const acct = accounts.find((a) => a.name === extracted.category && a.type === "Expense");
-      addTransaction({ date: extracted.date || today(), type: "expense", description: extracted.description || extracted.vendor || "Receipt", amount: String(extracted.total || 0), account: acct?.name || extracted.category || "", contact: extracted.vendor || "", reference: "", receiptPath: extracted.receiptPath || "", job: receiptJob });
+      addTransaction({ date: extracted.date || today(), type: "expense", description: extracted.description || extracted.vendor || "Receipt", amount: String(extracted.total || 0), account: acct?.name || extracted.category || "", contact: extracted.vendor || "", reference: "", receipt_path: extracted.receiptPath || "", job: receiptJob });
     };
 
     const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setExtracted(null); setCorners(null); setError(""); };
@@ -576,7 +637,7 @@ export default function BookkeeperApp() {
   };
 
   const InvoiceForm = ({ existing }) => {
-    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", contactCompany: "", contactAbn: "", contactAddress: "", contactPhone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
+    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), due_date: "", contact_name: "", contact_email: "", contact_company: "", contact_abn: "", contact_address: "", contact_phone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
     const [f, setF] = useState(init);
     const [quickAdd, setQuickAdd] = useState(false);
     const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
@@ -597,13 +658,13 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Due Date</label><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Due Date</label><input type="date" value={f.due_date || ""} onChange={(e) => setF({ ...f, due_date: e.target.value })} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Contact</label>
             <div style={{ display: "flex", gap: 4 }}>
-              <select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || "", contactCompany: c?.company || "", contactAbn: c?.abn || "", contactAddress: c?.address || "", contactPhone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select>
+              <select value={f.contact_name || ""} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact_name: e.target.value, contact_email: c?.email || "", contact_company: c?.company || "", contact_abn: c?.abn || "", contact_address: c?.address || "", contact_phone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select>
               <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
             </div>
           </div>
@@ -625,7 +686,7 @@ export default function BookkeeperApp() {
               <div style={{ marginBottom: 8 }}><input value={qa.address} onChange={(e) => setQa({ ...qa, address: e.target.value })} placeholder="Address" style={{ ...s.input, fontSize: 12 }} /></div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button disabled={!qa.name} onClick={() => { addContact({ ...qa, type: "client", notes: "" }, true); setF({ ...f, contact: qa.name, contactEmail: qa.email, contactCompany: qa.company, contactAbn: qa.abn, contactAddress: qa.address, contactPhone: qa.phone }); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name ? 0.4 : 1 }}>Add & Select</button>
+              <button disabled={!qa.name} onClick={async () => { const inserted = await addContact({ ...qa, type: "client", notes: "" }, true); if (inserted) setF({ ...f, contact_name: inserted.name, contact_email: inserted.email || "", contact_company: inserted.company || "", contact_abn: inserted.abn || "", contact_address: inserted.address || "", contact_phone: inserted.phone || "" }); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name ? 0.4 : 1 }}>Add & Select</button>
               <button onClick={() => { setQuickAdd(false); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
           </div>
@@ -659,12 +720,15 @@ export default function BookkeeperApp() {
     const [f, setF] = useState({ ...profile });
     const fileRef = useRef(null);
 
-    const handleLogo = (e) => {
+    const handleLogo = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => setF({ ...f, logo: reader.result });
-      reader.readAsDataURL(file);
+      const filePath = `${session.user.id}/${biz}_logo_${Date.now()}.${file.name.split(".").pop()}`;
+      const { error } = await supabase.storage.from("receipts").upload(filePath, file, { contentType: file.type, upsert: true });
+      if (!error) {
+        const { data } = supabase.storage.from("receipts").getPublicUrl(filePath);
+        if (data?.publicUrl) setF({ ...f, logo_url: data.publicUrl });
+      }
     };
 
     return (
@@ -676,28 +740,28 @@ export default function BookkeeperApp() {
         <div style={{ marginBottom: 16 }}>
           <label style={s.label}>Logo</label>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {f.logo ? <img src={f.logo} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #2a2d3e" }} /> : <div style={{ width: 48, height: 48, background: "#0f1117", borderRadius: 6, border: "1px dashed #2a2d3e" }} />}
+            {f.logo_url ? <img src={f.logo_url} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #2a2d3e" }} /> : <div style={{ width: 48, height: 48, background: "#0f1117", borderRadius: 6, border: "1px dashed #2a2d3e" }} />}
             <input ref={fileRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
             <button onClick={() => fileRef.current?.click()} style={s.btnOutline}>Upload Logo</button>
-            {f.logo && <button onClick={() => setF({ ...f, logo: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
+            {f.logo_url && <button onClick={() => setF({ ...f, logo_url: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
           </div>
         </div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn || ""} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
         </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address || ""} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone || ""} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
         </div>
         <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 8 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Bank Details (shown on invoices)</label>
         </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.bankName} onChange={(e) => setF({ ...f, bankName: e.target.value })} placeholder="Mworx Group Pty Ltd" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Mworx Group Pty Ltd" style={s.input} /></div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.accountNumber} onChange={(e) => setF({ ...f, accountNumber: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
         </div>
         <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
       </div>
@@ -802,7 +866,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{t.job || ""}</td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: "#f87171", whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      {t.receiptPath && <button onClick={() => openReceipt(t.receiptPath)} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
+                      {t.receipt_path && <button onClick={() => openReceipt(t.receipt_path)} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
                       <button onClick={() => deleteTransaction(t.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
@@ -851,7 +915,7 @@ export default function BookkeeperApp() {
                   <tr key={inv.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
-                    <td style={s.td}>{inv.contact || "--"}</td>
+                    <td style={s.td}>{inv.contact_name || "--"}</td>
                     <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{inv.job || ""}</td>
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
@@ -915,7 +979,7 @@ export default function BookkeeperApp() {
         <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>MT Management</div>
       </div>
       <div style={s.bizSwitcher}>
-        {data.businesses.map((b) => (
+        {BUSINESSES.map((b) => (
           <button key={b.id} onClick={() => { switchBiz(b.id); setSidebarOpen(false); }} style={s.bizBtn(biz === b.id, b.accent)}>
             <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: b.accent, marginRight: 6 }} />{b.name}
           </button>
