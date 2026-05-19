@@ -203,6 +203,23 @@ export default function BookkeeperApp() {
 
   const logout = async () => { await supabase.auth.signOut(); setSession(null); setData(null); };
 
+  useEffect(() => {
+    if (!data) return;
+    const now = new Date();
+    let changed = false;
+    const updated = { ...data, invoices: { ...data.invoices } };
+    for (const bizKey of Object.keys(updated.invoices)) {
+      updated.invoices[bizKey] = updated.invoices[bizKey].map((inv) => {
+        if (inv.status === "sent" && inv.dueDate && new Date(inv.dueDate) < now) {
+          changed = true;
+          return { ...inv, status: "overdue" };
+        }
+        return inv;
+      });
+    }
+    if (changed) save(updated);
+  }, [data?.invoices]);
+
   if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8" }}>Loading...</div>;
   if (!session) return <LoginScreen />;
 
@@ -235,6 +252,30 @@ export default function BookkeeperApp() {
     document.body.appendChild(el);
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save().then(() => document.body.removeChild(el));
+  };
+
+  const sendInvoice = (inv) => {
+    downloadPDF(inv);
+    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    const bName = profile.name || "our company";
+    const subject = `${docType} ${inv.number} from ${bName}`;
+    const body = `Hi ${inv.contact || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.dueDate ? `Payment is due by ${fmtDate(inv.dueDate)}.\n\n` : ""}${profile.bsb ? `Bank details:\nAccount: ${profile.bankName || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.accountNumber}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
+    window.open(`mailto:${inv.contactEmail || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
+  };
+
+  const sendReminder = (inv) => {
+    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    const bName = profile.name || "our company";
+    const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
+    const overdueDays = inv.dueDate ? Math.max(0, Math.floor((Date.now() - new Date(inv.dueDate)) / 86400000)) : 0;
+    const body = `Hi ${inv.contact || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\nAccount: ${profile.bankName || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.accountNumber}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
+    window.open(`mailto:${inv.contactEmail || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    if (inv.dueDate && new Date(inv.dueDate) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+  };
+
+  const markPaid = (inv) => {
+    updateInvoice(inv.id, { status: "paid", paidDate: today() });
   };
 
   if (loading || !data) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8", fontFamily: "'IBM Plex Sans', sans-serif" }}>Loading...</div>;
@@ -795,9 +836,11 @@ export default function BookkeeperApp() {
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
+                      {inv.status !== "paid" && <button onClick={() => sendInvoice(inv)} title="Send Invoice" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>}
+                      {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Download /></button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      {inv.status !== "paid" && <button onClick={() => updateInvoice(inv.id, { status: "paid" })} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>}
+                      {inv.status !== "paid" && <button onClick={() => markPaid(inv)} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>}
                       <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
