@@ -143,7 +143,7 @@ function buildInvoiceHTML(inv, profile, accent) {
     <div style="display:flex;gap:44px;margin-bottom:36px">
       <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Issued</div><div style="font-size:12px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div></div>
       ${inv.dueDate ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due</div><div style="font-size:12px;color:#1e293b">${fmtDate(inv.dueDate)}</div></div>` : ""}
-      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b"><strong>${inv.contact || ""}</strong>${inv.contactCompany ? `<br><span style="color:#64748b;font-size:11px">${inv.contactCompany}</span>` : ""}</div></div>
+      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b;line-height:1.5"><strong>${inv.contact || ""}</strong>${inv.contactCompany ? `<br><span style="color:#64748b;font-size:11px">${inv.contactCompany}</span>` : ""}${inv.contactAbn ? `<br><span style="color:#64748b;font-size:10px">ABN ${inv.contactAbn}</span>` : ""}${inv.contactAddress ? `<br><span style="color:#64748b;font-size:10px">${inv.contactAddress}</span>` : ""}${inv.contactEmail ? `<br><span style="color:#64748b;font-size:10px">${inv.contactEmail}</span>` : ""}${inv.contactPhone ? `<br><span style="color:#64748b;font-size:10px">${inv.contactPhone}</span>` : ""}</div></div>
       ${inv.job ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Job</div><div style="font-size:12px;color:#1e293b">${inv.job}</div></div>` : ""}
     </div>
     <div style="border-top:1px dashed #e2e8f0;margin-bottom:28px">${items}</div>
@@ -563,10 +563,10 @@ export default function BookkeeperApp() {
   };
 
   const InvoiceForm = ({ existing }) => {
-    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", contactCompany: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
+    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", contactCompany: "", contactAbn: "", contactAddress: "", contactPhone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
     const [f, setF] = useState(init);
     const [quickAdd, setQuickAdd] = useState(false);
-    const [qa, setQa] = useState({ name: "", email: "", company: "" });
+    const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
@@ -590,7 +590,7 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Contact</label>
             <div style={{ display: "flex", gap: 4 }}>
-              <select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || f.contactEmail, contactCompany: c?.company || f.contactCompany }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select>
+              <select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || "", contactCompany: c?.company || "", contactAbn: c?.abn || "", contactAddress: c?.address || "", contactPhone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select>
               <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
             </div>
           </div>
@@ -600,13 +600,20 @@ export default function BookkeeperApp() {
           <div style={{ background: "#0f1117", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Add Client</div>
             <div style={s.grid2}>
-              <div style={{ marginBottom: 8 }}><input value={qa.name} onChange={(e) => setQa({ ...qa, name: e.target.value })} placeholder="Name" style={{ ...s.input, fontSize: 12 }} /></div>
-              <div style={{ marginBottom: 8 }}><input value={qa.email} onChange={(e) => setQa({ ...qa, email: e.target.value })} placeholder="Email" style={{ ...s.input, fontSize: 12 }} /></div>
+              <div style={{ marginBottom: 8 }}><input value={qa.name} onChange={(e) => setQa({ ...qa, name: e.target.value })} placeholder="Name *" style={{ ...s.input, fontSize: 12 }} /></div>
+              <div style={{ marginBottom: 8 }}><input value={qa.company} onChange={(e) => setQa({ ...qa, company: e.target.value })} placeholder="Company" style={{ ...s.input, fontSize: 12 }} /></div>
             </div>
-            <div style={{ marginBottom: 8 }}><input value={qa.company} onChange={(e) => setQa({ ...qa, company: e.target.value })} placeholder="Company" style={{ ...s.input, fontSize: 12 }} /></div>
+            <div style={s.grid2}>
+              <div style={{ marginBottom: 8 }}><input value={qa.email} onChange={(e) => setQa({ ...qa, email: e.target.value })} placeholder="Email" style={{ ...s.input, fontSize: 12 }} /></div>
+              <div style={{ marginBottom: 8 }}><input value={qa.phone} onChange={(e) => setQa({ ...qa, phone: e.target.value })} placeholder="Phone" style={{ ...s.input, fontSize: 12 }} /></div>
+            </div>
+            <div style={s.grid2}>
+              <div style={{ marginBottom: 8 }}><input value={qa.abn} onChange={(e) => setQa({ ...qa, abn: e.target.value })} placeholder="ABN" style={{ ...s.input, fontSize: 12 }} /></div>
+              <div style={{ marginBottom: 8 }}><input value={qa.address} onChange={(e) => setQa({ ...qa, address: e.target.value })} placeholder="Address" style={{ ...s.input, fontSize: 12 }} /></div>
+            </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button disabled={!qa.name} onClick={() => { addContact({ ...qa, type: "client", phone: "", abn: "", address: "", notes: "" }, true); setF({ ...f, contact: qa.name, contactEmail: qa.email, contactCompany: qa.company }); setQa({ name: "", email: "", company: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name ? 0.4 : 1 }}>Add & Select</button>
-              <button onClick={() => { setQuickAdd(false); setQa({ name: "", email: "", company: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
+              <button disabled={!qa.name} onClick={() => { addContact({ ...qa, type: "client", notes: "" }, true); setF({ ...f, contact: qa.name, contactEmail: qa.email, contactCompany: qa.company, contactAbn: qa.abn, contactAddress: qa.address, contactPhone: qa.phone }); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name ? 0.4 : 1 }}>Add & Select</button>
+              <button onClick={() => { setQuickAdd(false); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
           </div>
         )}
