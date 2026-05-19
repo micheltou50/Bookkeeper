@@ -1,22 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
-
-const STORAGE_KEY = "bookkeeper-app-data";
+import html2pdf from "html2pdf.js";
 
 const DEFAULT_ACCOUNTS = [
-  { code: "1000", name: "Cash at Bank", type: "Asset" },
-  { code: "1100", name: "Accounts Receivable", type: "Asset" },
-  { code: "1200", name: "Prepaid Expenses", type: "Asset" },
-  { code: "1500", name: "Equipment", type: "Asset" },
-  { code: "2000", name: "Accounts Payable", type: "Liability" },
-  { code: "2100", name: "GST Collected", type: "Liability" },
-  { code: "2200", name: "GST Paid", type: "Liability" },
-  { code: "2300", name: "PAYG Withholding", type: "Liability" },
-  { code: "2400", name: "Credit Card", type: "Liability" },
-  { code: "3000", name: "Owner's Equity", type: "Equity" },
-  { code: "3100", name: "Retained Earnings", type: "Equity" },
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
-  { code: "4100", name: "Rental Income", type: "Revenue" },
   { code: "4200", name: "Service Revenue", type: "Revenue" },
   { code: "4300", name: "Other Income", type: "Revenue" },
   { code: "5000", name: "Cost of Sales", type: "Expense" },
@@ -38,6 +25,8 @@ const DEFAULT_ACCOUNTS = [
   { code: "7500", name: "Platform Commissions", type: "Expense" },
 ];
 
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bankName: "", bsb: "", accountNumber: "", logo: "" };
+
 const DEFAULT_DATA = {
   businesses: [
     { id: "mt", name: "MT Management", accent: "#0d9488" },
@@ -47,6 +36,7 @@ const DEFAULT_DATA = {
   transactions: { mt: [], mworx: [] },
   contacts: { mt: [], mworx: [] },
   invoices: { mt: [], mworx: [] },
+  profiles: { mt: { ...DEFAULT_PROFILE, name: "MT Management" }, mworx: { ...DEFAULT_PROFILE, name: "Mworx Group" } },
   activeBusiness: "mt",
 };
 
@@ -57,11 +47,9 @@ const today = () => new Date().toISOString().split("T")[0];
 
 const Icons = {
   Dashboard: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
-  Transactions: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
+  Expenses: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Contacts: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
   Invoices: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>,
-  Accounts: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>,
-  Reports: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>,
   Plus: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>,
   X: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>,
   Trash: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
@@ -71,26 +59,28 @@ const Icons = {
   Camera: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
   Menu: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>,
   Logout: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
+  Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
 };
 
-// ——— AUTH SCREEN ———
 function LoginScreen() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
+  const [isSignUp, setIsSignUp] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async () => {
+  const handleSubmit = async () => {
     setLoading(true);
     setError("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin },
-    });
+    const { error } = isSignUp
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) setError(error.message);
-    else setSent(true);
   };
+
+  const inputStyle = { width: "100%", padding: "12px 16px", background: "#0f1117", border: "1px solid #2a2d3e", borderRadius: 8, color: "#e2e8f0", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
 
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#0f1117", fontFamily: "'IBM Plex Sans', system-ui, sans-serif", padding: 20 }}>
@@ -98,66 +88,103 @@ function LoginScreen() {
       <div style={{ background: "#161822", borderRadius: 16, border: "1px solid #1e2130", padding: 40, width: "100%", maxWidth: 400, textAlign: "center" }}>
         <div style={{ fontSize: 28, fontWeight: 800, color: "#f1f5f9", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>MT Management</div>
-        {sent ? (
-          <div>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>📬</div>
-            <div style={{ color: "#e2e8f0", fontSize: 15, marginBottom: 8 }}>Check your email</div>
-            <div style={{ color: "#64748b", fontSize: 13 }}>We sent a login link to <strong style={{ color: "#94a3b8" }}>{email}</strong></div>
-          </div>
-        ) : (
-          <div>
-            <input
-              type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@email.com"
-              onKeyDown={(e) => e.key === "Enter" && email && handleLogin()}
-              style={{ width: "100%", padding: "12px 16px", background: "#0f1117", border: "1px solid #2a2d3e", borderRadius: 8, color: "#e2e8f0", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 }}
-            />
-            {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>{error}</div>}
-            <button
-              disabled={!email || loading} onClick={handleLogin}
-              style={{ width: "100%", padding: "12px", background: "#0d9488", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || loading ? 0.5 : 1 }}
-            >
-              {loading ? "Sending..." : "Send Login Link"}
-            </button>
-          </div>
-        )}
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && email && password && handleSubmit()} style={inputStyle} />
+        {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>{error}</div>}
+        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "12px", background: "#0d9488", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 12 }}>
+          {loading ? "..." : isSignUp ? "Sign Up" : "Sign In"}
+        </button>
+        <button onClick={() => { setIsSignUp(!isSignUp); setError(""); }} style={{ background: "none", border: "none", color: "#64748b", fontSize: 12, cursor: "pointer" }}>
+          {isSignUp ? "Already have an account? Sign In" : "Need an account? Sign Up"}
+        </button>
       </div>
     </div>
   );
 }
 
-// ——— MAIN APP ———
+function buildInvoiceHTML(inv, profile, accent) {
+  const items = (inv.items || []).map((item) => {
+    const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+    return `<div style="padding:14px 0;border-bottom:1px dashed #e2e8f0;display:flex;justify-content:space-between;align-items:flex-start">
+      <div><div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:1px">${item.description || ""}</div>${item.note ? `<div style="font-size:11px;color:#94a3b8">${item.note}</div>` : ""}</div>
+      <div style="font-size:13px;font-weight:500;color:#1e293b;white-space:nowrap;padding-left:20px">${fmt(amount)}</div>
+    </div>`;
+  }).join("");
+
+  const subtotal = (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
+  const docType = inv.type === "quote" ? "Quote" : "Invoice";
+  const logoHTML = profile.logo
+    ? `<img src="${profile.logo}" style="height:56px;border-radius:6px" />`
+    : `<div style="background:#1a1a2e;color:#fff;padding:12px 24px;border-radius:6px;font-size:18px;font-weight:800">${profile.name || "Company"}</div>`;
+
+  const bankHTML = (profile.bsb || profile.accountNumber) ? `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin-bottom:16px">
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:${accent};margin-bottom:8px">Payment Details</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 28px;font-size:11px;color:#64748b">
+        ${profile.bankName ? `<div>Account Name: <span style="color:#1e293b;font-weight:600">${profile.bankName}</span></div>` : ""}
+        ${profile.bsb ? `<div>BSB: <span style="color:#1e293b;font-weight:600">${profile.bsb}</span></div>` : ""}
+        ${profile.accountNumber ? `<div>Account Number: <span style="color:#1e293b;font-weight:600">${profile.accountNumber}</span></div>` : ""}
+        <div>Reference: <span style="color:#1e293b;font-weight:600">${inv.number || ""}</span></div>
+      </div>
+    </div>` : "";
+
+  return `<div style="width:595px;min-height:842px;background:#fff;padding:48px;font-family:Helvetica Neue,Arial,sans-serif;position:relative">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>${logoHTML}</div>
+      <div style="text-align:right;font-size:11px;color:#64748b;line-height:1.7">
+        ${profile.abn ? `ABN ${profile.abn}<br>` : ""}${profile.address ? `${profile.address}<br>` : ""}${profile.email ? `${profile.email}<br>` : ""}${profile.phone || ""}
+      </div>
+    </div>
+    <div style="height:3px;background:${accent};margin:22px 0 36px"></div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:28px">
+      <div style="font-size:34px;font-weight:300;color:#d1d5db;letter-spacing:0.1em;text-transform:uppercase">${docType}</div>
+      <div style="font-size:17px;font-weight:700;color:#1e293b">${inv.number || ""}</div>
+    </div>
+    <div style="display:flex;gap:44px;margin-bottom:36px">
+      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Issued</div><div style="font-size:12px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div></div>
+      ${inv.dueDate ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due</div><div style="font-size:12px;color:#1e293b">${fmtDate(inv.dueDate)}</div></div>` : ""}
+      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b"><strong>${inv.contact || ""}</strong>${inv.contactCompany ? `<br><span style="color:#64748b;font-size:11px">${inv.contactCompany}</span>` : ""}</div></div>
+    </div>
+    <div style="border-top:1px dashed #e2e8f0;margin-bottom:28px">${items}</div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:36px">
+      <div style="width:220px">
+        <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:#64748b"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding-top:10px;margin-top:4px"><span style="font-size:15px;font-weight:700;color:#1e293b">Total AUD</span><span style="font-size:17px;font-weight:800;color:${accent}">${fmt(subtotal)}</span></div>
+        <div style="font-size:9px;color:#94a3b8;text-align:right;margin-top:6px">Not registered for GST</div>
+      </div>
+    </div>
+    ${bankHTML}
+    ${inv.notes ? `<div style="font-size:10px;color:#94a3b8;line-height:1.6">${inv.notes}</div>` : ""}
+    <div style="position:absolute;bottom:24px;left:48px;right:48px;text-align:center;font-size:9px;color:#cbd5e1;border-top:1px solid #f1f5f9;padding-top:10px">
+      ${profile.name || ""}${profile.abn ? ` &middot; ABN ${profile.abn}` : ""}${profile.email ? ` &middot; ${profile.email}` : ""}${profile.phone ? ` &middot; ${profile.phone}` : ""}
+    </div>
+  </div>`;
+}
+
 export default function BookkeeperApp() {
-  const [session, setSession] = useState(undefined); // undefined=loading, null=logged out
+  const [session, setSession] = useState(undefined);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [editItem, setEditItem] = useState(null);
-  const [previewInvoice, setPreviewInvoice] = useState(null);
-  const [reportType, setReportType] = useState("pnl");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [reportPeriod, setReportPeriod] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  });
 
-  // Auth
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setSession(session));
     return () => subscription.unsubscribe();
   }, []);
 
-  // Load data from Supabase
   useEffect(() => {
     if (!session) { setLoading(false); return; }
     (async () => {
       const { data: row } = await supabase.from("bk_app_data").select("data").eq("user_id", session.user.id).single();
       if (row?.data) {
-        setData(row.data);
+        const d = row.data;
+        if (!d.profiles) d.profiles = { mt: { ...DEFAULT_PROFILE, name: "MT Management" }, mworx: { ...DEFAULT_PROFILE, name: "Mworx Group" } };
+        setData(d);
       } else {
-        // First login — seed with defaults
         const defaults = { ...DEFAULT_DATA };
         await supabase.from("bk_app_data").upsert({ user_id: session.user.id, data: defaults, updated_at: new Date().toISOString() });
         setData(defaults);
@@ -166,7 +193,6 @@ export default function BookkeeperApp() {
     })();
   }, [session]);
 
-  // Save to Supabase
   const save = useCallback(async (newData) => {
     setData(newData);
     if (session) {
@@ -176,7 +202,6 @@ export default function BookkeeperApp() {
 
   const logout = async () => { await supabase.auth.signOut(); setSession(null); setData(null); };
 
-  // Show login if not authenticated
   if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8" }}>Loading...</div>;
   if (!session) return <LoginScreen />;
 
@@ -189,46 +214,33 @@ export default function BookkeeperApp() {
   const contacts = data?.contacts?.[biz] || [];
   const accounts = data?.accounts?.[biz] || [];
   const invoices = data?.invoices?.[biz] || [];
+  const profile = data?.profiles?.[biz] || { ...DEFAULT_PROFILE };
 
   const addTransaction = (t) => { save({ ...data, transactions: { ...data.transactions, [biz]: [...txns, { ...t, id: uid() }] } }); setModal(null); };
   const deleteTransaction = (id) => save({ ...data, transactions: { ...data.transactions, [biz]: txns.filter((t) => t.id !== id) } });
   const addContact = (c) => { save({ ...data, contacts: { ...data.contacts, [biz]: [...contacts, { ...c, id: uid() }] } }); setModal(null); };
   const deleteContact = (id) => save({ ...data, contacts: { ...data.contacts, [biz]: contacts.filter((c) => c.id !== id) } });
-  const addAccount = (a) => { save({ ...data, accounts: { ...data.accounts, [biz]: [...accounts, a] } }); setModal(null); };
-  const deleteAccount = (code) => save({ ...data, accounts: { ...data.accounts, [biz]: accounts.filter((a) => a.code !== code) } });
   const addInvoice = (inv) => { save({ ...data, invoices: { ...data.invoices, [biz]: [...invoices, { ...inv, id: uid() }] } }); setModal(null); setEditItem(null); };
   const updateInvoice = (id, updates) => { save({ ...data, invoices: { ...data.invoices, [biz]: invoices.map((i) => (i.id === id ? { ...i, ...updates } : i)) } }); setModal(null); setEditItem(null); };
   const deleteInvoice = (id) => save({ ...data, invoices: { ...data.invoices, [biz]: invoices.filter((i) => i.id !== id) } });
-  const resetData = async () => { if (confirm("Reset ALL data? This cannot be undone.")) { await save({ ...DEFAULT_DATA }); setPage("dashboard"); } };
+  const saveProfile = (p) => { save({ ...data, profiles: { ...data.profiles, [biz]: p } }); setModal(null); };
 
-  const reportCalcs = (() => {
-    const [yr, mo] = reportPeriod.split("-").map(Number);
-    const startDate = new Date(yr, mo - 1, 1);
-    const endDate = new Date(yr, mo, 0);
-    const periodTxns = txns.filter((t) => { const d = new Date(t.date); return d >= startDate && d <= endDate; });
-    const revenue = periodTxns.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
-    const expenses = periodTxns.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
-    const gstCollected = periodTxns.filter((t) => t.type === "income" && t.gst).reduce((s, t) => s + Number(t.amount) / 11, 0);
-    const gstPaid = periodTxns.filter((t) => t.type === "expense" && t.gst).reduce((s, t) => s + Number(t.amount) / 11, 0);
-    const byAccount = {};
-    periodTxns.forEach((t) => { const key = t.account || "Uncategorised"; if (!byAccount[key]) byAccount[key] = { income: 0, expense: 0 }; byAccount[key][t.type] += Number(t.amount); });
-    const allRevenue = txns.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
-    const allExpenses = txns.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
-    const allGstCollected = txns.filter((t) => t.type === "income" && t.gst).reduce((s, t) => s + Number(t.amount) / 11, 0);
-    const allGstPaid = txns.filter((t) => t.type === "expense" && t.gst).reduce((s, t) => s + Number(t.amount) / 11, 0);
-    const unpaidInvoices = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((s, i) => s + Number(i.total || 0), 0);
-    return { revenue, expenses, gstCollected, gstPaid, byAccount, allRevenue, allExpenses, allGstCollected, allGstPaid, unpaidInvoices, periodTxns };
-  })();
+  const downloadPDF = (inv) => {
+    const html = buildInvoiceHTML(inv, profile, accent);
+    const el = document.createElement("div");
+    el.innerHTML = html;
+    document.body.appendChild(el);
+    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save().then(() => document.body.removeChild(el));
+  };
 
   if (loading || !data) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8", fontFamily: "'IBM Plex Sans', sans-serif" }}>Loading...</div>;
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
-    { id: "transactions", label: "Transactions", icon: Icons.Transactions },
+    { id: "expenses", label: "Expenses", icon: Icons.Expenses },
     { id: "invoices", label: "Invoices", icon: Icons.Invoices },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
-    { id: "accounts", label: "Accounts", icon: Icons.Accounts },
-    { id: "reports", label: "Reports", icon: Icons.Reports },
   ];
 
   const s = {
@@ -259,121 +271,188 @@ export default function BookkeeperApp() {
     grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   };
 
-  // ——— RECEIPT CAPTURE ———
   const ReceiptCapture = () => {
-    const [processing, setProcessing] = useState(false);
-    const [preview, setPreview] = useState(null);
+    const [phase, setPhase] = useState("capture");
+    const [rawUrl, setRawUrl] = useState(null);
+    const [scannedUrl, setScannedUrl] = useState(null);
     const [extracted, setExtracted] = useState(null);
     const [error, setError] = useState("");
+    const [corners, setCorners] = useState(null);
+    const [dragging, setDragging] = useState(null);
+    const [imgNat, setImgNat] = useState({ w: 0, h: 0 });
     const fileRef = useRef(null);
+    const containerRef = useRef(null);
+    const imgRef = useRef(null);
 
-    const handleFile = async (e) => {
+    const handleFile = (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
       setError("");
-      setPreview(URL.createObjectURL(file));
-      setProcessing(true);
+      setRawUrl(URL.createObjectURL(file));
+      setPhase("scan");
+    };
 
+    const onImgLoad = () => {
+      const img = imgRef.current;
+      if (!img) return;
+      const w = img.naturalWidth, h = img.naturalHeight;
+      setImgNat({ w, h });
+      setCorners([{ x: w * 0.05, y: h * 0.05 }, { x: w * 0.95, y: h * 0.05 }, { x: w * 0.95, y: h * 0.95 }, { x: w * 0.05, y: h * 0.95 }]);
+    };
+
+    const getPos = (e) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return null;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: Math.max(0, Math.min(imgNat.w, ((clientX - rect.left) / rect.width) * imgNat.w)), y: Math.max(0, Math.min(imgNat.h, ((clientY - rect.top) / rect.height) * imgNat.h)) };
+    };
+
+    const onPointerDown = (idx) => (e) => { e.preventDefault(); setDragging(idx); };
+    const onPointerMove = (e) => { if (dragging === null) return; const p = getPos(e); if (p) setCorners((c) => c.map((pt, i) => (i === dragging ? p : pt))); };
+    const onPointerUp = () => setDragging(null);
+
+    const doScan = async () => {
+      setPhase("scanning");
+      const img = new Image();
+      img.src = rawUrl;
+      await new Promise((r) => { img.onload = r; });
+
+      const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+      const outW = Math.round(Math.max(dist(corners[0], corners[1]), dist(corners[3], corners[2])));
+      const outH = Math.round(Math.max(dist(corners[0], corners[3]), dist(corners[1], corners[2])));
+
+      const srcC = document.createElement("canvas");
+      srcC.width = img.naturalWidth; srcC.height = img.naturalHeight;
+      const srcCtx = srcC.getContext("2d");
+      srcCtx.drawImage(img, 0, 0);
+      const srcData = srcCtx.getImageData(0, 0, srcC.width, srcC.height);
+
+      const dstC = document.createElement("canvas");
+      dstC.width = outW; dstC.height = outH;
+      const dstCtx = dstC.getContext("2d");
+      const dstData = dstCtx.createImageData(outW, outH);
+
+      const [tl, tr, br, bl] = corners;
+      for (let dy = 0; dy < outH; dy++) {
+        const t = dy / outH;
+        const lx = tl.x + t * (bl.x - tl.x), ly = tl.y + t * (bl.y - tl.y);
+        const rx = tr.x + t * (br.x - tr.x), ry = tr.y + t * (br.y - tr.y);
+        for (let dx = 0; dx < outW; dx++) {
+          const u = dx / outW;
+          const sx = Math.round(lx + u * (rx - lx)), sy = Math.round(ly + u * (ry - ly));
+          if (sx >= 0 && sx < srcC.width && sy >= 0 && sy < srcC.height) {
+            const si = (sy * srcC.width + sx) * 4, di = (dy * outW + dx) * 4;
+            dstData.data[di] = srcData.data[si]; dstData.data[di + 1] = srcData.data[si + 1]; dstData.data[di + 2] = srcData.data[si + 2]; dstData.data[di + 3] = 255;
+          }
+        }
+      }
+      dstCtx.putImageData(dstData, 0, 0);
+
+      const enhC = document.createElement("canvas");
+      enhC.width = outW; enhC.height = outH;
+      const enhCtx = enhC.getContext("2d");
+      enhCtx.filter = "contrast(1.4) brightness(1.1) saturate(0.2)";
+      enhCtx.drawImage(dstC, 0, 0);
+
+      const dataUrl = enhC.toDataURL("image/jpeg", 0.92);
+      setScannedUrl(dataUrl);
+
+      setPhase("processing");
       try {
-        // Convert to base64
-        const base64 = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result.split(",")[1]);
-          r.onerror = rej;
-          r.readAsDataURL(file);
-        });
-
-        // Upload to Supabase Storage
-        const filePath = `${session.user.id}/${Date.now()}_${file.name}`;
-        await supabase.storage.from("receipts").upload(filePath, file);
-
-        // Send to Netlify function for AI extraction
-        const resp = await fetch("/.netlify/functions/extract-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: base64, mediaType: file.type }),
-        });
-
+        const base64 = dataUrl.split(",")[1];
+        const blob = await (await fetch(dataUrl)).blob();
+        const filePath = `${session.user.id}/${Date.now()}_receipt.jpg`;
+        await supabase.storage.from("receipts").upload(filePath, blob, { contentType: "image/jpeg" });
+        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
         if (!resp.ok) throw new Error("Failed to process receipt");
         const result = await resp.json();
         setExtracted({ ...result, receiptPath: filePath });
-      } catch (err) {
-        setError(err.message || "Failed to process receipt");
-      }
-      setProcessing(false);
+        setPhase("confirm");
+      } catch (err) { setError(err.message || "Failed to process receipt"); setPhase("scan"); }
     };
 
     const confirmReceipt = () => {
       if (!extracted) return;
       const acct = accounts.find((a) => a.name === extracted.category && a.type === "Expense");
-      addTransaction({
-        date: extracted.date || today(),
-        type: "expense",
-        description: extracted.description || extracted.vendor || "Receipt",
-        amount: String(extracted.total || 0),
-        account: acct?.name || extracted.category || "",
-        contact: extracted.vendor || "",
-        gst: extracted.gst_included !== false,
-        reference: "",
-        receiptPath: extracted.receiptPath || "",
-      });
+      addTransaction({ date: extracted.date || today(), type: "expense", description: extracted.description || extracted.vendor || "Receipt", amount: String(extracted.total || 0), account: acct?.name || extracted.category || "", contact: extracted.vendor || "", reference: "", receiptPath: extracted.receiptPath || "" });
+    };
+
+    const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setExtracted(null); setCorners(null); setError(""); };
+
+    const cornerStyle = (c) => {
+      if (!containerRef.current || !imgNat.w) return { display: "none" };
+      const rect = containerRef.current.getBoundingClientRect();
+      return { position: "absolute", left: (c.x / imgNat.w) * rect.width - 10, top: (c.y / imgNat.h) * rect.height - 10, width: 20, height: 20, borderRadius: "50%", background: accent, border: "3px solid #fff", cursor: "grab", touchAction: "none", zIndex: 2 };
+    };
+
+    const polyPoints = () => {
+      if (!corners || !containerRef.current || !imgNat.w) return "";
+      const rect = containerRef.current.getBoundingClientRect();
+      return corners.map((c) => `${(c.x / imgNat.w) * rect.width},${(c.y / imgNat.h) * rect.height}`).join(" ");
     };
 
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>📸 Snap Receipt</h3>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{phase === "scan" ? "Crop Receipt" : "Snap Receipt"}</h3>
           <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
 
-        {!preview && !processing && (
+        {phase === "capture" && (
           <div>
             <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
-            <button onClick={() => fileRef.current?.click()} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", padding: "20px", fontSize: 15 }}>
-              <Icons.Camera /> Take Photo of Receipt
-            </button>
+            <button onClick={() => fileRef.current?.click()} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", padding: "20px", fontSize: 15 }}><Icons.Camera /> Take Photo of Receipt</button>
             <div style={{ textAlign: "center", color: "#64748b", fontSize: 12, marginTop: 12 }}>or choose from gallery</div>
             <input type="file" accept="image/*" onChange={handleFile} style={{ display: "block", margin: "8px auto 0", color: "#64748b", fontSize: 12 }} />
           </div>
         )}
 
-        {processing && (
+        {phase === "scan" && rawUrl && (
+          <div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Drag the corners to the edges of the receipt</div>
+            <div ref={containerRef} style={{ position: "relative", userSelect: "none", marginBottom: 12 }} onMouseMove={onPointerMove} onMouseUp={onPointerUp} onTouchMove={onPointerMove} onTouchEnd={onPointerUp}>
+              <img ref={imgRef} src={rawUrl} onLoad={onImgLoad} alt="Receipt" style={{ width: "100%", display: "block", borderRadius: 8, border: "1px solid #2a2d3e" }} />
+              {corners && (
+                <>
+                  <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 1 }}>
+                    <polygon points={polyPoints()} fill={accent + "20"} stroke={accent} strokeWidth="2" strokeDasharray="6 3" />
+                  </svg>
+                  {corners.map((c, i) => <div key={i} style={cornerStyle(c)} onMouseDown={onPointerDown(i)} onTouchStart={onPointerDown(i)} />)}
+                </>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={doScan} style={{ ...s.btn(accent), flex: 1, justifyContent: "center" }}>Scan & Extract</button>
+              <button onClick={reset} style={s.btnOutline}>Retake</button>
+            </div>
+          </div>
+        )}
+
+        {(phase === "scanning" || phase === "processing") && (
           <div style={{ textAlign: "center", padding: "30px 0" }}>
-            <div style={{ fontSize: 32, marginBottom: 12, animation: "spin 1s linear infinite" }}>⏳</div>
-            <div style={{ color: "#94a3b8" }}>Reading receipt with AI...</div>
-            <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+            {scannedUrl && <img src={scannedUrl} alt="Scanned" style={{ width: "60%", borderRadius: 8, border: "1px solid #2a2d3e", marginBottom: 12 }} />}
+            <div style={{ color: "#94a3b8" }}>{phase === "scanning" ? "Scanning receipt..." : "Reading receipt with AI..."}</div>
           </div>
         )}
 
         {error && <div style={{ color: "#f87171", fontSize: 13, padding: 12, background: "#f8717110", borderRadius: 8, marginTop: 12 }}>{error}</div>}
 
-        {preview && extracted && !processing && (
+        {phase === "confirm" && scannedUrl && extracted && (
           <div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <img src={preview} alt="Receipt" style={{ width: "100%", borderRadius: 8, border: "1px solid #2a2d3e" }} />
+              <img src={scannedUrl} alt="Scanned receipt" style={{ width: "100%", borderRadius: 8, border: "1px solid #2a2d3e" }} />
               <div style={{ background: "#0f1117", borderRadius: 8, padding: 12, fontSize: 12 }}>
                 <div style={{ fontWeight: 700, color: "#f1f5f9", marginBottom: 8, fontSize: 14 }}>Extracted</div>
                 <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Vendor:</span> {extracted.vendor}</div>
                 <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Date:</span> {extracted.date}</div>
                 <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Total:</span> <span style={{ color: "#f87171", fontWeight: 700 }}>{fmt(extracted.total)}</span></div>
-                <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>GST:</span> {extracted.gst_included ? "Yes" : "No"}</div>
                 <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Category:</span> {extracted.category}</div>
-                {extracted.items?.length > 0 && (
-                  <div style={{ marginTop: 8, borderTop: "1px solid #1e2130", paddingTop: 8 }}>
-                    {extracted.items.map((item, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", color: "#94a3b8", marginBottom: 2 }}>
-                        <span>{item.name}</span><span>{fmt(item.amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={confirmReceipt} style={{ ...s.btn(accent), flex: 1, justifyContent: "center" }}>
-                <Icons.Check /> Add as Transaction
-              </button>
-              <button onClick={() => { setPreview(null); setExtracted(null); setError(""); }} style={{ ...s.btnOutline, flex: 0 }}>Retake</button>
+              <button onClick={confirmReceipt} style={{ ...s.btn(accent), flex: 1, justifyContent: "center" }}><Icons.Check /> Add as Expense</button>
+              <button onClick={reset} style={{ ...s.btnOutline, flex: 0 }}>Retake</button>
             </div>
           </div>
         )}
@@ -381,40 +460,32 @@ export default function BookkeeperApp() {
     );
   };
 
-  // ——— FORMS ———
-  const TransactionForm = () => {
-    const [f, setF] = useState({ date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", gst: true, reference: "" });
-    const filteredAccounts = accounts.filter((a) => f.type === "income" ? a.type === "Revenue" : a.type === "Expense");
+  const ExpenseForm = () => {
+    const [f, setF] = useState({ date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "" });
+    const expenseAccounts = accounts.filter((a) => a.type === "Expense");
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>New Transaction</h3>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>New Expense</h3>
           <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value, account: "" })} style={s.select}><option value="income">Income</option><option value="expense">Expense</option></select></div>
-        </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Booking revenue — Glenhaven" style={s.input} /></div>
-        <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Account</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}><option value="">Select...</option>{filteredAccounts.map((a) => <option key={a.code} value={a.name}>{a.code} — {a.name}</option>)}</select></div>
         </div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Office supplies from Officeworks" style={s.input} /></div>
         <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}><option value="">Select...</option>{expenseAccounts.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{contacts.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="INV-001, etc." style={s.input} /></div>
         </div>
-        <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-          <input type="checkbox" checked={f.gst} onChange={(e) => setF({ ...f, gst: e.target.checked })} id="gst" style={{ accentColor: accent }} />
-          <label htmlFor="gst" style={{ fontSize: 12, color: "#94a3b8" }}>Includes GST (10%)</label>
-        </div>
-        <button disabled={!f.description || !f.amount} onClick={() => addTransaction(f)} style={{ ...s.btn(accent), opacity: !f.description || !f.amount ? 0.4 : 1, width: "100%", justifyContent: "center" }}>Add Transaction</button>
+        <div style={{ marginBottom: 16 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
+        <button disabled={!f.description || !f.amount} onClick={() => addTransaction(f)} style={{ ...s.btn(accent), opacity: !f.description || !f.amount ? 0.4 : 1, width: "100%", justifyContent: "center" }}>Add Expense</button>
       </div>
     );
   };
 
   const ContactForm = () => {
-    const [f, setF] = useState({ name: "", email: "", phone: "", type: "client", company: "", abn: "", notes: "" });
+    const [f, setF] = useState({ name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -425,7 +496,10 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="supplier">Supplier</option></select></div>
         </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} style={s.input} /></div>
+        </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
@@ -439,33 +513,13 @@ export default function BookkeeperApp() {
     );
   };
 
-  const AccountForm = () => {
-    const [f, setF] = useState({ code: "", name: "", type: "Expense" });
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>New Account</h3>
-          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Code</label><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} placeholder="e.g. 6050" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}>{["Asset", "Liability", "Equity", "Revenue", "Expense"].map((t) => <option key={t}>{t}</option>)}</select></div>
-        </div>
-        <div style={{ marginBottom: 16 }}><label style={s.label}>Account Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Hosting & Domains" style={s.input} /></div>
-        <button disabled={!f.code || !f.name} onClick={() => addAccount(f)} style={{ ...s.btn(accent), opacity: !f.code || !f.name ? 0.4 : 1, width: "100%", justifyContent: "center" }}>Add Account</button>
-      </div>
-    );
-  };
-
   const InvoiceForm = ({ existing }) => {
-    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", items: [{ description: "", qty: 1, rate: "", gst: true }], notes: "", status: "draft" };
+    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", contactCompany: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
     const [f, setF] = useState(init);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
-    const addItem = () => setF({ ...f, items: [...f.items, { description: "", qty: 1, rate: "", gst: true }] });
+    const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
-    const subtotal = f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
-    const gstTotal = f.items.reduce((sum, i) => sum + (i.gst ? (Number(i.qty) || 0) * (Number(i.rate) || 0) * 0.1 : 0), 0);
-    const total = subtotal + gstTotal;
+    const total = f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
 
     return (
       <div>
@@ -482,155 +536,195 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Due Date</label><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || f.contactEmail }); }} style={s.select}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || f.contactEmail, contactCompany: c?.company || f.contactCompany }); }} style={s.select}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option><option value="overdue">Overdue</option></select></div>
         </div>
         <div style={{ marginTop: 8, marginBottom: 8 }}>
           <label style={s.label}>Line Items</label>
           {f.items.map((item, idx) => (
-            <div key={idx} style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 30px 24px", gap: 6, marginBottom: 6, alignItems: "center" }}>
-              <input value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description" style={{ ...s.input, fontSize: 12 }} />
-              <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
-              <input type="number" step="0.01" value={item.rate} onChange={(e) => updateItem(idx, "rate", e.target.value)} placeholder="Rate" style={{ ...s.input, fontSize: 12 }} />
-              <input type="checkbox" checked={item.gst} onChange={(e) => updateItem(idx, "gst", e.target.checked)} style={{ accentColor: accent }} />
-              {f.items.length > 1 && <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 0 }}><Icons.Trash /></button>}
+            <div key={idx} style={{ marginBottom: 8, padding: 10, background: "#0f1117", borderRadius: 6 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 24px", gap: 6, alignItems: "center" }}>
+                <input value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description" style={{ ...s.input, fontSize: 12 }} />
+                <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
+                <input type="number" step="0.01" value={item.rate} onChange={(e) => updateItem(idx, "rate", e.target.value)} placeholder="Rate" style={{ ...s.input, fontSize: 12 }} />
+                {f.items.length > 1 && <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 0 }}><Icons.Trash /></button>}
+              </div>
+              <input value={item.note || ""} onChange={(e) => updateItem(idx, "note", e.target.value)} placeholder="Note (optional — shown on PDF)" style={{ ...s.input, fontSize: 11, marginTop: 4, color: "#94a3b8" }} />
             </div>
           ))}
           <button onClick={addItem} style={{ ...s.btnOutline, marginTop: 4 }}>+ Add Line</button>
         </div>
         <div style={{ marginTop: 12, marginBottom: 16, background: "#0f1117", borderRadius: 8, padding: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: "#94a3b8" }}><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: "#94a3b8" }}><span>GST</span><span>{fmt(gstTotal)}</span></div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#f1f5f9", borderTop: "1px solid #1e2130", paddingTop: 8, marginTop: 4 }}><span>Total</span><span>{fmt(total)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#f1f5f9" }}><span>Total</span><span>{fmt(total)}</span></div>
         </div>
-        <div style={{ marginBottom: 16 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Payment terms, bank details, etc." style={s.input} /></div>
-        <button onClick={() => { const inv = { ...f, subtotal, gst: gstTotal, total }; existing ? updateInvoice(existing.id, inv) : addInvoice(inv); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center" }}>{existing ? "Update" : "Create"} {f.type === "quote" ? "Quote" : "Invoice"}</button>
+        <div style={{ marginBottom: 16 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Payment terms, notes, etc." style={s.input} /></div>
+        <button onClick={() => { const inv = { ...f, total }; existing ? updateInvoice(existing.id, inv) : addInvoice(inv); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center" }}>{existing ? "Update" : "Create"} {f.type === "quote" ? "Quote" : "Invoice"}</button>
       </div>
     );
   };
 
-  // ——— PAGES ———
+  const BusinessSettings = () => {
+    const [f, setF] = useState({ ...profile });
+    const fileRef = useRef(null);
+
+    const handleLogo = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => setF({ ...f, logo: reader.result });
+      reader.readAsDataURL(file);
+    };
+
+    return (
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
+          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={s.label}>Logo</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {f.logo ? <img src={f.logo} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #2a2d3e" }} /> : <div style={{ width: 48, height: 48, background: "#0f1117", borderRadius: 6, border: "1px dashed #2a2d3e" }} />}
+            <input ref={fileRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
+            <button onClick={() => fileRef.current?.click()} style={s.btnOutline}>Upload Logo</button>
+            {f.logo && <button onClick={() => setF({ ...f, logo: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
+          </div>
+        </div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
+        </div>
+        <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 8 }}>
+          <label style={{ ...s.label, marginBottom: 12 }}>Bank Details (shown on invoices)</label>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.bankName} onChange={(e) => setF({ ...f, bankName: e.target.value })} placeholder="Mworx Group Pty Ltd" style={s.input} /></div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.accountNumber} onChange={(e) => setF({ ...f, accountNumber: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
+        </div>
+        <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
+      </div>
+    );
+  };
+
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const [yr, mo] = thisMonth.split("-").map(Number);
     const monthTxns = txns.filter((t) => { const d = new Date(t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; });
-    const income = monthTxns.filter((t) => t.type === "income").reduce((sum, t) => sum + Number(t.amount), 0);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
     const outstanding = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
     const overdue = invoices.filter((i) => i.status === "overdue").length;
-    const recentTxns = [...txns].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const totalExpenses = txns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
+    const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
 
     return (
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard(accent)}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Income MTD</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#34d399", marginTop: 4 }}>{fmt(income)}</div>
-          </div>
           <div style={s.statCard("#ef4444")}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Expenses MTD</div>
+            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Expenses This Month</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#f87171", marginTop: 4 }}>{fmt(expense)}</div>
           </div>
-          <div style={s.statCard("#3b82f6")}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Net Profit</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: income - expense >= 0 ? "#34d399" : "#f87171", marginTop: 4 }}>{fmt(income - expense)}</div>
+          <div style={s.statCard(accent)}>
+            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Expenses</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#f87171", marginTop: 4 }}>{fmt(totalExpenses)}</div>
           </div>
           <div style={s.statCard("#f59e0b")}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Outstanding</div>
+            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Outstanding Invoices</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#fbbf24", marginTop: 4 }}>{fmt(outstanding)}</div>
             {overdue > 0 && <div style={{ fontSize: 10, color: "#ef4444", marginTop: 2 }}>{overdue} overdue</div>}
           </div>
         </div>
-
         <div style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Transactions</h4>
-            <button onClick={() => setPage("transactions")} style={s.btnOutline}>View All</button>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Expenses</h4>
+            <button onClick={() => setPage("expenses")} style={s.btnOutline}>View All</button>
           </div>
-          {recentTxns.length === 0 ? (
-            <div style={{ color: "#64748b", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No transactions yet</div>
+          {recentExpenses.length === 0 ? (
+            <div style={{ color: "#64748b", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No expenses yet</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}><tbody>
-                {recentTxns.map((t) => (
+                {recentExpenses.map((t) => (
                   <tr key={t.id}>
                     <td style={{ ...s.td, color: "#64748b", width: 70, fontSize: 11 }}>{fmtDate(t.date)}</td>
                     <td style={s.td}>{t.description}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: t.type === "income" ? "#34d399" : "#f87171", whiteSpace: "nowrap" }}>{t.type === "income" ? "+" : "−"}{fmt(t.amount)}</td>
+                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{t.account || ""}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: "#f87171", whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                   </tr>
                 ))}
               </tbody></table>
             </div>
           )}
         </div>
-
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
           <button onClick={() => setModal("receipt")} style={{ ...s.btn("#8b5cf6"), justifyContent: "center", padding: "14px" }}><Icons.Camera /> Snap Receipt</button>
-          <button onClick={() => setModal("transaction")} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> Transaction</button>
-          <button onClick={() => setModal("invoice")} style={{ ...s.btn("#3b82f6"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> Invoice</button>
+          <button onClick={() => setModal("expense")} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> Add Expense</button>
+          <button onClick={() => setModal("invoice")} style={{ ...s.btn("#3b82f6"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Invoice</button>
         </div>
       </div>
     );
   };
 
-  const TransactionsPage = () => {
-    const [filter, setFilter] = useState("all");
+  const ExpensesPage = () => {
     const [search, setSearch] = useState("");
-    const sorted = [...txns].sort((a, b) => b.date.localeCompare(a.date));
+    const [viewReceipt, setViewReceipt] = useState(null);
+    const sorted = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => {
-      if (filter !== "all" && t.type !== filter) return false;
-      if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false;
+      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
+
+    const openReceipt = async (path) => {
+      const { data } = supabase.storage.from("receipts").getPublicUrl(path);
+      if (data?.publicUrl) setViewReceipt(data.publicUrl);
+    };
+
     return (
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px" }} />
-          {["all", "income", "expense"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#94a3b8", borderColor: filter === f ? accent : "#2a2d3e" }}>
-              {f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 260, flex: "1 1 180px" }} />
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#64748b", padding: "30px 0", textAlign: "center" }}>No transactions found</div>
+            <div style={{ color: "#64748b", padding: "30px 0", textAlign: "center" }}>No expenses found</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr>
-                  <th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Account</th>
-                  <th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 40 }}></th>
-                </tr></thead>
+                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
                 <tbody>{filtered.map((t) => (
                   <tr key={t.id}>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                    <td style={s.td}>{t.description}{t.receiptPath && <span title="Has receipt" style={{ marginLeft: 4 }}>📎</span>}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "—"}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: t.type === "income" ? "#34d399" : "#f87171", whiteSpace: "nowrap" }}>{t.type === "income" ? "+" : "−"}{fmt(t.amount)}</td>
-                    <td style={s.td}><button onClick={() => deleteTransaction(t.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button></td>
+                    <td style={s.td}>{t.description}</td>
+                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "--"}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: "#f87171", whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
+                    <td style={{ ...s.td, display: "flex", gap: 4 }}>
+                      {t.receiptPath && <button onClick={() => openReceipt(t.receiptPath)} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
+                      <button onClick={() => deleteTransaction(t.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>
             </div>
           )}
         </div>
+        {viewReceipt && (
+          <div style={s.modalOverlay} onClick={() => setViewReceipt(null)}>
+            <div style={{ maxWidth: 500, maxHeight: "80vh", position: "relative" }}>
+              <button onClick={() => setViewReceipt(null)} style={{ position: "absolute", top: -12, right: -12, background: "#161822", border: "1px solid #2a2d3e", borderRadius: "50%", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#94a3b8", zIndex: 1 }}><Icons.X /></button>
+              <img src={viewReceipt} alt="Receipt" style={{ maxWidth: "100%", maxHeight: "80vh", borderRadius: 8, display: "block" }} />
+            </div>
+          </div>
+        )}
       </div>
     );
   };
 
   const InvoicesPage = () => {
-    const sendInvoice = (inv) => {
-      const contact = contacts.find((c) => c.name === inv.contact);
-      const dt = inv.type === "quote" ? "Quote" : "Invoice";
-      const to = contact?.email || inv.contactEmail || "";
-      const lines = inv.items?.map((item) => `  ${item.description} — ${item.qty} × ${fmt(Number(item.rate))} = ${fmt((Number(item.qty) || 0) * (Number(item.rate) || 0))}`).join("\n") || "";
-      const body = `Hi${inv.contact ? " " + inv.contact : ""},\n\nPlease find ${dt} ${inv.number} from ${bizInfo?.name || "us"} below.\n\nDate: ${fmtDate(inv.date)}${inv.dueDate ? "\nDue: " + fmtDate(inv.dueDate) : ""}\n\nItems:\n${lines}\n\nSubtotal: ${fmt(inv.subtotal || 0)}\nGST: ${fmt(inv.gst || 0)}\nTotal: ${fmt(inv.total || 0)}${inv.notes ? "\n\nNotes: " + inv.notes : ""}\n\nKind regards,\n${bizInfo?.name || "MT Management"}`;
-      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(`${dt} ${inv.number} from ${bizInfo?.name || "MT Management"}`)}&body=${encodeURIComponent(body)}`;
-      window.open(gmailUrl, "_blank");
-      if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
-    };
-
     const [filter, setFilter] = useState("all");
     const sorted = [...invoices].sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((i) => filter === "all" || i.status === filter);
@@ -648,19 +742,16 @@ export default function BookkeeperApp() {
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr>
-                  <th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Status</th>
-                  <th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 80 }}></th>
-                </tr></thead>
+                <thead><tr><th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Status</th><th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 100 }}></th></tr></thead>
                 <tbody>{filtered.map((inv) => (
                   <tr key={inv.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
-                    <td style={s.td}>{inv.contact || "—"}</td>
+                    <td style={s.td}>{inv.contact || "--"}</td>
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      <button onClick={() => sendInvoice(inv)} title="Send" style={{ background: "none", border: "none", color: accent, cursor: "pointer", padding: 2 }}><Icons.Send /></button>
+                      <button onClick={() => downloadPDF(inv)} title="Download PDF" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Download /></button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
                       {inv.status !== "paid" && <button onClick={() => updateInvoice(inv.id, { status: "paid" })} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>}
                       <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
@@ -693,8 +784,8 @@ export default function BookkeeperApp() {
                 <tbody>{filtered.map((c) => (
                   <tr key={c.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{c.name}</td>
-                    <td style={{ ...s.td, color: "#94a3b8" }}>{c.company || "—"}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{c.email || "—"}</td>
+                    <td style={{ ...s.td, color: "#94a3b8" }}>{c.company || "--"}</td>
+                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{c.email || "--"}</td>
                     <td style={s.td}><span style={s.badge(c.type === "client" ? "#3b82f6" : "#f59e0b")}>{c.type}</span></td>
                     <td style={s.td}><button onClick={() => deleteContact(c.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button></td>
                   </tr>
@@ -707,104 +798,7 @@ export default function BookkeeperApp() {
     );
   };
 
-  const AccountsPage = () => {
-    const grouped = {};
-    ["Asset", "Liability", "Equity", "Revenue", "Expense"].forEach((t) => { grouped[t] = accounts.filter((a) => a.type === t).sort((a, b) => a.code.localeCompare(b.code)); });
-    const typeColors = { Asset: "#3b82f6", Liability: "#ef4444", Equity: "#8b5cf6", Revenue: "#34d399", Expense: "#f59e0b" };
-    return (
-      <div>
-        {Object.entries(grouped).map(([type, accs]) => (
-          <div key={type} style={{ ...s.card, marginBottom: 10 }}>
-            <h4 style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 700, color: typeColors[type] }}>{type} Accounts</h4>
-            <table style={s.table}><tbody>
-              {accs.map((a) => (
-                <tr key={a.code}>
-                  <td style={{ ...s.td, fontFamily: "monospace", fontSize: 11, color: "#94a3b8", width: 60 }}>{a.code}</td>
-                  <td style={s.td}>{a.name}</td>
-                  <td style={{ ...s.td, width: 30 }}><button onClick={() => deleteAccount(a.code)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button></td>
-                </tr>
-              ))}
-            </tbody></table>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  const ReportsPage = () => {
-    const { revenue, expenses, gstCollected, gstPaid, byAccount, allRevenue, allExpenses, allGstCollected, allGstPaid, unpaidInvoices, periodTxns } = reportCalcs;
-    const [ryr, rmo] = reportPeriod.split("-").map(Number);
-    const periodLabel = new Date(ryr, rmo - 1).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
-
-    return (
-      <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          {[{ id: "pnl", label: "P&L" }, { id: "balance", label: "Balance Sheet" }, { id: "gst", label: "GST" }].map((r) => (
-            <button key={r.id} onClick={() => setReportType(r.id)} style={{ ...s.btnOutline, background: reportType === r.id ? accent + "20" : "transparent", color: reportType === r.id ? accent : "#94a3b8" }}>{r.label}</button>
-          ))}
-          <input type="month" value={reportPeriod} onChange={(e) => setReportPeriod(e.target.value)} style={{ ...s.input, width: "auto", marginLeft: "auto" }} />
-        </div>
-
-        {reportType === "pnl" && (
-          <div style={s.card}>
-            <h4 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}>Profit & Loss — {periodLabel}</h4>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#34d399", textTransform: "uppercase", marginBottom: 6 }}>Revenue</div>
-              {Object.entries(byAccount).filter(([_, v]) => v.income > 0).map(([acct, v]) => (
-                <div key={acct} style={{ display: "flex", justifyContent: "space-between", padding: "3px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>{acct}</span><span>{fmt(v.income)}</span></div>
-              ))}
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderTop: "1px solid #1e2130", marginTop: 4, fontWeight: 700, color: "#34d399" }}><span>Total Revenue</span><span>{fmt(revenue)}</span></div>
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#f87171", textTransform: "uppercase", marginBottom: 6 }}>Expenses</div>
-              {Object.entries(byAccount).filter(([_, v]) => v.expense > 0).map(([acct, v]) => (
-                <div key={acct} style={{ display: "flex", justifyContent: "space-between", padding: "3px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>{acct}</span><span>{fmt(v.expense)}</span></div>
-              ))}
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderTop: "1px solid #1e2130", marginTop: 4, fontWeight: 700, color: "#f87171" }}><span>Total Expenses</span><span>{fmt(expenses)}</span></div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: 12, background: "#0f1117", borderRadius: 8, fontSize: 16, fontWeight: 700 }}>
-              <span>Net Profit</span><span style={{ color: revenue - expenses >= 0 ? "#34d399" : "#f87171" }}>{fmt(revenue - expenses)}</span>
-            </div>
-          </div>
-        )}
-
-        {reportType === "balance" && (
-          <div style={s.card}>
-            <h4 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}>Balance Sheet — {periodLabel}</h4>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#3b82f6", textTransform: "uppercase", marginBottom: 6 }}>Assets</div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>Cash at Bank (net)</span><span>{fmt(allRevenue - allExpenses)}</span></div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>Accounts Receivable</span><span>{fmt(unpaidInvoices)}</span></div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderTop: "1px solid #1e2130", marginTop: 4, fontWeight: 700, color: "#3b82f6" }}><span>Total Assets</span><span>{fmt(allRevenue - allExpenses + unpaidInvoices)}</span></div>
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#ef4444", textTransform: "uppercase", marginBottom: 6 }}>Liabilities</div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>GST Payable</span><span>{fmt(allGstCollected - allGstPaid)}</span></div>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#8b5cf6", textTransform: "uppercase", marginBottom: 6 }}>Equity</div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>Retained Earnings</span><span>{fmt(allRevenue - allExpenses - (allGstCollected - allGstPaid))}</span></div>
-            </div>
-          </div>
-        )}
-
-        {reportType === "gst" && (
-          <div style={s.card}>
-            <h4 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}>GST Summary — {periodLabel}</h4>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>GST Collected on Sales</span><span>{fmt(gstCollected)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", fontSize: 13 }}><span style={{ color: "#94a3b8" }}>GST Paid on Purchases</span><span>{fmt(gstPaid)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: 12, background: "#0f1117", borderRadius: 8, marginTop: 8, fontSize: 16, fontWeight: 700 }}>
-              <span>{gstCollected - gstPaid >= 0 ? "GST Payable to ATO" : "GST Refund from ATO"}</span>
-              <span style={{ color: gstCollected - gstPaid >= 0 ? "#f87171" : "#34d399" }}>{fmt(Math.abs(gstCollected - gstPaid))}</span>
-            </div>
-            <div style={{ marginTop: 10, fontSize: 11, color: "#64748b" }}>{periodTxns.filter((t) => t.gst).length} GST-inclusive transactions. Amounts = 1/11th of totals.</div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const pageMap = { dashboard: DashboardPage, transactions: TransactionsPage, invoices: InvoicesPage, contacts: ContactsPage, accounts: AccountsPage, reports: ReportsPage };
+  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, invoices: InvoicesPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   const SidebarContent = () => (
@@ -827,9 +821,9 @@ export default function BookkeeperApp() {
           </button>
         ))}
       </div>
-      <div style={{ padding: 12, borderTop: "1px solid #1e2130", display: "flex", flexDirection: "column", gap: 4 }}>
-        <button onClick={logout} style={{ ...s.btnOutline, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Logout /> Sign Out</button>
-        <button onClick={resetData} style={{ ...s.btnOutline, width: "100%", fontSize: 10, color: "#475569" }}>Reset Data</button>
+      <div style={{ padding: 12, borderTop: "1px solid #1e2130", display: "flex", gap: 6 }}>
+        <button onClick={() => setModal("settings")} style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Settings /> Settings</button>
+        <button onClick={logout} style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Logout /> Sign Out</button>
       </div>
     </>
   );
@@ -839,16 +833,12 @@ export default function BookkeeperApp() {
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
       <style>{`@media(max-width:768px){.bk-sidebar-desktop{display:none!important}.bk-hamburger{display:flex!important}} @media(min-width:769px){.bk-sidebar-mobile{display:none!important}.bk-hamburger{display:none!important}}`}</style>
       <div style={s.app}>
-        {/* Desktop sidebar */}
         <div className="bk-sidebar-desktop" style={s.sidebar}><SidebarContent /></div>
-
-        {/* Mobile sidebar overlay */}
         {sidebarOpen && (
           <div className="bk-sidebar-mobile" style={s.sidebarMobile} onClick={(e) => { if (e.target === e.currentTarget) setSidebarOpen(false); }}>
             <div style={{ ...s.sidebar, height: "100%", width: 260, position: "absolute", left: 0, top: 0 }}><SidebarContent /></div>
           </div>
         )}
-
         <div style={s.main}>
           <div style={s.header}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -860,23 +850,21 @@ export default function BookkeeperApp() {
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button onClick={() => setModal("receipt")} style={s.btn("#8b5cf6", true)}><Icons.Camera /> Receipt</button>
-              {(page === "transactions" || page === "dashboard") && <button onClick={() => setModal("transaction")} style={s.btn(accent, true)}><Icons.Plus /> Transaction</button>}
+              {(page === "expenses" || page === "dashboard") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
-              {page === "accounts" && <button onClick={() => setModal("account")} style={s.btn(accent, true)}><Icons.Plus /> Account</button>}
             </div>
           </div>
           <div style={s.content}><PageComponent /></div>
         </div>
-
         {modal && (
           <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); } }}>
             <div style={s.modalContent}>
-              {modal === "transaction" && <TransactionForm />}
+              {modal === "expense" && <ExpenseForm />}
               {modal === "contact" && <ContactForm />}
-              {modal === "account" && <AccountForm />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "receipt" && <ReceiptCapture />}
+              {modal === "settings" && <BusinessSettings />}
             </div>
           </div>
         )}
