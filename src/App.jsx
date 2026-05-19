@@ -144,6 +144,7 @@ function buildInvoiceHTML(inv, profile, accent) {
       <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Issued</div><div style="font-size:12px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div></div>
       ${inv.dueDate ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due</div><div style="font-size:12px;color:#1e293b">${fmtDate(inv.dueDate)}</div></div>` : ""}
       <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b"><strong>${inv.contact || ""}</strong>${inv.contactCompany ? `<br><span style="color:#64748b;font-size:11px">${inv.contactCompany}</span>` : ""}</div></div>
+      ${inv.job ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Job</div><div style="font-size:12px;color:#1e293b">${inv.job}</div></div>` : ""}
     </div>
     <div style="border-top:1px dashed #e2e8f0;margin-bottom:28px">${items}</div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:36px">
@@ -216,9 +217,11 @@ export default function BookkeeperApp() {
   const invoices = data?.invoices?.[biz] || [];
   const profile = data?.profiles?.[biz] || { ...DEFAULT_PROFILE };
 
+  const jobNames = [...new Set([...invoices.map(i => i.job), ...txns.map(t => t.job)].filter(Boolean))].sort();
+
   const addTransaction = (t) => { save({ ...data, transactions: { ...data.transactions, [biz]: [...txns, { ...t, id: uid() }] } }); setModal(null); };
   const deleteTransaction = (id) => save({ ...data, transactions: { ...data.transactions, [biz]: txns.filter((t) => t.id !== id) } });
-  const addContact = (c) => { save({ ...data, contacts: { ...data.contacts, [biz]: [...contacts, { ...c, id: uid() }] } }); setModal(null); };
+  const addContact = (c, keepModal) => { save({ ...data, contacts: { ...data.contacts, [biz]: [...contacts, { ...c, id: uid() }] } }); if (!keepModal) setModal(null); };
   const deleteContact = (id) => save({ ...data, contacts: { ...data.contacts, [biz]: contacts.filter((c) => c.id !== id) } });
   const addInvoice = (inv) => { save({ ...data, invoices: { ...data.invoices, [biz]: [...invoices, { ...inv, id: uid() }] } }); setModal(null); setEditItem(null); };
   const updateInvoice = (id, updates) => { save({ ...data, invoices: { ...data.invoices, [biz]: invoices.map((i) => (i.id === id ? { ...i, ...updates } : i)) } }); setModal(null); setEditItem(null); };
@@ -372,10 +375,11 @@ export default function BookkeeperApp() {
       } catch (err) { setError(err.message || "Failed to process receipt"); setPhase("scan"); }
     };
 
+    const [receiptJob, setReceiptJob] = useState("");
     const confirmReceipt = () => {
       if (!extracted) return;
       const acct = accounts.find((a) => a.name === extracted.category && a.type === "Expense");
-      addTransaction({ date: extracted.date || today(), type: "expense", description: extracted.description || extracted.vendor || "Receipt", amount: String(extracted.total || 0), account: acct?.name || extracted.category || "", contact: extracted.vendor || "", reference: "", receiptPath: extracted.receiptPath || "" });
+      addTransaction({ date: extracted.date || today(), type: "expense", description: extracted.description || extracted.vendor || "Receipt", amount: String(extracted.total || 0), account: acct?.name || extracted.category || "", contact: extracted.vendor || "", reference: "", receiptPath: extracted.receiptPath || "", job: receiptJob });
     };
 
     const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setExtracted(null); setCorners(null); setError(""); };
@@ -450,6 +454,7 @@ export default function BookkeeperApp() {
                 <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Category:</span> {extracted.category}</div>
               </div>
             </div>
+            <div style={{ marginBottom: 10 }}><label style={s.label}>Job</label><input list="job-list-rcpt" value={receiptJob} onChange={(e) => setReceiptJob(e.target.value)} placeholder="e.g. 5 Midelton Ave" style={s.input} /><datalist id="job-list-rcpt">{jobNames.map(j => <option key={j} value={j} />)}</datalist></div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={confirmReceipt} style={{ ...s.btn(accent), flex: 1, justifyContent: "center" }}><Icons.Check /> Add as Expense</button>
               <button onClick={reset} style={{ ...s.btnOutline, flex: 0 }}>Retake</button>
@@ -461,7 +466,7 @@ export default function BookkeeperApp() {
   };
 
   const ExpenseForm = () => {
-    const [f, setF] = useState({ date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "" });
+    const [f, setF] = useState({ date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "" });
     const expenseAccounts = accounts.filter((a) => a.type === "Expense");
     return (
       <div>
@@ -478,7 +483,10 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}><option value="">Select...</option>{expenseAccounts.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{contacts.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
         </div>
-        <div style={{ marginBottom: 16 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><input list="job-list" value={f.job} onChange={(e) => setF({ ...f, job: e.target.value })} placeholder="e.g. 5 Midelton Ave" style={s.input} /><datalist id="job-list">{jobNames.map(j => <option key={j} value={j} />)}</datalist></div>
+        </div>
         <button disabled={!f.description || !f.amount} onClick={() => addTransaction(f)} style={{ ...s.btn(accent), opacity: !f.description || !f.amount ? 0.4 : 1, width: "100%", justifyContent: "center" }}>Add Expense</button>
       </div>
     );
@@ -514,8 +522,10 @@ export default function BookkeeperApp() {
   };
 
   const InvoiceForm = ({ existing }) => {
-    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", contactCompany: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
+    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), dueDate: "", contact: "", contactEmail: "", contactCompany: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
     const [f, setF] = useState(init);
+    const [quickAdd, setQuickAdd] = useState(false);
+    const [qa, setQa] = useState({ name: "", email: "", company: "" });
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
@@ -536,9 +546,30 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Due Date</label><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || f.contactEmail, contactCompany: c?.company || f.contactCompany }); }} style={s.select}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select></div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Contact</label>
+            <div style={{ display: "flex", gap: 4 }}>
+              <select value={f.contact} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact: e.target.value, contactEmail: c?.email || f.contactEmail, contactCompany: c?.company || f.contactCompany }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select>
+              <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
+            </div>
+          </div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option><option value="overdue">Overdue</option></select></div>
         </div>
+        {quickAdd && (
+          <div style={{ background: "#0f1117", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Add Client</div>
+            <div style={s.grid2}>
+              <div style={{ marginBottom: 8 }}><input value={qa.name} onChange={(e) => setQa({ ...qa, name: e.target.value })} placeholder="Name" style={{ ...s.input, fontSize: 12 }} /></div>
+              <div style={{ marginBottom: 8 }}><input value={qa.email} onChange={(e) => setQa({ ...qa, email: e.target.value })} placeholder="Email" style={{ ...s.input, fontSize: 12 }} /></div>
+            </div>
+            <div style={{ marginBottom: 8 }}><input value={qa.company} onChange={(e) => setQa({ ...qa, company: e.target.value })} placeholder="Company" style={{ ...s.input, fontSize: 12 }} /></div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button disabled={!qa.name} onClick={() => { addContact({ ...qa, type: "client", phone: "", abn: "", address: "", notes: "" }, true); setF({ ...f, contact: qa.name, contactEmail: qa.email, contactCompany: qa.company }); setQa({ name: "", email: "", company: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name ? 0.4 : 1 }}>Add & Select</button>
+              <button onClick={() => { setQuickAdd(false); setQa({ name: "", email: "", company: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><input list="job-list-inv" value={f.job || ""} onChange={(e) => setF({ ...f, job: e.target.value })} placeholder="e.g. 5 Midelton Ave" style={s.input} /><datalist id="job-list-inv">{jobNames.map(j => <option key={j} value={j} />)}</datalist></div>
         <div style={{ marginTop: 8, marginBottom: 8 }}>
           <label style={s.label}>Line Items</label>
           {f.items.map((item, idx) => (
@@ -672,10 +703,12 @@ export default function BookkeeperApp() {
 
   const ExpensesPage = () => {
     const [search, setSearch] = useState("");
+    const [jobFilter, setJobFilter] = useState("");
     const [viewReceipt, setViewReceipt] = useState(null);
     const sorted = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => {
       if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase())) return false;
+      if (jobFilter && t.job !== jobFilter) return false;
       return true;
     });
 
@@ -686,8 +719,12 @@ export default function BookkeeperApp() {
 
     return (
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 260, flex: "1 1 180px" }} />
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 220, flex: "1 1 160px" }} />
+          <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180, flex: "0 1 160px" }}>
+            <option value="">All Jobs</option>
+            {jobNames.map(j => <option key={j} value={j}>{j}</option>)}
+          </select>
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
@@ -695,12 +732,13 @@ export default function BookkeeperApp() {
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
+                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={s.th}>Job</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
                 <tbody>{filtered.map((t) => (
                   <tr key={t.id}>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
                     <td style={s.td}>{t.description}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "--"}</td>
+                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{t.job || ""}</td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: "#f87171", whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       {t.receiptPath && <button onClick={() => openReceipt(t.receiptPath)} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
@@ -726,8 +764,9 @@ export default function BookkeeperApp() {
 
   const InvoicesPage = () => {
     const [filter, setFilter] = useState("all");
+    const [jobFilter, setJobFilter] = useState("");
     const sorted = [...invoices].sort((a, b) => b.date.localeCompare(a.date));
-    const filtered = sorted.filter((i) => filter === "all" || i.status === filter);
+    const filtered = sorted.filter((i) => (filter === "all" || i.status === filter) && (!jobFilter || i.job === jobFilter));
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444" };
     return (
       <div>
@@ -735,6 +774,10 @@ export default function BookkeeperApp() {
           {["all", "draft", "sent", "paid", "overdue"].map((f) => (
             <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#94a3b8", borderColor: filter === f ? accent : "#2a2d3e" }}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>
           ))}
+          <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180, marginLeft: "auto" }}>
+            <option value="">All Jobs</option>
+            {jobNames.map(j => <option key={j} value={j}>{j}</option>)}
+          </select>
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
@@ -742,12 +785,13 @@ export default function BookkeeperApp() {
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr><th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Status</th><th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 100 }}></th></tr></thead>
+                <thead><tr><th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Job</th><th style={s.th}>Status</th><th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 100 }}></th></tr></thead>
                 <tbody>{filtered.map((inv) => (
                   <tr key={inv.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
                     <td style={s.td}>{inv.contact || "--"}</td>
+                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{inv.job || ""}</td>
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
