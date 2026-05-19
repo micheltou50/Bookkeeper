@@ -93,62 +93,104 @@ function LoginScreen() {
   );
 }
 
-function buildInvoiceHTML(inv, profile, accent) {
+function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
   const items = (inv.items || []).map((item) => {
     const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
-    return `<div style="padding:14px 0;border-bottom:1px dashed #e2e8f0;display:flex;justify-content:space-between;align-items:flex-start">
-      <div><div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:1px">${item.description || ""}</div>${item.note ? `<div style="font-size:11px;color:#94a3b8">${item.note}</div>` : ""}</div>
-      <div style="font-size:13px;font-weight:500;color:#1e293b;white-space:nowrap;padding-left:20px">${fmt(amount)}</div>
-    </div>`;
+    return `<tr>
+      <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#1e293b;vertical-align:top">
+        <div style="font-weight:600">${item.description || ""}</div>
+        ${item.note ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px">${item.note}</div>` : ""}
+      </td>
+      <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:500;color:#1e293b;text-align:right;white-space:nowrap;vertical-align:top">${fmt(amount)}</td>
+    </tr>`;
   }).join("");
 
   const subtotal = (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
-  const logoHTML = profile.logo_url
-    ? `<img src="${profile.logo_url}" style="height:56px;border-radius:6px" crossorigin="anonymous" />`
-    : `<div style="background:#1a1a2e;color:#fff;padding:12px 24px;border-radius:6px;font-size:18px;font-weight:800">${profile.name || "Company"}</div>`;
+  const logoHTML = logoDataUrl
+    ? `<img src="${logoDataUrl}" style="height:52px;border-radius:4px" />`
+    : `<div style="font-size:26px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${profile.name || "Company"}</div>`;
 
-  const bankHTML = (profile.bsb || profile.account_number) ? `
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin-bottom:16px">
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:${accent};margin-bottom:8px">Payment Details</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 28px;font-size:11px;color:#64748b">
-        ${profile.bank_name ? `<div>Account Name: <span style="color:#1e293b;font-weight:600">${profile.bank_name}</span></div>` : ""}
-        ${profile.bsb ? `<div>BSB: <span style="color:#1e293b;font-weight:600">${profile.bsb}</span></div>` : ""}
-        ${profile.account_number ? `<div>Account Number: <span style="color:#1e293b;font-weight:600">${profile.account_number}</span></div>` : ""}
-        <div>Reference: <span style="color:#1e293b;font-weight:600">${inv.number || ""}</span></div>
-      </div>
-    </div>` : "";
+  const bankHTML = `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-top:28px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
+      <table style="font-size:12px;color:#64748b;line-height:2">
+        ${profile.bank_name ? `<tr><td style="padding-right:20px">Account Name</td><td style="color:#1e293b;font-weight:600">${profile.bank_name}</td></tr>` : ""}
+        ${profile.bsb ? `<tr><td style="padding-right:20px">BSB</td><td style="color:#1e293b;font-weight:600">${profile.bsb}</td></tr>` : ""}
+        ${profile.account_number ? `<tr><td style="padding-right:20px">Account Number</td><td style="color:#1e293b;font-weight:600">${profile.account_number}</td></tr>` : ""}
+        <tr><td style="padding-right:20px">Reference</td><td style="color:#1e293b;font-weight:600">${inv.number || ""}</td></tr>
+      </table>
+    </div>`;
 
-  return `<div style="width:595px;min-height:842px;background:#fff;padding:48px;font-family:Helvetica Neue,Arial,sans-serif;position:relative">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+  return `<div style="width:595px;min-height:842px;background:#fff;padding:48px 52px;font-family:Helvetica Neue,Arial,sans-serif;position:relative;box-sizing:border-box">
+
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
       <div>${logoHTML}</div>
-      <div style="text-align:right;font-size:11px;color:#64748b;line-height:1.7">
-        ${profile.abn ? `ABN ${profile.abn}<br>` : ""}${profile.address ? `${profile.address}<br>` : ""}${profile.email ? `${profile.email}<br>` : ""}${profile.phone || ""}
+      <div style="text-align:right;font-size:14px;font-weight:700;color:#1e293b">${inv.number || ""}</div>
+    </div>
+
+    <div style="background:${accent}18;padding:6px 12px;border-radius:4px;margin-bottom:4px;display:inline-block">
+      <span style="font-size:11px;color:${accent};font-weight:600">${profile.abn ? `ABN: ${profile.abn}` : ""}</span>
+    </div>
+
+    <div style="font-size:12px;color:#64748b;margin-bottom:20px;line-height:1.6">
+      ${profile.address ? `${profile.address}<br>` : ""}${profile.email ? `${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
+    </div>
+
+    <div style="height:2px;background:${accent};margin-bottom:24px"></div>
+
+    <div style="display:flex;justify-content:space-between;margin-bottom:28px">
+      <div>
+        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:6px">Bill To</div>
+        <div style="font-size:13px;color:#1e293b;line-height:1.6">
+          <strong>${inv.contact_name || ""}</strong>
+          ${inv.contact_company ? `<br>${inv.contact_company}` : ""}
+          ${inv.contact_address ? `<br><span style="color:#64748b;font-size:12px">${inv.contact_address}</span>` : ""}
+          ${inv.contact_phone ? `<br><span style="color:#64748b;font-size:12px">${inv.contact_phone}</span>` : ""}
+          ${inv.contact_email ? `<br><span style="color:#64748b;font-size:12px">${inv.contact_email}</span>` : ""}
+          ${inv.contact_abn ? `<br><span style="color:#64748b;font-size:11px">ABN: ${inv.contact_abn}</span>` : ""}
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="margin-bottom:12px">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">${docType} Date</div>
+          <div style="font-size:13px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div>
+        </div>
+        ${inv.due_date ? `<div style="margin-bottom:12px">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due Date</div>
+          <div style="font-size:13px;color:#1e293b">${fmtDate(inv.due_date)}</div>
+        </div>` : ""}
+        ${inv.job ? `<div>
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Job</div>
+          <div style="font-size:13px;color:#1e293b">${inv.job}</div>
+        </div>` : ""}
       </div>
     </div>
-    <div style="height:3px;background:${accent};margin:22px 0 36px"></div>
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:28px">
-      <div style="font-size:34px;font-weight:300;color:#d1d5db;letter-spacing:0.1em;text-transform:uppercase">${docType}</div>
-      <div style="font-size:17px;font-weight:700;color:#1e293b">${inv.number || ""}</div>
-    </div>
-    <div style="display:flex;gap:44px;margin-bottom:36px">
-      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Issued</div><div style="font-size:12px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div></div>
-      ${inv.due_date ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due</div><div style="font-size:12px;color:#1e293b">${fmtDate(inv.due_date)}</div></div>` : ""}
-      <div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Bill To</div><div style="font-size:12px;color:#1e293b;line-height:1.5"><strong>${inv.contact_name || ""}</strong>${inv.contact_company ? `<br><span style="color:#64748b;font-size:11px">${inv.contact_company}</span>` : ""}${inv.contact_abn ? `<br><span style="color:#64748b;font-size:10px">ABN ${inv.contact_abn}</span>` : ""}${inv.contact_address ? `<br><span style="color:#64748b;font-size:10px">${inv.contact_address}</span>` : ""}${inv.contact_email ? `<br><span style="color:#64748b;font-size:10px">${inv.contact_email}</span>` : ""}${inv.contact_phone ? `<br><span style="color:#64748b;font-size:10px">${inv.contact_phone}</span>` : ""}</div></div>
-      ${inv.job ? `<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Job</div><div style="font-size:12px;color:#1e293b">${inv.job}</div></div>` : ""}
-    </div>
-    <div style="border-top:1px dashed #e2e8f0;margin-bottom:28px">${items}</div>
-    <div style="display:flex;justify-content:flex-end;margin-bottom:36px">
-      <div style="width:220px">
-        <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:#64748b"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding-top:10px;margin-top:4px"><span style="font-size:15px;font-weight:700;color:#1e293b">Total AUD</span><span style="font-size:17px;font-weight:800;color:${accent}">${fmt(subtotal)}</span></div>
-        <div style="font-size:9px;color:#94a3b8;text-align:right;margin-top:6px">Not registered for GST</div>
+
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:10px 0;border-bottom:2px solid #1e293b;font-size:11px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em">Details</th>
+          <th style="text-align:right;padding:10px 0;border-bottom:2px solid #1e293b;font-size:11px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${items}</tbody>
+    </table>
+
+    <div style="display:flex;justify-content:flex-end;margin-bottom:0">
+      <div style="width:240px">
+        <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:12px;color:#64748b;border-top:1px solid #e2e8f0"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:12px 0 4px;border-top:2px solid #1e293b"><span style="font-size:15px;font-weight:700;color:#1e293b">Total AUD</span><span style="font-size:18px;font-weight:800;color:${accent}">${fmt(subtotal)}</span></div>
+        <div style="font-size:9px;color:#94a3b8;text-align:right">Not registered for GST</div>
       </div>
     </div>
+
     ${bankHTML}
-    ${inv.notes ? `<div style="font-size:10px;color:#94a3b8;line-height:1.6">${inv.notes}</div>` : ""}
-    <div style="position:absolute;bottom:24px;left:48px;right:48px;text-align:center;font-size:9px;color:#cbd5e1;border-top:1px solid #f1f5f9;padding-top:10px">
-      ${profile.name || ""}${profile.abn ? ` &middot; ABN ${profile.abn}` : ""}${profile.email ? ` &middot; ${profile.email}` : ""}${profile.phone ? ` &middot; ${profile.phone}` : ""}
+
+    ${inv.notes ? `<div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-top:20px">${inv.notes}</div>` : ""}
+
+    <div style="position:absolute;bottom:24px;left:52px;right:52px;text-align:center;font-size:9px;color:#cbd5e1;border-top:1px solid #f1f5f9;padding-top:10px">
+      ${profile.name || ""}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
     </div>
   </div>`;
 }
@@ -317,13 +359,24 @@ export default function BookkeeperApp() {
     setModal(null);
   };
 
-  const downloadPDF = (inv) => {
-    const html = buildInvoiceHTML(inv, profile, accent);
+  const fetchLogoBase64 = async () => {
+    if (!profile.logo_url) return null;
+    try {
+      const resp = await fetch(profile.logo_url);
+      const blob = await resp.blob();
+      return await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(blob); });
+    } catch { return null; }
+  };
+
+  const downloadPDF = async (inv) => {
+    const logoDataUrl = await fetchLogoBase64();
+    const html = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
     const el = document.createElement("div");
     el.innerHTML = html;
     document.body.appendChild(el);
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save().then(() => document.body.removeChild(el));
+    await html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 3 }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save();
+    document.body.removeChild(el);
   };
 
   const sendInvoice = (inv) => {
@@ -637,8 +690,16 @@ export default function BookkeeperApp() {
   };
 
   const InvoiceForm = ({ existing }) => {
-    const init = existing || { number: `INV-${String(invoices.length + 1).padStart(3, "0")}`, type: "invoice", date: today(), due_date: "", contact_name: "", contact_email: "", contact_company: "", contact_abn: "", contact_address: "", contact_phone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
+    const invCount = invoices.filter((i) => i.type === "invoice").length;
+    const quoCount = invoices.filter((i) => i.type === "quote").length;
+    const init = existing || { number: `INV-${String(invCount + 1).padStart(3, "0")}`, type: "invoice", date: today(), due_date: "", contact_name: "", contact_email: "", contact_company: "", contact_abn: "", contact_address: "", contact_phone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
     const [f, setF] = useState(init);
+    const updateType = (newType) => {
+      const prefix = newType === "quote" ? "QUO" : "INV";
+      const count = newType === "quote" ? quoCount : invCount;
+      const numChanged = !existing && (f.number.startsWith("INV-") || f.number.startsWith("QUO-"));
+      setF({ ...f, type: newType, number: numChanged ? `${prefix}-${String(count + 1).padStart(3, "0")}` : f.number });
+    };
     const [quickAdd, setQuickAdd] = useState(false);
     const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
@@ -653,7 +714,7 @@ export default function BookkeeperApp() {
           <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
