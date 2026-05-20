@@ -248,6 +248,8 @@ export default function BookkeeperApp() {
   const [txns, setTxns] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
+  const [emailConn, setEmailConn] = useState(null);
+  const [outlookSending, setOutlookSending] = useState(null);
 
   const bizInfo = BUSINESSES.find((b) => b.id === biz);
   const accent = bizInfo?.accent || "#0d9488";
@@ -262,12 +264,13 @@ export default function BookkeeperApp() {
   const loadData = useCallback(async (businessId) => {
     if (!session) return;
     setLoading(true);
-    const [cRes, iRes, tRes, pRes, jRes] = await Promise.all([
+    const [cRes, iRes, tRes, pRes, jRes, eRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_transactions").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
+      supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
     ]);
 
     const loadedInvoices = iRes.data || [];
@@ -288,6 +291,7 @@ export default function BookkeeperApp() {
     setTxns(tRes.data || []);
     setJobs(jRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, name: bizInfo?.name || "" });
+    setEmailConn(eRes.data || null);
     setLoading(false);
 
     // Mark overdue invoices server-side
@@ -324,7 +328,21 @@ export default function BookkeeperApp() {
     setTxns([]);
     setJobs([]);
     setProfile({ ...DEFAULT_PROFILE });
+    setEmailConn(null);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outlookStatus = params.get("outlook");
+    if (outlookStatus === "connected") {
+      const connectedEmail = params.get("email") || "";
+      setEmailConn((prev) => prev ? { ...prev, email: connectedEmail } : { email: connectedEmail, provider: "outlook" });
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (outlookStatus === "error") {
+      console.error("Outlook connection error:", params.get("reason"));
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   const jobNames = [...new Set([...invoices.map((i) => i.job), ...txns.map((t) => t.job)].filter(Boolean))].sort();
 
@@ -496,6 +514,58 @@ export default function BookkeeperApp() {
 
   const markPaid = (inv) => {
     updateInvoice(inv.id, { status: "paid", paid_date: today() });
+  };
+
+  const connectOutlook = async () => {
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    if (!token) return;
+    try {
+      const resp = await fetch("/.netlify/functions/outlook-oauth-start", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ business_id: biz }),
+      });
+      const result = await resp.json();
+      if (!resp.ok || !result.url) throw new Error(result.error || "Failed to start OAuth");
+      window.location.href = result.url;
+    } catch (err) {
+      console.error("Outlook connect failed:", err);
+      alert("Failed to connect Outlook: " + err.message);
+    }
+  };
+
+  const disconnectOutlook = async () => {
+    if (!emailConn?.id) return;
+    await supabase.from("bk_email_connections").delete().eq("id", emailConn.id);
+    setEmailConn(null);
+  };
+
+  const sendViaOutlook = async (inv) => {
+    if (!emailConn) return;
+    setOutlookSending(inv.id);
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!inv.pdf_path) {
+        await fetch("/.netlify/functions/generate-invoice-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
+        });
+      }
+      const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: inv.id }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "Send failed");
+      setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, status: i.status === "draft" ? "sent" : i.status, sent_at: new Date().toISOString() } : i));
+    } catch (err) {
+      console.error("Outlook send failed:", err);
+      alert("Failed to send via Outlook: " + err.message);
+    } finally {
+      setOutlookSending(null);
+    }
   };
 
   if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8" }}>Loading...</div>;
@@ -944,6 +1014,24 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
         </div>
+        <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+          <label style={{ ...s.label, marginBottom: 12 }}>Email Integration</label>
+          {emailConn ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#0d948815", borderRadius: 8, border: "1px solid #0d948830" }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#e2e8f0" }}>Outlook Connected</div>
+                <div style={{ fontSize: 11, color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{emailConn.email || "Connected"}</div>
+              </div>
+              <button onClick={disconnectOutlook} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", fontSize: 10 }}>Disconnect</button>
+            </div>
+          ) : (
+            <button onClick={connectOutlook} style={{ ...s.btn("#0078d4"), width: "100%", justifyContent: "center" }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>
+              Connect Outlook
+            </button>
+          )}
+        </div>
         <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
       </div>
     );
@@ -1101,7 +1189,8 @@ export default function BookkeeperApp() {
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      {inv.status !== "paid" && <button onClick={() => sendInvoice(inv)} title="Send Invoice" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>}
+                      {inv.status !== "paid" && emailConn && inv.contact_email && <button onClick={() => sendViaOutlook(inv)} title="Send via Outlook" disabled={outlookSending === inv.id} style={{ background: "none", border: "none", color: outlookSending === inv.id ? "#64748b" : "#0078d4", cursor: outlookSending === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookSending === inv.id ? 0.5 : 1, fontSize: 13 }}>{outlookSending === inv.id ? "…" : <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>}</button>}
+                      {inv.status !== "paid" && <button onClick={() => sendInvoice(inv)} title="Send via Email Client" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>}
                       {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#64748b" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
