@@ -28,8 +28,8 @@ const DEFAULT_ACCOUNTS = [
 const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", bsb: "", account_number: "", logo_url: "" };
 
 const BUSINESSES = [
-  { id: "mt", name: "MT Management", accent: "#0d9488" },
-  { id: "mworx", name: "Mworx Group", accent: "#b45309" },
+  { id: "mt", name: "MT Management", accent: "#0f766e" },
+  { id: "mworx", name: "Mworx Group", accent: "#0d9488" },
 ];
 
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
@@ -94,103 +94,119 @@ function LoginScreen() {
 }
 
 function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
+  const isQuote = inv.type === "quote";
+  const docType = isQuote ? "QUOTE" : "INVOICE";
+  const bName = profile.name || "Company";
+  const tagline = profile.business_id === "mworx" ? "Design · Consultancy · Project Management" : "";
+  const accountName = profile.name || bName;
+
+  const logoHTML = logoDataUrl
+    ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`
+    : `<div style="font-size:24px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${bName}</div>`;
+
   const items = (inv.items || []).map((item) => {
     const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
     return `<tr>
-      <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;font-size:13px;color:#1e293b;vertical-align:top">
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
         <div style="font-weight:600">${item.description || ""}</div>
-        ${item.note ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px">${item.note}</div>` : ""}
+        ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px">${item.note}</div>` : ""}
       </td>
-      <td style="padding:12px 0;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:500;color:#1e293b;text-align:right;white-space:nowrap;vertical-align:top">${fmt(amount)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top">${fmt(item.rate || 0)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top">${fmt(amount)}</td>
     </tr>`;
   }).join("");
 
   const subtotal = (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
-  const docType = inv.type === "quote" ? "Quote" : "Invoice";
-  const logoHTML = logoDataUrl
-    ? `<img src="${logoDataUrl}" style="height:52px;border-radius:4px" />`
-    : `<div style="font-size:26px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${profile.name || "Company"}</div>`;
 
-  const bankHTML = `
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-top:28px">
+  const paymentSection = !isQuote ? `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
-      <table style="font-size:12px;color:#64748b;line-height:2">
-        ${profile.bank_name ? `<tr><td style="padding-right:20px">Account Name</td><td style="color:#1e293b;font-weight:600">${profile.bank_name}</td></tr>` : ""}
-        ${profile.bsb ? `<tr><td style="padding-right:20px">BSB</td><td style="color:#1e293b;font-weight:600">${profile.bsb}</td></tr>` : ""}
-        ${profile.account_number ? `<tr><td style="padding-right:20px">Account Number</td><td style="color:#1e293b;font-weight:600">${profile.account_number}</td></tr>` : ""}
-        <tr><td style="padding-right:20px">Reference</td><td style="color:#1e293b;font-weight:600">${inv.number || ""}</td></tr>
+      <table style="font-size:11px;color:#374151;line-height:1.8">
+        <tr><td style="padding-right:20px;color:#6b7280">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
+        ${profile.bank_name ? `<tr><td style="padding-right:20px;color:#6b7280">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
+        ${profile.bsb ? `<tr><td style="padding-right:20px;color:#6b7280">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
+        ${profile.account_number ? `<tr><td style="padding-right:20px;color:#6b7280">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
+        <tr><td style="padding-right:20px;color:#6b7280">Reference</td><td style="font-weight:600">${inv.number || ""}</td></tr>
       </table>
+    </div>` : `
+    <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:14px 20px;margin-top:24px">
+      <div style="font-size:11px;color:#0f766e;line-height:1.6">This quote is valid for 30 days from the date of issue. Payment details will be provided upon acceptance.</div>
     </div>`;
 
-  return `<div style="width:595px;min-height:842px;background:#fff;padding:48px 52px;font-family:Helvetica Neue,Arial,sans-serif;position:relative;box-sizing:border-box">
+  return `<div style="width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;position:relative;box-sizing:border-box">
 
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
-      <div>${logoHTML}</div>
-      <div style="text-align:right;font-size:14px;font-weight:700;color:#1e293b">${inv.number || ""}</div>
-    </div>
-
-    <div style="background:${accent}18;padding:6px 12px;border-radius:4px;margin-bottom:4px;display:inline-block">
-      <span style="font-size:11px;color:${accent};font-weight:600">${profile.abn ? `ABN: ${profile.abn}` : ""}</span>
-    </div>
-
-    <div style="font-size:12px;color:#64748b;margin-bottom:20px;line-height:1.6">
-      ${profile.address ? `${profile.address}<br>` : ""}${profile.email ? `${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+      <div>
+        ${logoHTML}
+        <div style="margin-top:10px">
+          ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
+          <div style="font-size:10px;color:#6b7280;line-height:1.6">
+            ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+          </div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:32px;font-weight:700;color:#1e293b;letter-spacing:0.04em;text-transform:uppercase">${docType}</div>
+        <div style="font-size:14px;font-weight:700;color:#374151;margin-top:4px">${inv.number || ""}</div>
+      </div>
     </div>
 
     <div style="height:2px;background:${accent};margin-bottom:24px"></div>
 
     <div style="display:flex;justify-content:space-between;margin-bottom:28px">
-      <div>
-        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:6px">Bill To</div>
-        <div style="font-size:13px;color:#1e293b;line-height:1.6">
+      <div style="flex:1">
+        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:6px">${isQuote ? "Quote For" : "Bill To"}</div>
+        <div style="font-size:12px;color:#1e293b;line-height:1.7">
           <strong>${inv.contact_name || ""}</strong>
           ${inv.contact_company ? `<br>${inv.contact_company}` : ""}
-          ${inv.contact_address ? `<br><span style="color:#64748b;font-size:12px">${inv.contact_address}</span>` : ""}
-          ${inv.contact_phone ? `<br><span style="color:#64748b;font-size:12px">${inv.contact_phone}</span>` : ""}
-          ${inv.contact_email ? `<br><span style="color:#64748b;font-size:12px">${inv.contact_email}</span>` : ""}
-          ${inv.contact_abn ? `<br><span style="color:#64748b;font-size:11px">ABN: ${inv.contact_abn}</span>` : ""}
+          ${inv.contact_abn ? `<br><span style="font-size:10px;color:#6b7280">ABN ${inv.contact_abn}</span>` : ""}
+          ${inv.contact_address ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_address}</span>` : ""}
+          ${inv.contact_email ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_email}</span>` : ""}
+          ${inv.contact_phone ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_phone}</span>` : ""}
         </div>
       </div>
-      <div style="text-align:right">
-        <div style="margin-bottom:12px">
-          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">${docType} Date</div>
-          <div style="font-size:13px;color:#1e293b">${inv.date ? fmtDate(inv.date) : ""}</div>
-        </div>
-        ${inv.due_date ? `<div style="margin-bottom:12px">
-          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Due Date</div>
-          <div style="font-size:13px;color:#1e293b">${fmtDate(inv.due_date)}</div>
-        </div>` : ""}
-        ${inv.job ? `<div>
-          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:3px">Job</div>
-          <div style="font-size:13px;color:#1e293b">${inv.job}</div>
-        </div>` : ""}
+      <div style="text-align:right;min-width:180px">
+        <table style="font-size:11px;margin-left:auto;border-collapse:collapse">
+          <tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Quote Date" : "Invoice Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.date ? fmtDate(inv.date) : ""}</td></tr>
+          ${inv.due_date ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Valid Until" : "Due Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.due_date)}</td></tr>` : ""}
+          ${inv.job ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Job / Ref</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.job}</td></tr>` : ""}
+        </table>
       </div>
     </div>
 
-    <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
       <thead>
-        <tr>
-          <th style="text-align:left;padding:10px 0;border-bottom:2px solid #1e293b;font-size:11px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em">Details</th>
-          <th style="text-align:right;padding:10px 0;border-bottom:2px solid #1e293b;font-size:11px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em">Amount</th>
+        <tr style="background:#f8fafc">
+          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
+          <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
+          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
+          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
         </tr>
       </thead>
       <tbody>${items}</tbody>
     </table>
 
-    <div style="display:flex;justify-content:flex-end;margin-bottom:0">
+    <div style="display:flex;justify-content:flex-end">
       <div style="width:240px">
-        <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:12px;color:#64748b;border-top:1px solid #e2e8f0"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:12px 0 4px;border-top:2px solid #1e293b"><span style="font-size:15px;font-weight:700;color:#1e293b">Total AUD</span><span style="font-size:18px;font-weight:800;color:${accent}">${fmt(subtotal)}</span></div>
-        <div style="font-size:9px;color:#94a3b8;text-align:right">Not registered for GST</div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11px;color:#6b7280"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px;color:#94a3b8"><span>GST</span><span>$0.00</span></div>
+        <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:4px;border-top:2px solid #1e293b">
+          <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
+          <span style="font-size:16px;font-weight:800;color:${accent}">${fmt(subtotal)}</span>
+        </div>
+        <div style="font-size:10px;color:#6b7280;text-align:right;margin-top:2px">Not registered for GST. No GST has been charged.</div>
       </div>
     </div>
 
-    ${bankHTML}
+    ${paymentSection}
 
-    ${inv.notes ? `<div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-top:20px">${inv.notes}</div>` : ""}
+    ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">${inv.notes}</div>` : ""}
 
-    <div style="position:absolute;bottom:24px;left:52px;right:52px;text-align:center;font-size:9px;color:#cbd5e1;border-top:1px solid #f1f5f9;padding-top:10px">
-      ${profile.name || ""}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
+    <div style="position:absolute;bottom:24px;left:44px;right:44px;text-align:center;border-top:1px solid #e2e8f0;padding-top:12px">
+      <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
+      <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
+      ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
     </div>
   </div>`;
 }

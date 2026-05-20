@@ -19,7 +19,7 @@ function fmtDate(d) {
 function buildReminderHTML(inv, profile, daysOverdue) {
   const bName = profile.name || "Our company";
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
-  const accent = profile.business_id === "mworx" ? "#b45309" : "#0d9488";
+  const accent = profile.business_id === "mworx" ? "#0d9488" : "#0f766e";
   const total = fmtAUD(inv.total || 0);
 
   const logoHTML = profile.logo_url
