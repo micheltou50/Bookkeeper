@@ -25,7 +25,27 @@ const DEFAULT_ACCOUNTS = [
   { code: "7500", name: "Platform Commissions", type: "Expense" },
 ];
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "" };
+const DEFAULT_EMAIL_TEMPLATE_INVOICE = `Hi {contact_name},
+
+Please find attached invoice {number} for {amount}.
+
+{due_date_line}
+
+{payment_details}
+
+Kind regards,
+{signature}`;
+
+const DEFAULT_EMAIL_TEMPLATE_QUOTE = `Hi {contact_name},
+
+Please find attached quote {number} for {amount}.
+
+This quote is valid until {due_date}. Payment details will be provided upon acceptance.
+
+Kind regards,
+{signature}`;
+
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "" };
 
 const BUSINESSES = [
   { id: "mworx", name: "Mworx Group", accent: "#0d9488" },
@@ -433,7 +453,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "" };
     const { data: saved } = await supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single();
     if (saved) setProfile(saved);
     setModal(null);
@@ -1036,6 +1056,24 @@ export default function BookkeeperApp() {
               Connect Outlook
             </button>
           )}
+        </div>
+        <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+          <label style={{ ...s.label, marginBottom: 12 }}>Email Templates</label>
+          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+            Variables: <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{contact_name}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{number}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{amount}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{due_date}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{due_date_line}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{payment_details}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{business_name}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{signature}"}</code>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Invoice Email</label>
+            <textarea value={f.email_template_invoice || ""} onChange={(e) => setF({ ...f, email_template_invoice: e.target.value })} placeholder={DEFAULT_EMAIL_TEMPLATE_INVOICE} rows={8} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 120 }} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Quote Email</label>
+            <textarea value={f.email_template_quote || ""} onChange={(e) => setF({ ...f, email_template_quote: e.target.value })} placeholder={DEFAULT_EMAIL_TEMPLATE_QUOTE} rows={8} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 120 }} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Signature (HTML allowed)</label>
+            <textarea value={f.email_signature || ""} onChange={(e) => setF({ ...f, email_signature: e.target.value })} placeholder={`${f.name || "Your name"}\n${f.email || "your@email.com"} · ${f.phone || "+61 ..."}`} rows={5} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 80 }} />
+          </div>
         </div>
         <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
       </div>

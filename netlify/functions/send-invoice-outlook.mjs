@@ -48,6 +48,43 @@ function fmtAUD(n) {
   return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
 }
 
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+}
+
+const DEFAULT_INVOICE_TEMPLATE = `Hi {contact_name},
+
+Please find attached invoice {number} for {amount}.
+
+{due_date_line}
+
+{payment_details}
+
+Kind regards,
+{signature}`;
+
+const DEFAULT_QUOTE_TEMPLATE = `Hi {contact_name},
+
+Please find attached quote {number} for {amount}.
+
+This quote is valid until {due_date}. Payment details will be provided upon acceptance.
+
+Kind regards,
+{signature}`;
+
+function renderTemplate(template, vars) {
+  const isHtml = /<[a-z][\s\S]*>/i.test(template);
+  let out = template;
+  for (const [k, v] of Object.entries(vars)) {
+    const safe = k === "payment_details" || k === "signature" ? (v || "") : escapeHtml(v || "");
+    out = out.replaceAll(`{${k}}`, safe);
+  }
+  if (!isHtml) {
+    out = out.split(/\n\n+/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+  }
+  return out;
+}
+
 export default async (req) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -133,13 +170,36 @@ export default async (req) => {
   }
 
   const accountName = profile?.account_name || profile?.name || bName;
+  const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+
+  const paymentDetailsHtml = profile?.bsb
+    ? `<p><strong>Payment details:</strong><br>${profile.bank_name ? `Bank: ${escapeHtml(profile.bank_name)}<br>` : ""}Account: ${escapeHtml(accountName)}<br>BSB: ${escapeHtml(profile.bsb)}<br>Account #: ${escapeHtml(profile.account_number)}<br>Reference: ${escapeHtml(inv.number)}</p>`
+    : "";
+
+  const dueDateLine = inv.due_date
+    ? (inv.type === "quote"
+        ? `<p>This quote is valid until <strong>${fmtDate(inv.due_date)}</strong>.</p>`
+        : `<p>Payment is due by <strong>${fmtDate(inv.due_date)}</strong>.</p>`)
+    : "";
+
+  const signatureHtml = profile?.email_signature || `<strong>${escapeHtml(bName)}</strong>`;
+
+  const templateVars = {
+    contact_name: inv.contact_name || "there",
+    number: inv.number || "",
+    amount: fmtAUD(inv.total || 0),
+    due_date: inv.due_date ? fmtDate(inv.due_date) : "",
+    due_date_line: dueDateLine,
+    payment_details: paymentDetailsHtml,
+    business_name: bName,
+    signature: signatureHtml,
+  };
+
+  const customTemplate = inv.type === "quote" ? profile?.email_template_quote : profile?.email_template_invoice;
+  const template = customTemplate?.trim() || (inv.type === "quote" ? DEFAULT_QUOTE_TEMPLATE : DEFAULT_INVOICE_TEMPLATE);
 
   const subject = `${docType} ${inv.number} from ${bName}`;
-  const htmlBody = `<p>Hi ${inv.contact_name || "there"},</p>
-<p>Please find attached ${docType.toLowerCase()} <strong>${inv.number}</strong> for <strong>${fmtAUD(inv.total || 0)}</strong>.</p>
-${inv.due_date ? `<p>Payment is due by <strong>${new Date(inv.due_date).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })}</strong>.</p>` : ""}
-${profile?.bsb ? `<p><strong>Payment details:</strong><br>${profile.bank_name ? `Bank: ${profile.bank_name}<br>` : ""}Account: ${accountName}<br>BSB: ${profile.bsb}<br>Account #: ${profile.account_number}<br>Reference: ${inv.number}</p>` : ""}
-<p>Kind regards,<br><strong>${bName}</strong></p>`;
+  const htmlBody = renderTemplate(template, templateVars);
 
   const message = {
     subject,
