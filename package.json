@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
-    "@supabase/supabase-js": "^2.105.4",
+    "@sparticuz/chromium": "^148.0.0",
+    "@supabase/supabase-js": "^2.106.0",
     "html2pdf.js": "^0.14.0",
+    "puppeteer-core": "^25.0.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

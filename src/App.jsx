@@ -368,19 +368,44 @@ export default function BookkeeperApp() {
     } catch { return null; }
   };
 
+  const [pdfLoading, setPdfLoading] = useState(null);
+
   const downloadPDF = async (inv) => {
-    const logoDataUrl = await fetchLogoBase64();
-    const html = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
-    const el = document.createElement("div");
-    el.innerHTML = html;
-    document.body.appendChild(el);
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    await html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 3 }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save();
-    document.body.removeChild(el);
+    setPdfLoading(inv.id);
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const resp = await fetch("/.netlify/functions/generate-invoice-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
+      });
+      const result = await resp.json();
+      if (!resp.ok || !result.signed_url) throw new Error(result.error || "PDF generation failed");
+      const pdfResp = await fetch(result.signed_url);
+      const blob = await pdfResp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${docType}-${inv.number || "draft"}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Server PDF failed, falling back to client-side:", err);
+      const logoDataUrl = await fetchLogoBase64();
+      const html = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
+      const el = document.createElement("div");
+      el.innerHTML = html;
+      document.body.appendChild(el);
+      await html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 3 }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save();
+      document.body.removeChild(el);
+    } finally {
+      setPdfLoading(null);
+    }
   };
 
-  const sendInvoice = (inv) => {
-    downloadPDF(inv);
+  const sendInvoice = async (inv) => {
+    await downloadPDF(inv);
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
@@ -983,7 +1008,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       {inv.status !== "paid" && <button onClick={() => sendInvoice(inv)} title="Send Invoice" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>}
                       {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
-                      <button onClick={() => downloadPDF(inv)} title="Download PDF" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Download /></button>
+                      <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#64748b" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
                       {inv.status !== "paid" && <button onClick={() => markPaid(inv)} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>}
                       <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
