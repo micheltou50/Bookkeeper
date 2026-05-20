@@ -28,7 +28,6 @@ const DEFAULT_ACCOUNTS = [
 const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "" };
 
 const BUSINESSES = [
-  { id: "mt", name: "MT Management", accent: "#0f766e" },
   { id: "mworx", name: "Mworx Group", accent: "#0d9488" },
 ];
 
@@ -78,7 +77,7 @@ function LoginScreen() {
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
       <div style={{ background: "#161822", borderRadius: 16, border: "1px solid #1e2130", padding: 40, width: "100%", maxWidth: 400, textAlign: "center" }}>
         <div style={{ fontSize: 28, fontWeight: 800, color: "#f1f5f9", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
-        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>MT Management</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && email && password && handleSubmit()} style={inputStyle} />
         {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>{error}</div>}
@@ -219,7 +218,7 @@ export default function BookkeeperApp() {
   const [editItem, setEditItem] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const [biz, setBiz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mt");
+  const [biz, setBiz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mworx");
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [txns, setTxns] = useState([]);
@@ -1101,14 +1100,7 @@ export default function BookkeeperApp() {
     <>
       <div style={s.logo}>
         <div style={{ fontSize: 17, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.02em" }}>BookKeeper</div>
-        <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>MT Management</div>
-      </div>
-      <div style={s.bizSwitcher}>
-        {BUSINESSES.map((b) => (
-          <button key={b.id} onClick={() => { switchBiz(b.id); setSidebarOpen(false); }} style={s.bizBtn(biz === b.id, b.accent)}>
-            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: b.accent, marginRight: 6 }} />{b.name}
-          </button>
-        ))}
+        <div style={{ fontSize: 10, color: "#0d9488", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
