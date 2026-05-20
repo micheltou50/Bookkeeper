@@ -542,6 +542,10 @@ export default function BookkeeperApp() {
 
   const sendViaOutlook = async (inv) => {
     if (!emailConn) return;
+    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    const bName = profile.name || "your company";
+    const confirmMsg = `Send ${docType} ${inv.number} via Outlook?\n\nTo: ${inv.contact_name || ""} <${inv.contact_email}>\nFrom: ${emailConn.email}\nSubject: ${docType} ${inv.number} from ${bName}\nAmount: ${fmt(inv.total || 0)}\n\nAttachment: PDF will be generated and attached.`;
+    if (!window.confirm(confirmMsg)) return;
     setOutlookSending(inv.id);
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -560,8 +564,7 @@ export default function BookkeeperApp() {
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error || "Send failed");
       setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, status: i.status === "draft" ? "sent" : i.status, sent_at: new Date().toISOString() } : i));
-      const docType = inv.type === "quote" ? "Quote" : "Invoice";
-      alert(`${docType} ${inv.number} sent to ${inv.contact_email} via Outlook`);
+      alert(`Sent to ${inv.contact_email}`);
     } catch (err) {
       console.error("Outlook send failed:", err);
       alert("Failed to send via Outlook: " + err.message);
