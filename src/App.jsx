@@ -388,6 +388,14 @@ export default function BookkeeperApp() {
     return inserted;
   };
 
+  const updateContact = async (id, c) => {
+    const row = { name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
+    const { data: updated } = await supabase.from("bk_contacts").update(row).eq("id", id).select().single();
+    if (updated) setContacts((prev) => prev.map((x) => (x.id === id ? updated : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    setModal(null);
+    setEditItem(null);
+  };
+
   const deleteContact = async (id) => {
     await supabase.from("bk_contacts").delete().eq("id", id);
     setContacts((prev) => prev.filter((c) => c.id !== id));
@@ -512,13 +520,13 @@ export default function BookkeeperApp() {
     }
   };
 
-  const sendInvoice = async (inv) => {
-    await downloadPDF(inv);
+  const sendInvoice = (inv) => {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
     const body = `Hi ${inv.contact_name || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.\n\n` : ""}${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
-    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    window.location.href = `mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    downloadPDF(inv);
     if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
   };
 
@@ -850,13 +858,13 @@ export default function BookkeeperApp() {
     );
   };
 
-  const ContactForm = () => {
-    const [f, setF] = useState({ name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
+  const ContactForm = ({ existing }) => {
+    const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>New Contact</h3>
-          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
+          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
@@ -874,7 +882,7 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
         </div>
-        <button disabled={!f.name} onClick={() => addContact(f)} style={{ ...s.btn(accent), opacity: !f.name ? 0.4 : 1, width: "100%", justifyContent: "center" }}>Add Contact</button>
+        <button disabled={!f.name} onClick={() => existing ? updateContact(existing.id, f) : addContact(f)} style={{ ...s.btn(accent), opacity: !f.name ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{existing ? "Save Changes" : "Add Contact"}</button>
       </div>
     );
   };
@@ -1264,14 +1272,17 @@ export default function BookkeeperApp() {
           {filtered.length === 0 ? <div style={{ color: "#64748b", padding: "30px 0", textAlign: "center" }}>No contacts yet</div> : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr><th style={s.th}>Name</th><th style={s.th}>Company</th><th style={s.th}>Email</th><th style={s.th}>Type</th><th style={{ ...s.th, width: 40 }}></th></tr></thead>
+                <thead><tr><th style={s.th}>Name</th><th style={s.th}>Company</th><th style={s.th}>Email</th><th style={s.th}>Type</th><th style={{ ...s.th, width: 70 }}></th></tr></thead>
                 <tbody>{filtered.map((c) => (
                   <tr key={c.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{c.name}</td>
                     <td style={{ ...s.td, color: "#94a3b8" }}>{c.company || "--"}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{c.email || "--"}</td>
                     <td style={s.td}><span style={s.badge(c.type === "client" ? "#3b82f6" : "#f59e0b")}>{c.type}</span></td>
-                    <td style={s.td}><button onClick={() => deleteContact(c.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button></td>
+                    <td style={{ ...s.td, display: "flex", gap: 4 }}>
+                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
+                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -1338,7 +1349,7 @@ export default function BookkeeperApp() {
           <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); } }}>
             <div style={s.modalContent}>
               {modal === "expense" && <ExpenseForm />}
-              {modal === "contact" && <ContactForm />}
+              {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "receipt" && <ReceiptCapture />}
               {modal === "settings" && <BusinessSettings />}
