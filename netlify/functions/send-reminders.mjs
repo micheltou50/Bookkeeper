@@ -30,7 +30,8 @@ function buildReminderHTML(inv, profile, daysOverdue) {
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:20px 24px;margin:24px 0">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:12px">Payment Details</div>
       <table style="font-size:14px;color:#334155;line-height:1.8">
-        ${profile.bank_name ? `<tr><td style="color:#64748b;padding-right:16px">Account Name</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
+        ${profile.bank_name ? `<tr><td style="color:#64748b;padding-right:16px">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
+        <tr><td style="color:#64748b;padding-right:16px">Account Name</td><td style="font-weight:600">${profile.account_name || profile.name || bName}</td></tr>
         ${profile.bsb ? `<tr><td style="color:#64748b;padding-right:16px">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
         ${profile.account_number ? `<tr><td style="color:#64748b;padding-right:16px">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
         <tr><td style="color:#64748b;padding-right:16px">Reference</td><td style="font-weight:600">${inv.number}</td></tr>
@@ -144,7 +145,7 @@ export default async () => {
 
     const subject = `Reminder: ${docType} ${inv.number} from ${bName} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
     const html = buildReminderHTML(inv, profile, daysOverdue);
-    const text = `Hi ${inv.contact_name || "there"},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmtAUD(inv.total || 0)} was due on ${fmtDate(inv.due_date)} (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago).${profile.bsb ? `\n\nBank details:\nAccount: ${profile.bank_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : ""}\n\nKind regards,\n${bName}`;
+    const text = `Hi ${inv.contact_name || "there"},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmtAUD(inv.total || 0)} was due on ${fmtDate(inv.due_date)} (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago).${profile.bsb ? `\n\nBank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : ""}\n\nKind regards,\n${bName}`;
 
     try {
       const resp = await fetch("https://api.resend.com/emails", {

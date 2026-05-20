@@ -19,11 +19,29 @@ function fmtDate(d) {
 async function fetchLogoBase64(logoUrl) {
   if (!logoUrl) return null;
   try {
+    const match = logoUrl.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
+    if (match) {
+      const [, bucket, path] = match;
+      const { data, error } = await supabase.storage.from(bucket).download(path);
+      if (error || !data) {
+        console.error("Logo storage download failed:", error?.message);
+        return null;
+      }
+      const buf = Buffer.from(await data.arrayBuffer());
+      const ext = path.split(".").pop()?.toLowerCase();
+      const mime = ext === "svg" ? "image/svg+xml" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+      return `data:${mime};base64,${buf.toString("base64")}`;
+    }
     const resp = await fetch(logoUrl);
+    if (!resp.ok) {
+      console.error("Logo fetch failed:", resp.status, resp.statusText);
+      return null;
+    }
     const buf = Buffer.from(await resp.arrayBuffer());
     const mime = resp.headers.get("content-type") || "image/png";
     return `data:${mime};base64,${buf.toString("base64")}`;
-  } catch {
+  } catch (err) {
+    console.error("Logo resolution error:", err.message);
     return null;
   }
 }
@@ -54,14 +72,14 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 
   const subtotal = (items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
 
-  const accountName = profile.name || bName;
+  const accountName = profile.account_name || profile.name || bName;
 
   const paymentSection = !isQuote ? `
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
       <table style="font-size:11px;color:#374151;line-height:1.8;border-collapse:collapse">
-        <tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
         ${profile.bank_name ? `<tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
+        <tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
         ${profile.bsb ? `<tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
         ${profile.account_number ? `<tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
         <tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Reference</td><td style="font-weight:600">${inv.number || ""}</td></tr>

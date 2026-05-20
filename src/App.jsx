@@ -25,7 +25,7 @@ const DEFAULT_ACCOUNTS = [
   { code: "7500", name: "Platform Commissions", type: "Expense" },
 ];
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", bsb: "", account_number: "", logo_url: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "" };
 
 const BUSINESSES = [
   { id: "mt", name: "MT Management", accent: "#0f766e" },
@@ -98,7 +98,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
   const docType = isQuote ? "QUOTE" : "INVOICE";
   const bName = profile.name || "Company";
   const tagline = profile.business_id === "mworx" ? "Design · Consultancy · Project Management" : "";
-  const accountName = profile.name || bName;
+  const accountName = profile.account_name || profile.name || bName;
 
   const logoHTML = logoDataUrl
     ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`
@@ -123,8 +123,8 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
       <table style="font-size:11px;color:#374151;line-height:1.8">
-        <tr><td style="padding-right:20px;color:#6b7280">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
         ${profile.bank_name ? `<tr><td style="padding-right:20px;color:#6b7280">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
+        <tr><td style="padding-right:20px;color:#6b7280">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
         ${profile.bsb ? `<tr><td style="padding-right:20px;color:#6b7280">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
         ${profile.account_number ? `<tr><td style="padding-right:20px;color:#6b7280">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
         <tr><td style="padding-right:20px;color:#6b7280">Reference</td><td style="font-weight:600">${inv.number || ""}</td></tr>
@@ -369,7 +369,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url };
     const { data: saved } = await supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single();
     if (saved) setProfile(saved);
     setModal(null);
@@ -378,7 +378,15 @@ export default function BookkeeperApp() {
   const fetchLogoBase64 = async () => {
     if (!profile.logo_url) return null;
     try {
+      const match = profile.logo_url.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
+      if (match) {
+        const [, bucket, path] = match;
+        const { data, error } = await supabase.storage.from(bucket).download(path);
+        if (error || !data) return null;
+        return await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(data); });
+      }
       const resp = await fetch(profile.logo_url);
+      if (!resp.ok) return null;
       const blob = await resp.blob();
       return await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(blob); });
     } catch { return null; }
@@ -425,7 +433,7 @@ export default function BookkeeperApp() {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
-    const body = `Hi ${inv.contact_name || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.\n\n` : ""}${profile.bsb ? `Bank details:\nAccount: ${profile.bank_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
+    const body = `Hi ${inv.contact_name || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.\n\n` : ""}${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
     window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
   };
@@ -435,7 +443,7 @@ export default function BookkeeperApp() {
     const bName = profile.name || "our company";
     const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
     const overdueDays = inv.due_date ? Math.max(0, Math.floor((Date.now() - new Date(inv.due_date)) / 86400000)) : 0;
-    const body = `Hi ${inv.contact_name || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\nAccount: ${profile.bank_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
+    const body = `Hi ${inv.contact_name || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
     window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
   };
@@ -820,7 +828,19 @@ export default function BookkeeperApp() {
 
   const BusinessSettings = () => {
     const [f, setF] = useState({ ...profile });
+    const [logoPreview, setLogoPreview] = useState(null);
     const fileRef = useRef(null);
+
+    useEffect(() => {
+      if (!f.logo_url) { setLogoPreview(null); return; }
+      const match = f.logo_url.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
+      if (match) {
+        const [, bucket, path] = match;
+        supabase.storage.from(bucket).createSignedUrl(path, 3600).then(({ data }) => { if (data?.signedUrl) setLogoPreview(data.signedUrl); });
+      } else {
+        setLogoPreview(f.logo_url);
+      }
+    }, [f.logo_url]);
 
     const handleLogo = async (e) => {
       const file = e.target.files?.[0];
@@ -842,7 +862,7 @@ export default function BookkeeperApp() {
         <div style={{ marginBottom: 16 }}>
           <label style={s.label}>Logo</label>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {f.logo_url ? <img src={f.logo_url} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #2a2d3e" }} /> : <div style={{ width: 48, height: 48, background: "#0f1117", borderRadius: 6, border: "1px dashed #2a2d3e" }} />}
+            {logoPreview ? <img src={logoPreview} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #2a2d3e" }} /> : <div style={{ width: 48, height: 48, background: "#0f1117", borderRadius: 6, border: "1px dashed #2a2d3e" }} />}
             <input ref={fileRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
             <button onClick={() => fileRef.current?.click()} style={s.btnOutline}>Upload Logo</button>
             {f.logo_url && <button onClick={() => setF({ ...f, logo_url: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
@@ -860,7 +880,10 @@ export default function BookkeeperApp() {
         <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 8 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Bank Details (shown on invoices)</label>
         </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Mworx Group Pty Ltd" style={s.input} /></div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Bank Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Commonwealth Bank" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="Mworx Group Pty Ltd" style={s.input} /></div>
+        </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
