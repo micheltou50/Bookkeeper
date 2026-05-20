@@ -55,6 +55,10 @@ function getNextDocumentNumber(invoices, profile, type) {
   return `${tag}${String(next).padStart(3, "0")}`;
 }
 
+function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
+function getDefaultDueDate(type, date) { return addDays(date || today(), type === "quote" ? 30 : 7); }
+function getDefaultTerms(type) { return type === "quote" ? "This quote is valid for 30 days from the quote date. Pricing may be subject to change after this period." : "Payment is due within 7 days from the invoice date. Please use the invoice number as the payment reference."; }
+
 const Icons = {
   Dashboard: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
   Expenses: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
@@ -242,6 +246,7 @@ export default function BookkeeperApp() {
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [txns, setTxns] = useState([]);
+  const [jobs, setJobs] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
 
   const bizInfo = BUSINESSES.find((b) => b.id === biz);
@@ -257,11 +262,12 @@ export default function BookkeeperApp() {
   const loadData = useCallback(async (businessId) => {
     if (!session) return;
     setLoading(true);
-    const [cRes, iRes, tRes, pRes] = await Promise.all([
+    const [cRes, iRes, tRes, pRes, jRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_transactions").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
+      supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
     ]);
 
     const loadedInvoices = iRes.data || [];
@@ -280,6 +286,7 @@ export default function BookkeeperApp() {
     setContacts(cRes.data || []);
     setInvoices(loadedInvoices);
     setTxns(tRes.data || []);
+    setJobs(jRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, name: bizInfo?.name || "" });
     setLoading(false);
 
@@ -315,6 +322,7 @@ export default function BookkeeperApp() {
     setContacts([]);
     setInvoices([]);
     setTxns([]);
+    setJobs([]);
     setProfile({ ...DEFAULT_PROFILE });
   };
 
@@ -385,6 +393,25 @@ export default function BookkeeperApp() {
   const deleteInvoice = async (id) => {
     await supabase.from("bk_invoices").delete().eq("id", id);
     setInvoices((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const upsertJob = async (jobName, contactName) => {
+    const trimmed = (jobName || "").trim();
+    if (!trimmed) return;
+    const norm = trimmed.toLowerCase();
+    const existing = jobs.find((j) => j.name.trim().toLowerCase() === norm);
+    if (existing) {
+      const upd = { last_used_at: new Date().toISOString() };
+      const contact = contactName ? contacts.find((c) => c.name === contactName) : null;
+      if (contact && !existing.contact_id) upd.contact_id = contact.id;
+      await supabase.from("bk_jobs").update(upd).eq("id", existing.id);
+      setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
+    } else {
+      const contact = contactName ? contacts.find((c) => c.name === contactName) : null;
+      const row = { user_id: session.user.id, business_id: biz, name: trimmed, contact_id: contact?.id || null };
+      const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
+      if (inserted) setJobs((prev) => [inserted, ...prev]);
+    }
   };
 
   const saveProfile = async (p) => {
@@ -758,11 +785,22 @@ export default function BookkeeperApp() {
   };
 
   const InvoiceForm = ({ existing }) => {
-    const init = existing || { number: getNextDocumentNumber(invoices, profile, "invoice"), type: "invoice", date: today(), due_date: "", contact_name: "", contact_email: "", contact_company: "", contact_abn: "", contact_address: "", contact_phone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: "", status: "draft" };
+    const defaultType = "invoice";
+    const init = existing || { number: getNextDocumentNumber(invoices, profile, defaultType), type: defaultType, date: today(), due_date: getDefaultDueDate(defaultType, today()), contact_name: "", contact_email: "", contact_company: "", contact_abn: "", contact_address: "", contact_phone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(defaultType), status: "draft" };
     const [f, setF] = useState(init);
+    const [dueDateEdited, setDueDateEdited] = useState(!!existing);
+    const [notesEdited, setNotesEdited] = useState(!!existing);
     const updateType = (newType) => {
-      const autoGenerated = !existing && !f._numberEdited;
-      setF({ ...f, type: newType, number: autoGenerated ? getNextDocumentNumber(invoices, profile, newType) : f.number });
+      const autoNum = !existing && !f._numberEdited;
+      const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(invoices, profile, newType) : f.number };
+      if (!dueDateEdited) updates.due_date = getDefaultDueDate(newType, f.date);
+      if (!notesEdited) updates.notes = getDefaultTerms(newType);
+      setF(updates);
+    };
+    const updateDate = (newDate) => {
+      const updates = { ...f, date: newDate };
+      if (!dueDateEdited) updates.due_date = getDefaultDueDate(f.type, newDate);
+      setF(updates);
     };
     const [quickAdd, setQuickAdd] = useState(false);
     const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
@@ -770,6 +808,9 @@ export default function BookkeeperApp() {
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
     const total = f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
+    const selectedContact = contacts.find((c) => c.name === f.contact_name);
+    const sortedJobs = [...jobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
+    const saveInv = async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } upsertJob(inv.job, inv.contact_name); };
 
     return (
       <div>
@@ -782,8 +823,8 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Due Date</label><input type="date" value={f.due_date || ""} onChange={(e) => setF({ ...f, due_date: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => updateDate(e.target.value)} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}>
@@ -816,7 +857,7 @@ export default function BookkeeperApp() {
             </div>
           </div>
         )}
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><input list="job-list-inv" value={f.job || ""} onChange={(e) => setF({ ...f, job: e.target.value })} placeholder="e.g. 5 Midelton Ave" style={s.input} /><datalist id="job-list-inv">{jobNames.map(j => <option key={j} value={j} />)}</datalist></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Job / Project</label><input list="job-suggestions" value={f.job || ""} onChange={(e) => setF({ ...f, job: e.target.value })} placeholder="e.g. 5 Midleton Ave Bexley North" style={s.input} /><datalist id="job-suggestions">{sortedJobs.map(j => <option key={j.id} value={j.name} />)}</datalist></div>
         <div style={{ marginTop: 8, marginBottom: 8 }}>
           <label style={s.label}>Line Items</label>
           {f.items.map((item, idx) => (
@@ -835,8 +876,8 @@ export default function BookkeeperApp() {
         <div style={{ marginTop: 12, marginBottom: 16, background: "#0f1117", borderRadius: 8, padding: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#f1f5f9" }}><span>Total</span><span>{fmt(total)}</span></div>
         </div>
-        <div style={{ marginBottom: 16 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Payment terms, notes, etc." style={s.input} /></div>
-        <button onClick={() => { const inv = { ...f, total }; existing ? updateInvoice(existing.id, inv) : addInvoice(inv); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center" }}>{existing ? "Update" : "Create"} {f.type === "quote" ? "Quote" : "Invoice"}</button>
+        <div style={{ marginBottom: 16 }}><label style={s.label}>Notes / Payment Terms</label><textarea value={f.notes} onChange={(e) => { setNotesEdited(true); setF({ ...f, notes: e.target.value }); }} placeholder="Payment terms, notes, etc." style={{ ...s.input, minHeight: 60, resize: "vertical" }} /></div>
+        <button onClick={saveInv} style={{ ...s.btn(accent), width: "100%", justifyContent: "center" }}>{existing ? "Update" : "Create"} {f.type === "quote" ? "Quote" : "Invoice"}</button>
       </div>
     );
   };
