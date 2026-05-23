@@ -281,7 +281,6 @@ export default function BookkeeperApp() {
   const [jobs, setJobs] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
-  const [outlookSending, setOutlookSending] = useState(null);
 
   const bizInfo = BUSINESSES.find((b) => b.id === biz);
   const accent = bizInfo?.accent || "#10b981";
@@ -657,42 +656,6 @@ export default function BookkeeperApp() {
     setEmailConn(null);
   };
 
-  const sendViaOutlook = async (inv) => {
-    if (!emailConn) return;
-    const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    const bName = profile.name || "your company";
-    const confirmMsg = `Send ${docType} ${inv.number} via Outlook?\n\nTo: ${inv.contact_name || ""} <${inv.contact_email}>\nFrom: ${emailConn.email}\nSubject: ${docType} ${inv.number} from ${bName}\nAmount: ${fmt(inv.total || 0)}\n\nAttachment: PDF will be generated and attached.`;
-    if (!window.confirm(confirmMsg)) return;
-    setOutlookSending(inv.id);
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-      if (!inv.pdf_path) {
-        const pdfResp = await fetch("/.netlify/functions/generate-invoice-pdf", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
-        });
-        if (!pdfResp.ok) {
-          const pdfErr = await pdfResp.json().catch(() => ({}));
-          throw new Error(pdfErr.error || "PDF generation failed");
-        }
-      }
-      const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice_id: inv.id }),
-      });
-      const result = await resp.json();
-      if (!resp.ok) throw new Error(result.detail ? `${result.error}: ${result.detail}` : result.error || "Send failed");
-      setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, status: i.status === "draft" ? "sent" : i.status, sent_at: new Date().toISOString() } : i));
-      alert(`Sent to ${inv.contact_email}`);
-    } catch (err) {
-      console.error("Outlook send failed:", err);
-      alert("Failed to send via Outlook: " + err.message);
-    } finally {
-      setOutlookSending(null);
-    }
-  };
 
   if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b" }}>Loading...</div>;
   if (!session) return <LoginScreen />;
@@ -1121,12 +1084,6 @@ export default function BookkeeperApp() {
         <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
         {existing && (<>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            {emailConn && f.contact_email && (
-              <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendViaOutlook({ ...existing, ...inv }); }} disabled={outlookSending === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: outlookSending === existing.id ? "#94a3b8" : "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookSending === existing.id ? 0.5 : 1 }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>
-                {outlookSending === existing.id ? "Sending…" : "Send via Outlook"}
-              </button>
-            )}
             <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
               <Icons.Send /> Send via Email
             </button>
@@ -1426,8 +1383,7 @@ export default function BookkeeperApp() {
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      {emailConn && inv.contact_email && <button onClick={() => sendViaOutlook(inv)} title="Send via Outlook" disabled={outlookSending === inv.id} style={{ background: "none", border: "none", color: outlookSending === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookSending === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookSending === inv.id ? 0.5 : 1, fontSize: 13 }}>{outlookSending === inv.id ? "…" : <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>}</button>}
-                      <button onClick={() => sendInvoice(inv)} title="Send via Email Client" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
+                      <button onClick={() => sendInvoice(inv)} title="Send via Email" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
                       {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
