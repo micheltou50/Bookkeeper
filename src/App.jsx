@@ -6,23 +6,19 @@ const DEFAULT_ACCOUNTS = [
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
   { code: "4200", name: "Service Revenue", type: "Revenue" },
   { code: "4300", name: "Other Income", type: "Revenue" },
-  { code: "5000", name: "Cost of Sales", type: "Expense" },
   { code: "6000", name: "Advertising & Marketing", type: "Expense" },
-  { code: "6100", name: "Bank Fees & Charges", type: "Expense" },
-  { code: "6200", name: "Cleaning", type: "Expense" },
-  { code: "6300", name: "Insurance", type: "Expense" },
-  { code: "6400", name: "Office Supplies", type: "Expense" },
-  { code: "6500", name: "Professional Fees", type: "Expense" },
-  { code: "6600", name: "Rent & Lease", type: "Expense" },
-  { code: "6700", name: "Repairs & Maintenance", type: "Expense" },
-  { code: "6800", name: "Telephone & Internet", type: "Expense" },
-  { code: "6900", name: "Travel & Transport", type: "Expense" },
-  { code: "7000", name: "Utilities", type: "Expense" },
-  { code: "7100", name: "Depreciation", type: "Expense" },
-  { code: "7200", name: "Motor Vehicle", type: "Expense" },
-  { code: "7300", name: "Subscriptions & Software", type: "Expense" },
-  { code: "7400", name: "Linen & Amenities", type: "Expense" },
-  { code: "7500", name: "Platform Commissions", type: "Expense" },
+  { code: "6100", name: "Accounting & Professional Fees", type: "Expense" },
+  { code: "6200", name: "Bank Fees & Interest", type: "Expense" },
+  { code: "6300", name: "Contractors & Subcontractors", type: "Expense" },
+  { code: "6400", name: "Software & Subscriptions", type: "Expense" },
+  { code: "6500", name: "Office & Supplies", type: "Expense" },
+  { code: "6600", name: "Equipment & Assets", type: "Expense" },
+  { code: "6700", name: "Motor Vehicle", type: "Expense" },
+  { code: "6800", name: "Travel", type: "Expense" },
+  { code: "6900", name: "Phone & Internet", type: "Expense" },
+  { code: "7000", name: "Insurance", type: "Expense" },
+  { code: "7100", name: "Tax & Government Fees", type: "Expense" },
+  { code: "7200", name: "Other", type: "Expense" },
 ];
 
 const DEFAULT_EMAIL_TEMPLATE_INVOICE = `Hi {contact_name},
@@ -48,12 +44,26 @@ Kind regards,
 const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "" };
 
 const BUSINESSES = [
-  { id: "mworx", name: "Mworx Group", accent: "#0d9488" },
+  { id: "mworx", name: "Mworx Group", accent: "#10b981" },
 ];
 
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
 const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
 const today = () => new Date().toISOString().split("T")[0];
+
+const PAYMENT_SOURCES = [
+  { value: "business", label: "Business account" },
+  { value: "personal_reimburse", label: "Personal account — reimburse owner" },
+  { value: "personal_no_reimburse", label: "Personal account — do not reimburse" },
+  { value: "cash", label: "Cash" },
+  { value: "other", label: "Other" },
+];
+
+const GST_TREATMENTS = ["GST included", "No GST", "GST free", "BAS excluded", "Input taxed", "Unsure"];
+
+const sanitizeFilePart = (s) => (s || "").replace(/[/\\:*?"<>|&#%]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+const safeFileName = (parts, ext) => parts.map(p => sanitizeFilePart(String(p))).filter(Boolean).join("_") + "." + ext;
+const fmtAmtFile = (n) => Number(n).toFixed(2).replace(".", "-");
 
 function getDocumentPrefix(profile, type) {
   const bid = (profile?.business_id || "").toLowerCase();
@@ -95,6 +105,7 @@ const Icons = {
   Logout: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
   Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
   Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
+  Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
 };
 
 function LoginScreen() {
@@ -114,18 +125,17 @@ function LoginScreen() {
     if (error) setError(error.message);
   };
 
-  const inputStyle = { width: "100%", padding: "12px 16px", background: "#0f1117", border: "1px solid #2a2d3e", borderRadius: 8, color: "#e2e8f0", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
+  const inputStyle = { width: "100%", padding: "12px 16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, color: "#0f172a", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#0f1117", fontFamily: "'IBM Plex Sans', system-ui, sans-serif", padding: 20 }}>
-      <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-      <div style={{ background: "#161822", borderRadius: 16, border: "1px solid #1e2130", padding: 40, width: "100%", maxWidth: 400, textAlign: "center" }}>
-        <div style={{ fontSize: 28, fontWeight: 800, color: "#f1f5f9", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
-        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif", padding: 20 }}>
+      <div style={{ background: "#ffffff", borderRadius: 16, border: "1px solid #e2e8f0", padding: 40, width: "100%", maxWidth: 400, textAlign: "center", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.06)" }}>
+        <div style={{ fontSize: 28, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
+        <div style={{ fontSize: 12, color: "#10b981", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && email && password && handleSubmit()} style={inputStyle} />
-        {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>{error}</div>}
-        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "12px", background: "#0d9488", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 12 }}>
+        {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{error}</div>}
+        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "12px", background: "#10b981", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 12 }}>
           {loading ? "..." : isSignUp ? "Sign Up" : "Sign In"}
         </button>
         <button onClick={() => { setIsSignUp(!isSignUp); setError(""); }} style={{ background: "none", border: "none", color: "#64748b", fontSize: 12, cursor: "pointer" }}>
@@ -260,7 +270,9 @@ export default function BookkeeperApp() {
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [editItem, setEditItem] = useState(null);
+  const [aiData, setAiData] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
 
   const [biz, setBiz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mworx");
   const [contacts, setContacts] = useState([]);
@@ -272,13 +284,19 @@ export default function BookkeeperApp() {
   const [outlookSending, setOutlookSending] = useState(null);
 
   const bizInfo = BUSINESSES.find((b) => b.id === biz);
-  const accent = bizInfo?.accent || "#0d9488";
+  const accent = bizInfo?.accent || "#10b981";
   const accounts = DEFAULT_ACCOUNTS;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setSession(session));
     return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   const loadData = useCallback(async (businessId) => {
@@ -368,16 +386,61 @@ export default function BookkeeperApp() {
 
   // --- Mutation functions: each writes directly to its table ---
 
+  const openReceipt = async (t) => {
+    if (!t?.receipt_path) { alert("No receipt attached to this expense."); return; }
+    const { data, error } = await supabase.storage.from("receipts").createSignedUrl(t.receipt_path, 600);
+    if (error || !data?.signedUrl) { alert("Could not load receipt. Please try again."); return; }
+    window.open(data.signedUrl, "_blank");
+  };
+
   const addTransaction = async (t) => {
-    const row = { user_id: session.user.id, business_id: biz, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job };
+    const ps = t.payment_source || "business";
+    const isReimburse = ps === "personal_reimburse";
+    const isPersonalNoReimburse = ps === "personal_no_reimburse";
+    const isPersonal = isReimburse || isPersonalNoReimburse;
+    const row = { user_id: session.user.id, business_id: biz, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure", ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
     const { data: inserted } = await supabase.from("bk_transactions").insert(row).select().single();
-    if (inserted) setTxns((prev) => [inserted, ...prev]);
+    if (inserted) {
+      if (inserted.receipt_path) {
+        const ext = (inserted.receipt_path.split(".").pop() || "jpg").toLowerCase();
+        const newName = safeFileName([inserted.date, inserted.contact || "Unknown-Supplier", inserted.account || "Uncategorised", fmtAmtFile(inserted.amount), inserted.id], ext);
+        const newPath = `${session.user.id}/${newName}`;
+        const { error: moveErr } = await supabase.storage.from("receipts").move(inserted.receipt_path, newPath);
+        if (!moveErr) {
+          await supabase.from("bk_transactions").update({ receipt_path: newPath }).eq("id", inserted.id);
+          inserted.receipt_path = newPath;
+        }
+      }
+      setTxns((prev) => [inserted, ...prev]);
+    }
     setModal(null);
+    setAiData(null);
+  };
+
+  const updateTransaction = async (id, t) => {
+    const ps = t.payment_source || "business";
+    const isReimburse = ps === "personal_reimburse";
+    const isPersonalNoReimburse = ps === "personal_no_reimburse";
+    const isPersonal = isReimburse || isPersonalNoReimburse;
+    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status || "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure" };
+    const { data: updated } = await supabase.from("bk_transactions").update(row).eq("id", id).select().single();
+    if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
+    setModal(null);
+    setEditItem(null);
   };
 
   const deleteTransaction = async (id) => {
+    if (!window.confirm("Delete this expense? This cannot be undone.")) return;
     await supabase.from("bk_transactions").delete().eq("id", id);
     setTxns((prev) => prev.filter((t) => t.id !== id));
+    setModal(null);
+    setEditItem(null);
+  };
+
+  const markReimbursed = async (id, { status, date, amount, reference }) => {
+    const row = { reimbursement_status: status, reimbursement_date: date || null, reimbursement_amount: amount != null ? Number(amount) : null, reimbursement_reference: reference || null };
+    const { data: updated } = await supabase.from("bk_transactions").update(row).eq("id", id).select().single();
+    if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
   };
 
   const addContact = async (c, keepModal) => {
@@ -397,8 +460,11 @@ export default function BookkeeperApp() {
   };
 
   const deleteContact = async (id) => {
+    if (!window.confirm("Delete this contact? This cannot be undone.")) return;
     await supabase.from("bk_contacts").delete().eq("id", id);
     setContacts((prev) => prev.filter((c) => c.id !== id));
+    setModal(null);
+    setEditItem(null);
   };
 
   const addInvoice = async (inv) => {
@@ -437,8 +503,11 @@ export default function BookkeeperApp() {
   };
 
   const deleteInvoice = async (id) => {
+    if (!window.confirm("Delete this invoice? This cannot be undone.")) return;
     await supabase.from("bk_invoices").delete().eq("id", id);
     setInvoices((prev) => prev.filter((i) => i.id !== id));
+    setModal(null);
+    setEditItem(null);
   };
 
   const upsertJob = async (jobName, contactName) => {
@@ -487,7 +556,7 @@ export default function BookkeeperApp() {
   const [pdfLoading, setPdfLoading] = useState(null);
 
   const downloadPDF = async (inv) => {
-    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    const pdfName = safeFileName([inv.number || "draft", inv.contact_name || "Client", inv.job, inv.date].filter(Boolean), "pdf");
     setPdfLoading(inv.id);
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -503,7 +572,7 @@ export default function BookkeeperApp() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${docType}-${inv.number || "draft"}.pdf`;
+      a.download = pdfName;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -513,19 +582,39 @@ export default function BookkeeperApp() {
       const el = document.createElement("div");
       el.innerHTML = html;
       document.body.appendChild(el);
-      await html2pdf().set({ margin: 0, filename: `${docType}-${inv.number || "draft"}.pdf`, html2canvas: { scale: 3 }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save();
+      await html2pdf().set({ margin: 0, filename: pdfName, html2canvas: { scale: 3 }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save();
       document.body.removeChild(el);
     } finally {
       setPdfLoading(null);
     }
   };
 
+  const buildEmailBody = (inv) => {
+    const isQuote = inv.type === "quote";
+    const bName = profile.name || "our company";
+    const template = isQuote
+      ? (profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE)
+      : (profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE);
+    const sig = profile.email_signature || `${bName}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
+    const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
+    return template
+      .replace(/\{contact_name\}/g, inv.contact_name || "")
+      .replace(/\{number\}/g, inv.number || "")
+      .replace(/\{amount\}/g, fmt(inv.total || 0))
+      .replace(/\{due_date\}/g, inv.due_date ? fmtDate(inv.due_date) : "")
+      .replace(/\{due_date_line\}/g, dueDateLine)
+      .replace(/\{payment_details\}/g, paymentDetails)
+      .replace(/\{business_name\}/g, bName)
+      .replace(/\{signature\}/g, sig);
+  };
+
   const sendInvoice = (inv) => {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
-    const body = `Hi ${inv.contact_name || ""},\n\nPlease find attached ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)}.\n\n${inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.\n\n` : ""}${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Kind regards,\n${bName}`;
-    window.location.href = `mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const body = buildEmailBody(inv);
+    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     downloadPDF(inv);
     if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
   };
@@ -601,42 +690,45 @@ export default function BookkeeperApp() {
     }
   };
 
-  if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8" }}>Loading...</div>;
+  if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b" }}>Loading...</div>;
   if (!session) return <LoginScreen />;
-  if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#94a3b8", fontFamily: "'IBM Plex Sans', sans-serif" }}>Loading...</div>;
+  if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b", fontFamily: "'DM Sans', sans-serif" }}>Loading...</div>;
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "expenses", label: "Expenses", icon: Icons.Expenses },
+    { id: "reimbursements", label: "Reimburse", icon: Icons.Reimburse },
     { id: "invoices", label: "Invoices", icon: Icons.Invoices },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
 
+  const badgeBg = { "#34d399": "#ecfdf5", "#3b82f6": "#eff6ff", "#64748b": "#f1f5f9", "#ef4444": "#fef2f2", "#f59e0b": "#fffbeb" };
+  const badgeTx = { "#34d399": "#065f46", "#3b82f6": "#1e40af", "#64748b": "#475569", "#ef4444": "#991b1b", "#f59e0b": "#92400e" };
   const s = {
-    app: { display: "flex", height: "100vh", fontFamily: "'IBM Plex Sans', system-ui, sans-serif", background: "#0f1117", color: "#e2e8f0", fontSize: "13px", overflow: "hidden" },
-    sidebar: { width: 220, background: "#161822", borderRight: "1px solid #1e2130", display: "flex", flexDirection: "column", flexShrink: 0, position: "relative", zIndex: 40 },
+    app: { display: "flex", height: "100vh", fontFamily: "'DM Sans', system-ui, sans-serif", background: "#f7f9f8", color: "#0f172a", fontSize: "13px", overflow: "hidden" },
+    sidebar: { width: 220, background: "#ffffff", borderRight: "1px solid #e2e8f0", display: "flex", flexDirection: "column", flexShrink: 0, position: "relative", zIndex: 40 },
     sidebarMobile: { position: "fixed", inset: 0, zIndex: 40 },
-    logo: { padding: "20px 16px 12px", borderBottom: "1px solid #1e2130" },
-    bizSwitcher: { padding: "12px", borderBottom: "1px solid #1e2130" },
-    bizBtn: (active, color) => ({ width: "100%", padding: "8px 10px", border: "none", borderRadius: 6, cursor: "pointer", textAlign: "left", fontSize: 12, fontWeight: 600, background: active ? color + "18" : "transparent", color: active ? color : "#94a3b8", borderLeft: active ? `3px solid ${color}` : "3px solid transparent", marginBottom: 2 }),
+    logo: { padding: "20px 16px 12px", borderBottom: "1px solid #e2e8f0" },
+    bizSwitcher: { padding: "12px", borderBottom: "1px solid #e2e8f0" },
+    bizBtn: (active, color) => ({ width: "100%", padding: "8px 10px", border: "none", borderRadius: 6, cursor: "pointer", textAlign: "left", fontSize: 12, fontWeight: 600, background: active ? color + "18" : "transparent", color: active ? color : "#64748b", borderLeft: active ? `3px solid ${color}` : "3px solid transparent", marginBottom: 2 }),
     nav: { flex: 1, padding: "8px", overflowY: "auto" },
-    navBtn: (active) => ({ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", border: "none", borderRadius: 6, cursor: "pointer", background: active ? accent + "15" : "transparent", color: active ? accent : "#94a3b8", fontSize: 13, fontWeight: active ? 600 : 400, marginBottom: 1, textAlign: "left" }),
+    navBtn: (active) => ({ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", border: "none", borderRadius: 6, cursor: "pointer", background: active ? "#ecfdf5" : "transparent", color: active ? "#059669" : "#64748b", fontSize: 13, fontWeight: active ? 600 : 400, marginBottom: 1, textAlign: "left", borderLeft: active ? `3px solid ${accent}` : "3px solid transparent" }),
     main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 },
-    header: { padding: "12px 16px", borderBottom: "1px solid #1e2130", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#12141e", gap: 8, flexWrap: "wrap" },
+    header: { padding: "12px 16px", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#ffffff", gap: 8, flexWrap: "wrap" },
     content: { flex: 1, padding: "16px", overflowY: "auto" },
-    card: { background: "#161822", borderRadius: 10, border: "1px solid #1e2130", padding: "16px", marginBottom: 12 },
-    statCard: (color) => ({ background: "#161822", borderRadius: 10, border: "1px solid #1e2130", padding: "12px 16px", borderTop: `3px solid ${color}`, minWidth: 0 }),
+    card: { background: "#ffffff", borderRadius: 10, border: "1px solid #e2e8f0", padding: "16px", marginBottom: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" },
+    statCard: () => ({ background: "#ffffff", borderRadius: 10, border: "1px solid #e2e8f0", padding: "20px 24px", minWidth: 0, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }),
     btn: (bg, small) => ({ padding: small ? "6px 12px" : "8px 16px", background: bg || accent, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: small ? 11 : 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }),
-    btnOutline: { padding: "6px 12px", background: "transparent", color: "#94a3b8", border: "1px solid #2a2d3e", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 500 },
+    btnOutline: { padding: "6px 12px", background: "transparent", color: "#64748b", border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 500 },
     table: { width: "100%", borderCollapse: "collapse" },
-    th: { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#64748b", borderBottom: "1px solid #1e2130" },
-    td: { padding: "8px 10px", borderBottom: "1px solid #1e2130", fontSize: 13 },
-    input: { width: "100%", padding: "8px 12px", background: "#0f1117", border: "1px solid #2a2d3e", borderRadius: 6, color: "#e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box" },
-    select: { width: "100%", padding: "8px 12px", background: "#0f1117", border: "1px solid #2a2d3e", borderRadius: 6, color: "#e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box" },
-    label: { display: "block", fontSize: 11, fontWeight: 600, color: "#94a3b8", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" },
-    modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
-    modalContent: { background: "#161822", borderRadius: 12, border: "1px solid #2a2d3e", width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "auto", padding: "20px" },
-    badge: (color) => ({ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: color + "20", color }),
+    th: { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#94a3b8", borderBottom: "1px solid #e2e8f0" },
+    td: { padding: "8px 10px", borderBottom: "1px solid #f1f5f9", fontSize: 13 },
+    input: { width: "100%", padding: "8px 12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 6, color: "#0f172a", fontSize: 13, outline: "none", boxSizing: "border-box" },
+    select: { width: "100%", padding: "8px 12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 6, color: "#0f172a", fontSize: 13, outline: "none", boxSizing: "border-box" },
+    label: { display: "block", fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" },
+    modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
+    modalContent: { background: "#ffffff", borderRadius: 12, border: "1px solid #e2e8f0", width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "auto", padding: "20px" },
+    badge: (color) => ({ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, background: badgeBg[color] || color + "15", color: badgeTx[color] || color }),
     grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   };
 
@@ -644,7 +736,6 @@ export default function BookkeeperApp() {
     const [phase, setPhase] = useState("capture");
     const [rawUrl, setRawUrl] = useState(null);
     const [scannedUrl, setScannedUrl] = useState(null);
-    const [extracted, setExtracted] = useState(null);
     const [error, setError] = useState("");
     const [corners, setCorners] = useState(null);
     const [dragging, setDragging] = useState(null);
@@ -736,19 +827,13 @@ export default function BookkeeperApp() {
         const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
         if (!resp.ok) throw new Error("Failed to process receipt");
         const result = await resp.json();
-        setExtracted({ ...result, receiptPath: filePath });
-        setPhase("confirm");
+        const fromReimbursements = page === "reimbursements";
+        setAiData({ ...result, receiptPath: filePath, scannedUrl: dataUrl, fromReimbursements });
+        setModal("expense");
       } catch (err) { setError(err.message || "Failed to process receipt"); setPhase("scan"); }
     };
 
-    const [receiptJob, setReceiptJob] = useState("");
-    const confirmReceipt = () => {
-      if (!extracted) return;
-      const acct = accounts.find((a) => a.name === extracted.category && a.type === "Expense");
-      addTransaction({ date: extracted.date || today(), type: "expense", description: extracted.description || extracted.vendor || "Receipt", amount: String(extracted.total || 0), account: acct?.name || extracted.category || "", contact: extracted.vendor || "", reference: "", receipt_path: extracted.receiptPath || "", job: receiptJob });
-    };
-
-    const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setExtracted(null); setCorners(null); setError(""); };
+    const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setCorners(null); setError(""); };
 
     const cornerStyle = (c) => {
       if (!containerRef.current || !imgNat.w) return { display: "none" };
@@ -782,7 +867,7 @@ export default function BookkeeperApp() {
           <div>
             <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Drag the corners to the edges of the receipt</div>
             <div ref={containerRef} style={{ position: "relative", userSelect: "none", marginBottom: 12 }} onMouseMove={onPointerMove} onMouseUp={onPointerUp} onTouchMove={onPointerMove} onTouchEnd={onPointerUp}>
-              <img ref={imgRef} src={rawUrl} onLoad={onImgLoad} alt="Receipt" style={{ width: "100%", display: "block", borderRadius: 8, border: "1px solid #2a2d3e" }} />
+              <img ref={imgRef} src={rawUrl} onLoad={onImgLoad} alt="Receipt" style={{ width: "100%", display: "block", borderRadius: 8, border: "1px solid #e2e8f0" }} />
               {corners && (
                 <>
                   <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 1 }}>
@@ -801,45 +886,48 @@ export default function BookkeeperApp() {
 
         {(phase === "scanning" || phase === "processing") && (
           <div style={{ textAlign: "center", padding: "30px 0" }}>
-            {scannedUrl && <img src={scannedUrl} alt="Scanned" style={{ width: "60%", borderRadius: 8, border: "1px solid #2a2d3e", marginBottom: 12 }} />}
+            {scannedUrl && <img src={scannedUrl} alt="Scanned" style={{ width: "60%", borderRadius: 8, border: "1px solid #e2e8f0", marginBottom: 12 }} />}
             <div style={{ color: "#94a3b8" }}>{phase === "scanning" ? "Scanning receipt..." : "Reading receipt with AI..."}</div>
           </div>
         )}
 
-        {error && <div style={{ color: "#f87171", fontSize: 13, padding: 12, background: "#f8717110", borderRadius: 8, marginTop: 12 }}>{error}</div>}
-
-        {phase === "confirm" && scannedUrl && extracted && (
-          <div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <img src={scannedUrl} alt="Scanned receipt" style={{ width: "100%", borderRadius: 8, border: "1px solid #2a2d3e" }} />
-              <div style={{ background: "#0f1117", borderRadius: 8, padding: 12, fontSize: 12 }}>
-                <div style={{ fontWeight: 700, color: "#f1f5f9", marginBottom: 8, fontSize: 14 }}>Extracted</div>
-                <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Vendor:</span> {extracted.vendor}</div>
-                <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Date:</span> {extracted.date}</div>
-                <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Total:</span> <span style={{ color: "#f87171", fontWeight: 700 }}>{fmt(extracted.total)}</span></div>
-                <div style={{ marginBottom: 4 }}><span style={{ color: "#64748b" }}>Category:</span> {extracted.category}</div>
-              </div>
-            </div>
-            <div style={{ marginBottom: 10 }}><label style={s.label}>Job</label><input list="job-list-rcpt" value={receiptJob} onChange={(e) => setReceiptJob(e.target.value)} placeholder="e.g. 5 Midelton Ave" style={s.input} /><datalist id="job-list-rcpt">{jobNames.map(j => <option key={j} value={j} />)}</datalist></div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={confirmReceipt} style={{ ...s.btn(accent), flex: 1, justifyContent: "center" }}><Icons.Check /> Add as Expense</button>
-              <button onClick={reset} style={{ ...s.btnOutline, flex: 0 }}>Retake</button>
-            </div>
-          </div>
-        )}
+        {error && <div style={{ color: "#ef4444", fontSize: 13, padding: 12, background: "#fef2f2", borderRadius: 8, marginTop: 12 }}>{error}</div>}
       </div>
     );
   };
 
-  const ExpenseForm = () => {
-    const [f, setF] = useState({ date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "" });
+  const ExpenseForm = ({ existing }) => {
+    const derivePaymentSource = (e) => {
+      if (!e) return "business";
+      if (e.payment_source === "personal") return e.reimbursement_required ? "personal_reimburse" : "personal_no_reimburse";
+      return e.payment_source || "business";
+    };
+    const ai = !existing ? aiData : null;
+    const fromReimbursements = ai?.fromReimbursements;
+    const init = existing ? { ...existing, payment_source: derivePaymentSource(existing), paid_by: existing.paid_by || "", business_purpose: existing.business_purpose || "", gst_amount: existing.gst_amount != null ? String(existing.gst_amount) : "", gst_treatment: existing.gst_treatment || "Unsure", reimbursement_status: existing.reimbursement_status || "not_required" } : ai ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: accounts.find(a => a.name === ai.category && a.type === "Expense")?.name || ai.category || "", contact: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", payment_source: fromReimbursements ? "personal_reimburse" : "business", paid_by: fromReimbursements ? "Michel" : "", business_purpose: ai.businessPurpose || "", gst_amount: ai.gstAmount != null ? String(ai.gstAmount) : "", gst_treatment: ai.gstTreatment || "Unsure", reimbursement_status: "not_required", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null } : { date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "", payment_source: "business", paid_by: "", business_purpose: "", gst_amount: "", gst_treatment: "Unsure", reimbursement_status: "not_required" };
+    const [f, setF] = useState({ ...init, amount: String(init.amount || "") });
+    const [saving, setSaving] = useState(false);
     const expenseAccounts = accounts.filter((a) => a.type === "Expense");
+    const hasWarnings = ai && (ai.confidence < 0.7 || ai.warnings?.length > 0);
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>New Expense</h3>
-          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Expense</h3>
+          <button onClick={() => { setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
+        {ai && (
+          <div style={{ background: hasWarnings ? "#fffbeb" : "#ecfdf5", border: "1px solid " + (hasWarnings ? "#fde68a" : "#86efac"), borderRadius: 8, padding: 12, marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+              {ai.scannedUrl && <img src={ai.scannedUrl} alt="Receipt" style={{ width: 60, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0" }} />}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>AI extracted receipt details</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>Overall confidence: {Math.round((ai.confidence || 0) * 100)}%{ai.categoryConfidence != null ? ` · Category: ${Math.round(ai.categoryConfidence * 100)}%` : ""}</div>
+                {ai.warnings?.length > 0 && ai.warnings.map((w, i) => <div key={i} style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>Warning: {w}</div>)}
+                {hasWarnings && <div style={{ fontSize: 11, color: "#92400e", fontWeight: 600, marginTop: 4 }}>Please review these details before saving.</div>}
+              </div>
+            </div>
+          </div>
+        )}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
@@ -847,19 +935,45 @@ export default function BookkeeperApp() {
         <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Office supplies from Officeworks" style={s.input} /></div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}><option value="">Select...</option>{expenseAccounts.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{contacts.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{f.contact && !contacts.find(c => c.name === f.contact) && <option value={f.contact}>{f.contact}</option>}{contacts.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><input list="job-list" value={f.job} onChange={(e) => setF({ ...f, job: e.target.value })} placeholder="e.g. 5 Midelton Ave" style={s.input} /><datalist id="job-list">{jobNames.map(j => <option key={j} value={j} />)}</datalist></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><select value={f.job} onChange={(e) => setF({ ...f, job: e.target.value })} style={s.select}><option value="">Select job...</option>{jobNames.map(j => <option key={j} value={j}>{j}</option>)}</select></div>
         </div>
-        <button disabled={!f.description || !f.amount} onClick={() => addTransaction(f)} style={{ ...s.btn(accent), opacity: !f.description || !f.amount ? 0.4 : 1, width: "100%", justifyContent: "center" }}>Add Expense</button>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>GST Amount</label><input type="number" step="0.01" value={f.gst_amount} onChange={(e) => setF({ ...f, gst_amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>GST Treatment</label><select value={f.gst_treatment} onChange={(e) => setF({ ...f, gst_treatment: e.target.value })} style={s.select}>{GST_TREATMENTS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Payment Source</label><select value={f.payment_source} onChange={(e) => { const v = e.target.value; const clear = v !== "personal_reimburse" && v !== "personal_no_reimburse"; setF({ ...f, payment_source: v, ...(clear ? { paid_by: "", business_purpose: "" } : {}) }); }} style={s.select}>{PAYMENT_SOURCES.map(ps => <option key={ps.value} value={ps.value}>{ps.label}</option>)}</select></div>
+        {(f.payment_source === "personal_reimburse" || f.payment_source === "personal_no_reimburse") && (
+          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Personal Payment Details</div>
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Paid By</label><input value={f.paid_by} onChange={(e) => setF({ ...f, paid_by: e.target.value })} placeholder="Michel" style={s.input} /></div>
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased?" style={s.input} /></div>
+          </div>
+        )}
+        <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); existing ? await updateTransaction(existing.id, f) : await addTransaction(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
+        {existing && existing.receipt_path && (
+          <button onClick={() => openReceipt(existing)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6 }}>
+            <Icons.Camera /> View Receipt
+          </button>
+        )}
+        {existing && !existing.receipt_path && existing.payment_source === "personal" && (
+          <div style={{ marginTop: 8, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#991b1b", fontWeight: 500 }}>Missing receipt for personally paid expense</div>
+        )}
+        {existing && (
+          <button onClick={() => deleteTransaction(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
+            <Icons.Trash /> Delete Expense
+          </button>
+        )}
       </div>
     );
   };
 
   const ContactForm = ({ existing }) => {
     const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
+    const [saving, setSaving] = useState(false);
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -882,7 +996,12 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
         </div>
-        <button disabled={!f.name} onClick={() => existing ? updateContact(existing.id, f) : addContact(f)} style={{ ...s.btn(accent), opacity: !f.name ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{existing ? "Save Changes" : "Add Contact"}</button>
+        <button disabled={!f.name || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.name || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
+        {existing && (
+          <button onClick={() => deleteContact(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
+            <Icons.Trash /> Delete Contact
+          </button>
+        )}
       </div>
     );
   };
@@ -907,6 +1026,8 @@ export default function BookkeeperApp() {
     };
     const [quickAdd, setQuickAdd] = useState(false);
     const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
+    const [jobDropOpen, setJobDropOpen] = useState(false);
+    const [saving, setSaving] = useState(false);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
@@ -940,7 +1061,7 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option><option value="overdue">Overdue</option></select></div>
         </div>
         {quickAdd && (
-          <div style={{ background: "#0f1117", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
+          <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Add Client</div>
             <div style={s.grid2}>
               <div style={{ marginBottom: 8 }}><input value={qa.name} onChange={(e) => setQa({ ...qa, name: e.target.value })} placeholder="Name *" style={{ ...s.input, fontSize: 12 }} /></div>
@@ -960,11 +1081,24 @@ export default function BookkeeperApp() {
             </div>
           </div>
         )}
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Job / Project</label><input list="job-suggestions" value={f.job || ""} onChange={(e) => setF({ ...f, job: e.target.value })} placeholder="e.g. 5 Midleton Ave Bexley North" style={s.input} /><datalist id="job-suggestions">{sortedJobs.map(j => <option key={j.id} value={j.name} />)}</datalist></div>
+        <div style={{ marginBottom: 12, position: "relative" }}>
+          <label style={s.label}>Job / Project</label>
+          <div style={{ position: "relative" }}>
+            <input value={f.job || ""} onChange={(e) => { setF({ ...f, job: e.target.value }); setJobDropOpen(true); }} onFocus={() => setJobDropOpen(true)} onBlur={() => setTimeout(() => setJobDropOpen(false), 150)} placeholder="e.g. 5 Midleton Ave Bexley North" style={s.input} />
+            <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#94a3b8", fontSize: 10 }}>&#9660;</span>
+          </div>
+          {jobDropOpen && sortedJobs.filter(j => !f.job || j.name.toLowerCase().includes((f.job || "").toLowerCase())).length > 0 && (
+            <div style={{ position: "absolute", left: 0, right: 0, top: "100%", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 60, maxHeight: 160, overflow: "auto" }}>
+              {sortedJobs.filter(j => !f.job || j.name.toLowerCase().includes((f.job || "").toLowerCase())).map(j => (
+                <div key={j.id} onMouseDown={() => { setF({ ...f, job: j.name }); setJobDropOpen(false); }} style={{ padding: "10px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f1f5f9" }}>{j.name}</div>
+              ))}
+            </div>
+          )}
+        </div>
         <div style={{ marginTop: 8, marginBottom: 8 }}>
           <label style={s.label}>Line Items</label>
           {f.items.map((item, idx) => (
-            <div key={idx} style={{ marginBottom: 8, padding: 10, background: "#0f1117", borderRadius: 6 }}>
+            <div key={idx} style={{ marginBottom: 8, padding: 10, background: "#f7f9f8", borderRadius: 6 }}>
               <div style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 24px", gap: 6, alignItems: "center" }}>
                 <input value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description" style={{ ...s.input, fontSize: 12 }} />
                 <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
@@ -976,11 +1110,44 @@ export default function BookkeeperApp() {
           ))}
           <button onClick={addItem} style={{ ...s.btnOutline, marginTop: 4 }}>+ Add Line</button>
         </div>
-        <div style={{ marginTop: 12, marginBottom: 16, background: "#0f1117", borderRadius: 8, padding: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#f1f5f9" }}><span>Total</span><span>{fmt(total)}</span></div>
+        <div style={{ marginTop: 12, marginBottom: 16, background: "#f1f5f9", borderRadius: 8, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#0f172a" }}><span>Total</span><span>{fmt(total)}</span></div>
         </div>
         <div style={{ marginBottom: 16 }}><label style={s.label}>Notes / Payment Terms</label><textarea value={f.notes} onChange={(e) => { setNotesEdited(true); setF({ ...f, notes: e.target.value }); }} placeholder="Payment terms, notes, etc." style={{ ...s.input, minHeight: 60, resize: "vertical" }} /></div>
-        <button onClick={saveInv} style={{ ...s.btn(accent), width: "100%", justifyContent: "center" }}>{existing ? "Update" : "Create"} {f.type === "quote" ? "Quote" : "Invoice"}</button>
+        <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
+        {existing && (<>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            {emailConn && f.contact_email && (
+              <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendViaOutlook({ ...existing, ...inv }); }} disabled={outlookSending === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: outlookSending === existing.id ? "#94a3b8" : "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookSending === existing.id ? 0.5 : 1 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>
+                {outlookSending === existing.id ? "Sending…" : "Send via Outlook"}
+              </button>
+            )}
+            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
+              <Icons.Send /> Send via Email
+            </button>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button onClick={() => downloadPDF(existing)} disabled={pdfLoading === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: pdfLoading === existing.id ? "#94a3b8" : "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: pdfLoading === existing.id ? 0.5 : 1 }}>
+              <Icons.Download /> {pdfLoading === existing.id ? "Generating…" : "Download PDF"}
+            </button>
+            {(existing.status === "sent" || existing.status === "overdue") && (
+              <button onClick={() => sendReminder(existing)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#f59e0b", borderColor: "#f59e0b40", gap: 6 }}>
+                ! Send Reminder
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            {existing.status !== "paid" && (
+              <button onClick={() => { markPaid(existing); setModal(null); setEditItem(null); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#34d399", borderColor: "#34d39940", gap: 6 }}>
+                <Icons.Check /> Mark Paid
+              </button>
+            )}
+            <button onClick={() => deleteInvoice(existing.id)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
+              <Icons.Trash /> Delete
+            </button>
+          </div>
+        </>)}
       </div>
     );
   };
@@ -1021,7 +1188,7 @@ export default function BookkeeperApp() {
         <div style={{ marginBottom: 16 }}>
           <label style={s.label}>Logo</label>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {logoPreview ? <img src={logoPreview} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #2a2d3e" }} /> : <div style={{ width: 48, height: 48, background: "#0f1117", borderRadius: 6, border: "1px dashed #2a2d3e" }} />}
+            {logoPreview ? <img src={logoPreview} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #e2e8f0" }} /> : <div style={{ width: 48, height: 48, background: "#f7f9f8", borderRadius: 6, border: "1px dashed #e2e8f0" }} />}
             <input ref={fileRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
             <button onClick={() => fileRef.current?.click()} style={s.btnOutline}>Upload Logo</button>
             {f.logo_url && <button onClick={() => setF({ ...f, logo_url: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
@@ -1036,7 +1203,7 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone || ""} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
         </div>
-        <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 8 }}>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 8 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Bank Details (shown on invoices)</label>
         </div>
         <div style={s.grid2}>
@@ -1047,14 +1214,14 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
         </div>
-        <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Email Integration</label>
           {emailConn ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#0d948815", borderRadius: 8, border: "1px solid #0d948830" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#ecfdf5", borderRadius: 8, border: "1px solid #a7f3d0" }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#e2e8f0" }}>Outlook Connected</div>
-                <div style={{ fontSize: 11, color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{emailConn.email || "Connected"}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Outlook Connected</div>
+                <div style={{ fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{emailConn.email || "Connected"}</div>
               </div>
               <button onClick={disconnectOutlook} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", fontSize: 10 }}>Disconnect</button>
             </div>
@@ -1065,10 +1232,10 @@ export default function BookkeeperApp() {
             </button>
           )}
         </div>
-        <div style={{ borderTop: "1px solid #1e2130", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Email Templates</label>
           <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Variables: <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{contact_name}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{number}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{amount}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{due_date}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{due_date_line}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{payment_details}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{business_name}"}</code> <code style={{ background: "#0f1117", padding: "1px 4px", borderRadius: 3, color: "#94a3b8" }}>{"{signature}"}</code>
+            Variables: <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{contact_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{number}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{amount}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date_line}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{payment_details}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{business_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{signature}"}</code>
           </div>
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Invoice Email</label>
@@ -1101,18 +1268,20 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard("#ef4444")}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Expenses This Month</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#f87171", marginTop: 4 }}>{fmt(expense)}</div>
+          <div style={s.statCard()}>
+            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expenses This Month</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(expense)}</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense").length} transactions</div>
           </div>
-          <div style={s.statCard(accent)}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Expenses</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#f87171", marginTop: 4 }}>{fmt(totalExpenses)}</div>
+          <div style={s.statCard()}>
+            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Outstanding Invoices</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(outstanding)}</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{invoices.filter((i) => i.status === "sent" || i.status === "overdue").length} unpaid</div>
           </div>
-          <div style={s.statCard("#f59e0b")}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Outstanding Invoices</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#fbbf24", marginTop: 4 }}>{fmt(outstanding)}</div>
-            {overdue > 0 && <div style={{ fontSize: 10, color: "#ef4444", marginTop: 2 }}>{overdue} overdue</div>}
+          <div style={s.statCard()}>
+            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Revenue Collected</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(invoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + Number(i.total || 0), 0))}</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{invoices.filter((i) => i.status === "paid").length} paid invoice{invoices.filter((i) => i.status === "paid").length !== 1 ? "s" : ""}</div>
           </div>
         </div>
         <div style={s.card}>
@@ -1121,22 +1290,33 @@ export default function BookkeeperApp() {
             <button onClick={() => setPage("expenses")} style={s.btnOutline}>View All</button>
           </div>
           {recentExpenses.length === 0 ? (
-            <div style={{ color: "#64748b", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No expenses yet</div>
+            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No expenses yet</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}><tbody>
                 {recentExpenses.map((t) => (
                   <tr key={t.id}>
-                    <td style={{ ...s.td, color: "#64748b", width: 70, fontSize: 11 }}>{fmtDate(t.date)}</td>
-                    <td style={s.td}>{t.description}</td>
-                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{t.account || ""}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: "#f87171", whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
+                    <td style={{ ...s.td, color: "#94a3b8", width: 70, fontSize: 11 }}>{fmtDate(t.date)}</td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}</td>
+                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || ""}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                   </tr>
                 ))}
               </tbody></table>
             </div>
           )}
         </div>
+        {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
+          <div style={{ ...s.card, cursor: "pointer", borderColor: "#fde68a", background: "#fffef5" }} onClick={() => setPage("reimbursements")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#92400e" }}>Owner Reimbursements</h4>
+                <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>{txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").length} pending — {fmt(txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").reduce((sum, t) => sum + Number(t.amount), 0))}</div>
+              </div>
+              <span style={{ fontSize: 20, color: "#f59e0b" }}>→</span>
+            </div>
+          </div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
           <button onClick={() => setModal("receipt")} style={{ ...s.btn("#8b5cf6"), justifyContent: "center", padding: "14px" }}><Icons.Camera /> Snap Receipt</button>
           <button onClick={() => setModal("expense")} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> Add Expense</button>
@@ -1149,7 +1329,6 @@ export default function BookkeeperApp() {
   const ExpensesPage = () => {
     const [search, setSearch] = useState("");
     const [jobFilter, setJobFilter] = useState("");
-    const [viewReceipt, setViewReceipt] = useState(null);
     const sorted = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => {
       if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase())) return false;
@@ -1157,9 +1336,12 @@ export default function BookkeeperApp() {
       return true;
     });
 
-    const openReceipt = async (path) => {
-      const { data } = supabase.storage.from("receipts").getPublicUrl(path);
-      if (data?.publicUrl) setViewReceipt(data.publicUrl);
+    const paymentBadge = (t) => {
+      if (t.payment_source !== "personal") return null;
+      if (t.reimbursement_status === "reimbursed") return <span style={s.badge("#34d399")}>Reimbursed</span>;
+      if (t.reimbursement_status === "pending") return <span style={s.badge("#f59e0b")}>Pending</span>;
+      if (t.reimbursement_status === "do_not_reimburse") return <span style={s.badge("#64748b")}>Personal</span>;
+      return <span style={s.badge("#64748b")}>Personal</span>;
     };
 
     return (
@@ -1173,21 +1355,22 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#64748b", padding: "30px 0", textAlign: "center" }}>No expenses found</div>
+            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No expenses found</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={s.th}>Job</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
+                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={s.th}>Job</th><th style={s.th}>Payment</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
                 <tbody>{filtered.map((t) => (
-                  <tr key={t.id}>
+                  <tr key={t.id} onClick={() => { setEditItem(t); setModal("expense"); }} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                    <td style={s.td}>{t.description}</td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "--"}</td>
-                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{t.job || ""}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, color: "#f87171", whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
+                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.job || ""}</td>
+                    <td style={s.td}>{paymentBadge(t)}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      {t.receipt_path && <button onClick={() => openReceipt(t.receipt_path)} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
-                      <button onClick={() => deleteTransaction(t.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                      {t.receipt_path && <button onClick={(e) => { e.stopPropagation(); openReceipt(t); }} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
+                      <button onClick={(e) => { e.stopPropagation(); deleteTransaction(t.id); }} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
                 ))}</tbody>
@@ -1195,14 +1378,6 @@ export default function BookkeeperApp() {
             </div>
           )}
         </div>
-        {viewReceipt && (
-          <div style={s.modalOverlay} onClick={() => setViewReceipt(null)}>
-            <div style={{ maxWidth: 500, maxHeight: "80vh", position: "relative" }}>
-              <button onClick={() => setViewReceipt(null)} style={{ position: "absolute", top: -12, right: -12, background: "#161822", border: "1px solid #2a2d3e", borderRadius: "50%", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#94a3b8", zIndex: 1 }}><Icons.X /></button>
-              <img src={viewReceipt} alt="Receipt" style={{ maxWidth: "100%", maxHeight: "80vh", borderRadius: 8, display: "block" }} />
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -1210,23 +1385,30 @@ export default function BookkeeperApp() {
   const InvoicesPage = () => {
     const [filter, setFilter] = useState("all");
     const [jobFilter, setJobFilter] = useState("");
+    const [search, setSearch] = useState("");
     const sorted = [...invoices].sort((a, b) => b.date.localeCompare(a.date));
-    const filtered = sorted.filter((i) => (filter === "all" || i.status === filter) && (!jobFilter || i.job === jobFilter));
+    const filtered = sorted.filter((i) => {
+      if (filter !== "all" && i.status !== filter) return false;
+      if (jobFilter && i.job !== jobFilter) return false;
+      if (search && !(i.number || "").toLowerCase().includes(search.toLowerCase()) && !(i.contact_name || "").toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444" };
     return (
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
           {["all", "draft", "sent", "paid", "overdue"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#94a3b8", borderColor: filter === f ? accent : "#2a2d3e" }}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>
+            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>
           ))}
-          <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180, marginLeft: "auto" }}>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search invoices..." style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
+          <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180 }}>
             <option value="">All Jobs</option>
             {jobNames.map(j => <option key={j} value={j}>{j}</option>)}
           </select>
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#64748b", padding: "30px 0", textAlign: "center" }}>No invoices yet</div>
+            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No invoices yet</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -1236,17 +1418,17 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
                     <td style={s.td}>{inv.contact_name || "--"}</td>
-                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{inv.job || ""}</td>
+                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{inv.job || ""}</td>
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      {inv.status !== "paid" && emailConn && inv.contact_email && <button onClick={() => sendViaOutlook(inv)} title="Send via Outlook" disabled={outlookSending === inv.id} style={{ background: "none", border: "none", color: outlookSending === inv.id ? "#64748b" : "#0078d4", cursor: outlookSending === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookSending === inv.id ? 0.5 : 1, fontSize: 13 }}>{outlookSending === inv.id ? "…" : <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>}</button>}
-                      {inv.status !== "paid" && <button onClick={() => sendInvoice(inv)} title="Send via Email Client" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>}
+                      {emailConn && inv.contact_email && <button onClick={() => sendViaOutlook(inv)} title="Send via Outlook" disabled={outlookSending === inv.id} style={{ background: "none", border: "none", color: outlookSending === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookSending === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookSending === inv.id ? 0.5 : 1, fontSize: 13 }}>{outlookSending === inv.id ? "…" : <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>}</button>}
+                      <button onClick={() => sendInvoice(inv)} title="Send via Email Client" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
                       {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
-                      <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#64748b" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
-                      <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
+                      <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
+                      <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
                       {inv.status !== "paid" && <button onClick={() => markPaid(inv)} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>}
-                      <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                      <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
                 ))}</tbody>
@@ -1265,23 +1447,23 @@ export default function BookkeeperApp() {
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
           {["all", "client", "supplier"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#94a3b8" }}>{f.charAt(0).toUpperCase() + f.slice(1)}s</button>
+            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f.charAt(0).toUpperCase() + f.slice(1)}s</button>
           ))}
         </div>
         <div style={s.card}>
-          {filtered.length === 0 ? <div style={{ color: "#64748b", padding: "30px 0", textAlign: "center" }}>No contacts yet</div> : (
+          {filtered.length === 0 ? <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No contacts yet</div> : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
                 <thead><tr><th style={s.th}>Name</th><th style={s.th}>Company</th><th style={s.th}>Email</th><th style={s.th}>Type</th><th style={{ ...s.th, width: 70 }}></th></tr></thead>
                 <tbody>{filtered.map((c) => (
                   <tr key={c.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{c.name}</td>
-                    <td style={{ ...s.td, color: "#94a3b8" }}>{c.company || "--"}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{c.email || "--"}</td>
-                    <td style={s.td}><span style={s.badge(c.type === "client" ? "#3b82f6" : "#f59e0b")}>{c.type}</span></td>
+                    <td style={{ ...s.td, color: "#64748b" }}>{c.company || "--"}</td>
+                    <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{c.email || "--"}</td>
+                    <td style={s.td}><span style={s.badge(c.type === "client" ? "#34d399" : "#f59e0b")}>{c.type}</span></td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
+                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
                 ))}</tbody>
@@ -1293,14 +1475,357 @@ export default function BookkeeperApp() {
     );
   };
 
-  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, invoices: InvoicesPage, contacts: ContactsPage };
+  const ReimbursementsPage = () => {
+    const [filter, setFilter] = useState("pending");
+    const [search, setSearch] = useState("");
+    const [markingId, setMarkingId] = useState(null);
+    const [markForm, setMarkForm] = useState({ date: today(), amount: "", reference: "" });
+    const allPersonal = txns.filter((t) => t.payment_source === "personal");
+    const pending = allPersonal.filter((t) => t.reimbursement_status === "pending");
+    const reimbursed = allPersonal.filter((t) => t.reimbursement_status === "reimbursed");
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const [yr, mo] = thisMonth.split("-").map(Number);
+    const reimbursedThisMonth = reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).reduce((sum, t) => sum + Number(t.reimbursement_amount || t.amount), 0);
+    const missingReceipts = pending.filter((t) => !t.receipt_path);
+    const oldestPending = pending.length ? [...pending].sort((a, b) => a.date.localeCompare(b.date))[0] : null;
+    const oldestDays = oldestPending ? Math.floor((Date.now() - new Date(oldestPending.date).getTime()) / 86400000) : 0;
+    const filtered = allPersonal.filter((t) => {
+      if (filter === "pending" && t.reimbursement_status !== "pending") return false;
+      if (filter === "reimbursed" && t.reimbursement_status !== "reimbursed") return false;
+      if (filter === "no_receipt" && t.reimbursement_status !== "missing_receipt" && (t.receipt_path || t.reimbursement_status !== "pending")) return false;
+      if (filter === "do_not_reimburse" && t.reimbursement_status !== "do_not_reimburse") return false;
+      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.paid_by || "").toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    }).sort((a, b) => b.date.localeCompare(a.date));
+
+    const copyAccountantSummary = () => {
+      const lines = pending.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)}${t.gst_amount ? ` (GST: ${fmt(t.gst_amount)})` : ""} | ${t.gst_treatment || "Unsure"} | Paid by ${t.paid_by || "Owner"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""} | ${t.reimbursement_status} | Ref: ${t.reference || "-"}`);
+      const text = `Owner Reimbursement Summary\nPending total: ${fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}\nReimbursed this month: ${fmt(reimbursedThisMonth)}\nMissing receipts: ${missingReceipts.length}\nItems:\n${lines.join("\n")}`;
+      navigator.clipboard.writeText(text);
+      alert("Copied to clipboard!");
+    };
+
+    const handleMark = async (id, status) => {
+      if (status === "reimbursed" && markingId !== id) { setMarkingId(id); const t = txns.find(x => x.id === id); setMarkForm({ date: today(), amount: String(t?.amount || ""), reference: "" }); return; }
+      if (status === "reimbursed") { await markReimbursed(id, { status: "reimbursed", date: markForm.date, amount: markForm.amount, reference: markForm.reference }); setMarkingId(null); return; }
+      await markReimbursed(id, { status, date: null, amount: null, reference: null });
+    };
+
+    return (
+      <div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pending Reimbursement</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}</div><div style={{ fontSize: 12, color: "#92400e", marginTop: 6, fontWeight: 500 }}>{pending.length} expense{pending.length !== 1 ? "s" : ""}</div></div>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Reimbursed This Month</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(reimbursedThisMonth)}</div><div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).length} this month</div></div>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Missing Receipts</div><div style={{ fontSize: 28, fontWeight: 700, color: missingReceipts.length > 0 ? "#ef4444" : "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{missingReceipts.length}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>pending without receipt</div></div>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Oldest Pending</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{oldestPending ? `${oldestDays}d` : "—"}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>{oldestPending ? oldestPending.description : "None pending"}</div></div>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          {["all", "pending", "reimbursed", "no_receipt", "do_not_reimburse"].map((f) => (
+            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f === "no_receipt" ? "Missing Receipt" : f === "do_not_reimburse" ? "Do Not Reimburse" : f.charAt(0).toUpperCase() + f.slice(1)}</button>
+          ))}
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
+          <button onClick={copyAccountantSummary} style={s.btn("#6366f1", true)}><Icons.Download /> Copy for Accountant</button>
+        </div>
+        <div style={s.card}>
+          {filtered.length === 0 ? (
+            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No reimbursements found</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}>
+                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Paid By</th><th style={s.th}>Purpose</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={s.th}>Receipt</th><th style={s.th}>Status</th><th style={{ ...s.th, width: 160 }}>Actions</th></tr></thead>
+                <tbody>{filtered.map((t) => (
+                  <tr key={t.id}>
+                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}<div style={{ fontSize: 10, color: "#94a3b8" }}>{t.account || ""}</div></td>
+                    <td style={{ ...s.td, fontSize: 12 }}>{t.paid_by || "Owner"}</td>
+                    <td style={{ ...s.td, fontSize: 12, color: "#64748b", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.business_purpose || "--"}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}{t.gst_amount ? <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400 }}>GST: {fmt(t.gst_amount)}</div> : null}</td>
+                    <td style={s.td}>{t.receipt_path ? <button onClick={() => openReceipt(t)} style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button> : <span style={{ fontSize: 10, color: "#ef4444" }}>Missing</span>}</td>
+                    <td style={s.td}><span style={s.badge(t.reimbursement_status === "reimbursed" ? "#34d399" : t.reimbursement_status === "pending" ? "#f59e0b" : "#64748b")}>{t.reimbursement_status === "reimbursed" ? "Reimbursed" : t.reimbursement_status === "pending" ? "Pending" : t.reimbursement_status === "missing_receipt" ? "No Receipt" : "Skipped"}</span>{t.reimbursement_status === "reimbursed" && t.reimbursement_date ? <div style={{ fontSize: 10, color: "#94a3b8" }}>{fmtDate(t.reimbursement_date)}</div> : null}{t.reimbursement_reference ? <div style={{ fontSize: 10, color: "#94a3b8" }}>Ref: {t.reimbursement_reference}</div> : null}</td>
+                    <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {t.reimbursement_status === "pending" && <button onClick={() => handleMark(t.id, "reimbursed")} style={{ ...s.btn("#34d399", true), fontSize: 10 }}><Icons.Check /> Reimburse</button>}
+                        {t.reimbursement_status === "pending" && !t.receipt_path && <button onClick={() => handleMark(t.id, "missing_receipt")} style={{ ...s.btnOutline, fontSize: 10, color: "#ef4444", borderColor: "#ef444440" }}>No Receipt</button>}
+                        {t.reimbursement_status === "pending" && <button onClick={() => handleMark(t.id, "do_not_reimburse")} style={{ ...s.btnOutline, fontSize: 10 }}>Skip</button>}
+                        {t.reimbursement_status === "reimbursed" && <button onClick={() => markReimbursed(t.id, { status: "pending", date: null, amount: null, reference: null })} style={{ ...s.btnOutline, fontSize: 10, color: "#f59e0b", borderColor: "#f59e0b40" }}>Undo</button>}
+                        <button onClick={() => { setEditItem(t); setModal("expense"); }} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {markingId && (
+                  <tr><td colSpan="8" style={{ ...s.td, background: "#ecfdf5", padding: 12 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>Mark Reimbursed:</span>
+                      <input type="date" value={markForm.date} onChange={(e) => setMarkForm({ ...markForm, date: e.target.value })} style={{ ...s.input, width: 140 }} />
+                      <input type="number" step="0.01" value={markForm.amount} onChange={(e) => setMarkForm({ ...markForm, amount: e.target.value })} placeholder="Amount" style={{ ...s.input, width: 100 }} />
+                      <input value={markForm.reference} onChange={(e) => setMarkForm({ ...markForm, reference: e.target.value })} placeholder="Transfer ref" style={{ ...s.input, width: 140 }} />
+                      <button onClick={() => handleMark(markingId, "reimbursed")} style={s.btn("#34d399", true)}><Icons.Check /> Confirm</button>
+                      <button onClick={() => setMarkingId(null)} style={s.btnOutline}>Cancel</button>
+                    </div>
+                  </td></tr>
+                )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ═══ MOBILE COMPONENTS ═══
+
+  const MobileTabBar = () => (
+    <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 28px", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
+      {navItems.filter(n => n.id !== "reimbursements").map(({ id, label, icon: Icon }) => (
+        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px" }}>
+          <Icon style={{ color: page === id ? accent : "#94a3b8" }} />
+          <span style={{ fontSize: 10, fontWeight: 500, color: page === id ? accent : "#94a3b8" }}>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const MobileHeader = () => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", padding: "52px 20px 12px", background: "#ffffff" }}>
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: accent, textTransform: "uppercase" }}>{bizInfo?.name}</div>
+        <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{navItems.find((n) => n.id === page)?.label}</div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+        {page === "expenses" && (
+          <button onClick={() => setModal("receipt")} style={{ width: 34, height: 34, borderRadius: 17, background: "#8b5cf6", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+            <Icons.Camera />
+          </button>
+        )}
+        {page === "reimbursements" && (
+          <button onClick={() => { const pend = txns.filter((t) => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending"); const lines = pend.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)}${t.gst_amount ? ` (GST: ${fmt(t.gst_amount)})` : ""} | ${t.gst_treatment || "Unsure"} | Paid by ${t.paid_by || "Owner"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""}`); navigator.clipboard.writeText(`Pending Reimbursements (${pend.length})\n${lines.join("\n")}`); alert("Copied!"); }} style={{ width: 34, height: 34, borderRadius: 17, background: "#6366f1", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+            <Icons.Download />
+          </button>
+        )}
+        {page !== "dashboard" && page !== "reimbursements" && (
+          <button onClick={() => { if (page === "expenses") setModal("expense"); else if (page === "invoices") { setEditItem(null); setModal("invoice"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+            <Icons.Plus />
+          </button>
+        )}
+        <button onClick={() => setModal("settings")} style={{ width: 34, height: 34, borderRadius: 17, background: "#f1f5f9", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b" }}>
+          <Icons.Settings />
+        </button>
+        <button onClick={logout} style={{ width: 34, height: 34, borderRadius: 17, background: "#f1f5f9", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b" }}>
+          <Icons.Logout />
+        </button>
+      </div>
+    </div>
+  );
+
+  const MobileRow = ({ primary, secondary, right, rightSub, badge, isLast, onClick }) => (
+    <div onClick={onClick} style={{ display: "flex", alignItems: "center", padding: "12px 16px", borderBottom: isLast ? "none" : "0.5px solid #f1f5f9", gap: 10, cursor: onClick ? "pointer" : "default" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 15, fontWeight: 500, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{primary}</div>
+        {secondary && <div style={{ fontSize: 13, color: "#64748b", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        {badge && <span style={s.badge(badge.color)}>{badge.label}</span>}
+        {right && <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{right}</div>}
+        {rightSub && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 1 }}>{rightSub}</div>}
+      </div>
+    </div>
+  );
+
+  const MobileSection = ({ title, children, onViewAll }) => (
+    <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 20px", marginBottom: 8 }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: "#0f172a" }}>{title}</span>
+        {onViewAll && <button onClick={onViewAll} style={{ fontSize: 13, color: accent, background: "none", border: "none", cursor: "pointer", fontWeight: 500 }}>View All</button>}
+      </div>
+      <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+        {children}
+      </div>
+    </div>
+  );
+
+  const MobileFilterTabs = ({ tabs, active, onChange }) => (
+    <div style={{ display: "flex", gap: 6, padding: "0 20px", overflowX: "auto" }}>
+      {tabs.map(tab => (
+        <button key={tab} onClick={() => onChange(tab)} style={{ padding: "5px 12px", fontSize: 13, fontWeight: 500, borderRadius: 16, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, border: active === tab ? "none" : "1px solid #e2e8f0", background: active === tab ? accent : "#ffffff", color: active === tab ? "#fff" : "#64748b" }}>{tab}</button>
+      ))}
+    </div>
+  );
+
+  const statusBadge = (status) => {
+    const map = { paid: { color: "#34d399", label: "Paid" }, sent: { color: "#3b82f6", label: "Sent" }, draft: { color: "#64748b", label: "Draft" }, overdue: { color: "#ef4444", label: "Overdue" } };
+    return map[status] || map.draft;
+  };
+
+  const MobileDashboard = () => {
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const [yr, mo] = thisMonth.split("-").map(Number);
+    const monthTxns = txns.filter((t) => { const d = new Date(t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; });
+    const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
+    const outstanding = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    return (
+      <div style={{ paddingBottom: 20 }}>
+        <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
+          <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>This Month</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(expense)}</div>
+            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense").length} expenses</div>
+          </div>
+          <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Outstanding</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(outstanding)}</div>
+            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{invoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices</div>
+          </div>
+        </div>
+        <MobileSection title="Recent Expenses" onViewAll={() => setPage("expenses")}>
+          {recentExpenses.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses yet</div> : recentExpenses.map((e, i) => (
+            <MobileRow key={e.id} primary={e.description} secondary={fmtDate(e.date)} right={fmt(e.amount)} isLast={i === recentExpenses.length - 1} onClick={() => { setEditItem(e); setModal("expense"); }} />
+          ))}
+        </MobileSection>
+        <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
+          {invoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : invoices.slice(0, 3).map((inv, i) => (
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, invoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+          ))}
+        </MobileSection>
+        {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
+          <div style={{ margin: "12px 16px 0", background: "#fffef5", border: "1px solid #fde68a", borderRadius: 14, padding: "14px 16px", cursor: "pointer" }} onClick={() => setPage("reimbursements")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>Owner Reimbursements</div>
+                <div style={{ fontSize: 12, color: "#b45309", marginTop: 2 }}>{txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").length} pending</div>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#92400e" }}>{fmt(txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").reduce((sum, t) => sum + Number(t.amount), 0))}</div>
+            </div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, padding: "20px 16px 0" }}>
+          <button onClick={() => setModal("receipt")} style={{ ...s.btn("#8b5cf6"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Camera /> Receipt</button>
+          <button onClick={() => setModal("expense")} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Expense</button>
+          <button onClick={() => { setEditItem(null); setModal("invoice"); }} style={{ ...s.btn("#3b82f6"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Invoice</button>
+        </div>
+      </div>
+    );
+  };
+
+  const MobileExpenses = () => {
+    const [search, setSearch] = useState("");
+    const sorted = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
+    const filtered = sorted.filter((t) => !search || t.description.toLowerCase().includes(search.toLowerCase()));
+    return (
+      <div style={{ paddingBottom: 20 }}>
+        <div style={{ padding: "8px 16px 12px" }}>
+          <div style={{ position: "relative" }}>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ width: "100%", padding: "10px 12px 10px 36px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 12, background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box" }} />
+            <div style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}><Icons.Expenses /></div>
+          </div>
+        </div>
+        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses found</div> : filtered.map((e, i) => (
+            <MobileRow key={e.id} primary={e.description} secondary={`${fmtDate(e.date)} · ${e.account || ""}${e.payment_source === "personal" ? " · " + (e.reimbursement_status === "reimbursed" ? "Reimbursed" : e.reimbursement_status === "pending" ? "Pending reimburse" : "Paid personally") : ""}`} badge={e.payment_source === "personal" && e.reimbursement_required ? { color: e.reimbursement_status === "reimbursed" ? "#34d399" : "#f59e0b", label: e.reimbursement_status === "reimbursed" ? "Reimbursed" : "Pending" } : null} right={fmt(e.amount)} rightSub={e.job || ""} isLast={i === filtered.length - 1} onClick={() => { setEditItem(e); setModal("expense"); }} />
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const MobileInvoices = () => {
+    const [tab, setTab] = useState("All");
+    const sorted = [...invoices].sort((a, b) => b.date.localeCompare(a.date));
+    const filtered = sorted.filter((inv) => tab === "All" || inv.status === tab.toLowerCase());
+    return (
+      <div style={{ paddingBottom: 20 }}>
+        <div style={{ paddingTop: 8, paddingBottom: 12 }}>
+          <MobileFilterTabs tabs={["All", "Draft", "Sent", "Paid", "Overdue"]} active={tab} onChange={setTab} />
+        </div>
+        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices found</div> : filtered.map((inv, i) => (
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const MobileContacts = () => {
+    const [tab, setTab] = useState("All");
+    const filtered = contacts.filter((c) => { if (tab === "Clients") return c.type === "client"; if (tab === "Suppliers") return c.type === "supplier"; return true; });
+    const typeBadge = (type) => ({ color: type === "client" ? "#34d399" : "#f59e0b", label: type === "client" ? "Client" : "Supplier" });
+    return (
+      <div style={{ paddingBottom: 20 }}>
+        <div style={{ paddingTop: 8, paddingBottom: 12 }}>
+          <MobileFilterTabs tabs={["All", "Clients", "Suppliers"]} active={tab} onChange={setTab} />
+        </div>
+        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No contacts found</div> : filtered.map((c, i) => (
+            <MobileRow key={c.id} primary={c.name} secondary={c.email || ""} badge={typeBadge(c.type)} isLast={i === filtered.length - 1} onClick={() => { setEditItem(c); setModal("contact"); }} />
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const MobileReimbursements = () => {
+    const [tab, setTab] = useState("Pending");
+    const [actionId, setActionId] = useState(null);
+    const allPersonal = txns.filter((t) => t.payment_source === "personal");
+    const filtered = allPersonal.filter((t) => { if (tab === "Pending") return t.reimbursement_status === "pending"; if (tab === "Reimbursed") return t.reimbursement_status === "reimbursed"; return true; }).sort((a, b) => b.date.localeCompare(a.date));
+    const pendingTotal = allPersonal.filter((t) => t.reimbursement_status === "pending").reduce((sum, t) => sum + Number(t.amount), 0);
+    const reimbBadge = (status) => ({ color: status === "reimbursed" ? "#34d399" : status === "pending" ? "#f59e0b" : "#64748b", label: status === "reimbursed" ? "Reimbursed" : status === "pending" ? "Pending" : status === "do_not_reimburse" ? "Skipped" : "N/A" });
+    return (
+      <div style={{ paddingBottom: 20 }}>
+        <div style={{ padding: "8px 16px 0" }}>
+          <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Pending Reimbursement</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(pendingTotal)}</div>
+            <div style={{ fontSize: 11, color: "#92400e", marginTop: 4, fontWeight: 500 }}>{allPersonal.filter((t) => t.reimbursement_status === "pending").length} expenses</div>
+          </div>
+        </div>
+        <div style={{ paddingTop: 12, paddingBottom: 12 }}>
+          <MobileFilterTabs tabs={["All", "Pending", "Reimbursed"]} active={tab} onChange={setTab} />
+        </div>
+        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No reimbursements found</div> : filtered.map((e, i) => (
+            <div key={e.id}>
+              <MobileRow primary={e.description} secondary={`${fmtDate(e.date)} · ${e.paid_by || "Owner"} · ${e.business_purpose || ""}`} badge={reimbBadge(e.reimbursement_status)} right={fmt(e.amount)} rightSub={e.gst_amount ? `GST: ${fmt(e.gst_amount)}` : ""} isLast={actionId !== e.id && i === filtered.length - 1} onClick={() => setActionId(actionId === e.id ? null : e.id)} />
+              {actionId === e.id && (
+                <div style={{ display: "flex", gap: 6, padding: "8px 16px 12px", borderBottom: i === filtered.length - 1 ? "none" : "0.5px solid #f1f5f9", flexWrap: "wrap" }}>
+                  {e.reimbursement_status === "pending" && <button onClick={async () => { await markReimbursed(e.id, { status: "reimbursed", date: today(), amount: String(e.amount), reference: "" }); setActionId(null); }} style={{ ...s.btn("#34d399", true), borderRadius: 12, fontSize: 12 }}><Icons.Check /> Reimburse</button>}
+                  {e.reimbursement_status === "pending" && <button onClick={async () => { await markReimbursed(e.id, { status: "do_not_reimburse", date: null, amount: null, reference: null }); setActionId(null); }} style={{ ...s.btnOutline, borderRadius: 12, fontSize: 12 }}>Skip</button>}
+                  {e.reimbursement_status === "reimbursed" && <button onClick={async () => { await markReimbursed(e.id, { status: "pending", date: null, amount: null, reference: null }); setActionId(null); }} style={{ ...s.btnOutline, borderRadius: 12, fontSize: 12, color: "#f59e0b", borderColor: "#f59e0b40" }}>Undo Reimburse</button>}
+                  <button onClick={() => { setEditItem(e); setModal("expense"); setActionId(null); }} style={{ ...s.btnOutline, borderRadius: 12, fontSize: 12 }}><Icons.Edit /> Edit</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const MobileLayout = () => (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+      <MobileHeader />
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {page === "dashboard" && <MobileDashboard />}
+        {page === "expenses" && <MobileExpenses />}
+        {page === "reimbursements" && <MobileReimbursements />}
+        {page === "invoices" && <MobileInvoices />}
+        {page === "contacts" && <MobileContacts />}
+      </div>
+      <MobileTabBar />
+    </div>
+  );
+
+  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reimbursements: ReimbursementsPage, invoices: InvoicesPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   const SidebarContent = () => (
     <>
       <div style={s.logo}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.02em" }}>BookKeeper</div>
-        <div style={{ fontSize: 10, color: "#0d9488", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
+        <div style={{ fontSize: 10, color: "#10b981", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>{bizInfo?.name}</div>
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
@@ -1309,36 +1834,47 @@ export default function BookkeeperApp() {
           </button>
         ))}
       </div>
-      <div style={{ padding: 12, borderTop: "1px solid #1e2130", display: "flex", gap: 6 }}>
+      <div style={{ padding: 12, borderTop: "1px solid #e2e8f0", display: "flex", gap: 6 }}>
         <button onClick={() => setModal("settings")} style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Settings /> Settings</button>
         <button onClick={logout} style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Logout /> Sign Out</button>
       </div>
     </>
   );
 
-  return (
-    <>
-      <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-      <style>{`@media(max-width:768px){.bk-sidebar-desktop{display:none!important}.bk-hamburger{display:flex!important}} @media(min-width:769px){.bk-sidebar-mobile{display:none!important}.bk-hamburger{display:none!important}}`}</style>
-      <div style={s.app}>
-        <div className="bk-sidebar-desktop" style={s.sidebar}><SidebarContent /></div>
-        {sidebarOpen && (
-          <div className="bk-sidebar-mobile" style={s.sidebarMobile} onClick={(e) => { if (e.target === e.currentTarget) setSidebarOpen(false); }}>
-            <div style={{ ...s.sidebar, height: "100%", width: 260, position: "absolute", left: 0, top: 0 }}><SidebarContent /></div>
+  if (isMobile) {
+    return (
+      <>
+        <MobileLayout />
+        {modal && (
+          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); setAiData(null); } }}>
+            <div style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh" }}>
+              {modal === "expense" && <ExpenseForm existing={editItem} />}
+              {modal === "contact" && <ContactForm existing={editItem} />}
+              {modal === "invoice" && <InvoiceForm existing={editItem} />}
+              {modal === "receipt" && <ReceiptCapture />}
+              {modal === "settings" && <BusinessSettings />}
+            </div>
           </div>
         )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div style={s.app}>
+        <div style={s.sidebar}><SidebarContent /></div>
         <div style={s.main}>
           <div style={s.header}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button className="bk-hamburger" onClick={() => setSidebarOpen(true)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "none", alignItems: "center" }}><Icons.Menu /></button>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9" }}>{navItems.find((n) => n.id === page)?.label}</div>
-                <div style={{ fontSize: 10, color: "#64748b" }}>{bizInfo?.name}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{navItems.find((n) => n.id === page)?.label}</div>
+                <div style={{ fontSize: 10, color: "#10b981", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{bizInfo?.name}</div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button onClick={() => setModal("receipt")} style={s.btn("#8b5cf6", true)}><Icons.Camera /> Receipt</button>
-              {(page === "expenses" || page === "dashboard") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
+              {(page === "expenses" || page === "dashboard" || page === "reimbursements") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
             </div>
@@ -1346,9 +1882,9 @@ export default function BookkeeperApp() {
           <div style={s.content}><PageComponent /></div>
         </div>
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); } }}>
+          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); setAiData(null); } }}>
             <div style={s.modalContent}>
-              {modal === "expense" && <ExpenseForm />}
+              {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "receipt" && <ReceiptCapture />}
