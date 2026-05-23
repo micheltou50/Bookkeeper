@@ -54,7 +54,7 @@ export default async (req) => {
         code,
         redirect_uri: REDIRECT_URI,
         grant_type: "authorization_code",
-        scope: "offline_access User.Read Mail.Send",
+        scope: "offline_access User.Read Mail.Send Mail.ReadWrite",
       }),
     });
 
@@ -81,7 +81,7 @@ export default async (req) => {
       access_token: encryptToken(tokens.access_token),
       refresh_token: encryptToken(tokens.refresh_token) || null,
       expires_at: expiresAt,
-      scopes: tokens.scope || "offline_access User.Read Mail.Send",
+      scopes: tokens.scope || "offline_access User.Read Mail.Send Mail.ReadWrite",
       updated_at: new Date().toISOString(),
     }, { onConflict: "user_id,business_id,provider" });
 
