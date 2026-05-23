@@ -170,7 +170,7 @@ export default async (req) => {
 
   const signatureHtml = profile?.email_signature
     ? profile.email_signature.replace(/\n/g, "<br>")
-    : `<strong>${escapeHtml(bName)}</strong>${profile?.email ? `<br>${escapeHtml(profile.email)}` : ""}${profile?.phone ? ` · ${escapeHtml(profile.phone)}` : ""}`;
+    : `<strong>${escapeHtml(bName)}</strong>${profile?.abn ? `<br>ABN: ${escapeHtml(profile.abn)}` : ""}${profile?.address ? `<br>${escapeHtml(profile.address)}` : ""}${profile?.email ? `<br>${escapeHtml(profile.email)}` : ""}${profile?.phone ? ` · ${escapeHtml(profile.phone)}` : ""}`;
 
   const templateVars = {
     contact_name: inv.contact_name || "there",

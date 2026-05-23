@@ -86,7 +86,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:24px 0 0">
           Kind regards,<br>
-          <strong>${bName}</strong>
+          <strong>${bName}</strong>${profile.abn ? `<br>ABN: ${profile.abn}` : ""}${profile.address ? `<br>${profile.address}` : ""}${profile.email ? `<br>${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
         </p>
       </div>
 
@@ -145,7 +145,8 @@ export default async () => {
 
     const subject = `Reminder: ${docType} ${inv.number} from ${bName} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
     const html = buildReminderHTML(inv, profile, daysOverdue);
-    const text = `Hi ${inv.contact_name || "there"},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmtAUD(inv.total || 0)} was due on ${fmtDate(inv.due_date)} (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago).${profile.bsb ? `\n\nBank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : ""}\n\nKind regards,\n${bName}`;
+    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const text = `Hi ${inv.contact_name || "there"},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmtAUD(inv.total || 0)} was due on ${fmtDate(inv.due_date)} (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago).${profile.bsb ? `\n\nBank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : ""}\n\nKind regards,\n${sig}`;
 
     try {
       const resp = await fetch("https://api.resend.com/emails", {

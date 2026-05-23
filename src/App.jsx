@@ -517,12 +517,12 @@ export default function BookkeeperApp() {
     const existing = jobs.find((j) => j.name.trim().toLowerCase() === norm);
     if (existing) {
       const upd = { last_used_at: new Date().toISOString() };
-      const contact = contactName ? contacts.find((c) => c.name === contactName) : null;
+      const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
       if (contact && !existing.contact_id) upd.contact_id = contact.id;
       await supabase.from("bk_jobs").update(upd).eq("id", existing.id);
       setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
     } else {
-      const contact = contactName ? contacts.find((c) => c.name === contactName) : null;
+      const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
       const row = { user_id: session.user.id, business_id: biz, name: trimmed, contact_id: contact?.id || null };
       const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
       if (inserted) setJobs((prev) => [inserted, ...prev]);
@@ -595,7 +595,7 @@ export default function BookkeeperApp() {
     const template = isQuote
       ? (profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE)
       : (profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE);
-    const sig = profile.email_signature || `${bName}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
     const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
     const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
     return template
@@ -641,7 +641,7 @@ export default function BookkeeperApp() {
       });
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error || "Draft creation failed");
-      if (result.webLink) window.open(result.webLink, "_blank");
+      if (result.webLink && !isMobile) window.open(result.webLink, "_blank");
       alert("Draft created in Outlook with PDF attached. Open Outlook to review and send.");
     } catch (err) {
       console.error("Outlook draft error:", err);
@@ -656,8 +656,9 @@ export default function BookkeeperApp() {
     const bName = profile.name || "our company";
     const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
     const overdueDays = inv.due_date ? Math.max(0, Math.floor((Date.now() - new Date(inv.due_date)) / 86400000)) : 0;
-    const body = `Hi ${inv.contact_name || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
-    window.location.href = `mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const body = `Hi ${inv.contact_name || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${sig}`;
+    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
   };
 
@@ -935,7 +936,7 @@ export default function BookkeeperApp() {
         <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Office supplies from Officeworks" style={s.input} /></div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}><option value="">Select...</option>{expenseAccounts.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{f.contact && !contacts.find(c => c.name === f.contact) && <option value={f.contact}>{f.contact}</option>}{contacts.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{f.contact && !contacts.find(c => (c.name || c.company) === f.contact) && <option value={f.contact}>{f.contact}</option>}{contacts.map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)}</select></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
@@ -996,7 +997,7 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
         </div>
-        <button disabled={!f.name || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.name || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
+        <button disabled={(!f.name && !f.company) || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: (!f.name && !f.company) || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
         {existing && (
           <button onClick={() => deleteContact(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
             <Icons.Trash /> Delete Contact
@@ -1032,7 +1033,7 @@ export default function BookkeeperApp() {
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
     const total = f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
-    const selectedContact = contacts.find((c) => c.name === f.contact_name);
+    const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
     const sortedJobs = [...jobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
     const saveInv = async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } upsertJob(inv.job, inv.contact_name); };
 
@@ -1054,7 +1055,7 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Contact</label>
             <div style={{ display: "flex", gap: 4 }}>
-              <select value={f.contact_name || ""} onChange={(e) => { const c = contacts.find(c => c.name === e.target.value); setF({ ...f, contact_name: e.target.value, contact_email: c?.email || "", contact_company: c?.company || "", contact_abn: c?.abn || "", contact_address: c?.address || "", contact_phone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id}>{c.name}</option>)}</select>
+              <select value={f.contact_name || ""} onChange={(e) => { const c = contacts.find(c => (c.name || c.company) === e.target.value); setF({ ...f, contact_name: e.target.value, contact_email: c?.email || "", contact_company: c?.company || "", contact_abn: c?.abn || "", contact_address: c?.address || "", contact_phone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)}</select>
               <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
             </div>
           </div>
@@ -1064,7 +1065,7 @@ export default function BookkeeperApp() {
           <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Add Client</div>
             <div style={s.grid2}>
-              <div style={{ marginBottom: 8 }}><input value={qa.name} onChange={(e) => setQa({ ...qa, name: e.target.value })} placeholder="Name *" style={{ ...s.input, fontSize: 12 }} /></div>
+              <div style={{ marginBottom: 8 }}><input value={qa.name} onChange={(e) => setQa({ ...qa, name: e.target.value })} placeholder="Name" style={{ ...s.input, fontSize: 12 }} /></div>
               <div style={{ marginBottom: 8 }}><input value={qa.company} onChange={(e) => setQa({ ...qa, company: e.target.value })} placeholder="Company" style={{ ...s.input, fontSize: 12 }} /></div>
             </div>
             <div style={s.grid2}>
@@ -1076,7 +1077,7 @@ export default function BookkeeperApp() {
               <div style={{ marginBottom: 8 }}><input value={qa.address} onChange={(e) => setQa({ ...qa, address: e.target.value })} placeholder="Address" style={{ ...s.input, fontSize: 12 }} /></div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button disabled={!qa.name} onClick={async () => { const inserted = await addContact({ ...qa, type: "client", notes: "" }, true); if (inserted) setF({ ...f, contact_name: inserted.name, contact_email: inserted.email || "", contact_company: inserted.company || "", contact_abn: inserted.abn || "", contact_address: inserted.address || "", contact_phone: inserted.phone || "" }); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name ? 0.4 : 1 }}>Add & Select</button>
+              <button disabled={!qa.name && !qa.company} onClick={async () => { const inserted = await addContact({ ...qa, type: "client", notes: "" }, true); if (inserted) setF({ ...f, contact_name: inserted.name || inserted.company || "", contact_email: inserted.email || "", contact_company: inserted.company || "", contact_abn: inserted.abn || "", contact_address: inserted.address || "", contact_phone: inserted.phone || "" }); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name && !qa.company ? 0.4 : 1 }}>Add & Select</button>
               <button onClick={() => { setQuickAdd(false); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
           </div>
@@ -1418,7 +1419,7 @@ export default function BookkeeperApp() {
                   <tr key={inv.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
-                    <td style={s.td}>{inv.contact_name || "--"}</td>
+                    <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{inv.job || ""}</td>
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
@@ -1458,7 +1459,7 @@ export default function BookkeeperApp() {
                 <thead><tr><th style={s.th}>Name</th><th style={s.th}>Company</th><th style={s.th}>Email</th><th style={s.th}>Type</th><th style={{ ...s.th, width: 70 }}></th></tr></thead>
                 <tbody>{filtered.map((c) => (
                   <tr key={c.id}>
-                    <td style={{ ...s.td, fontWeight: 600 }}>{c.name}</td>
+                    <td style={{ ...s.td, fontWeight: 600 }}>{c.name || c.company}</td>
                     <td style={{ ...s.td, color: "#64748b" }}>{c.company || "--"}</td>
                     <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{c.email || "--"}</td>
                     <td style={s.td}><span style={s.badge(c.type === "client" ? "#34d399" : "#f59e0b")}>{c.type}</span></td>
@@ -1687,7 +1688,7 @@ export default function BookkeeperApp() {
         </MobileSection>
         <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
           {invoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : invoices.slice(0, 3).map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, invoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, invoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
           ))}
         </MobileSection>
         {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
@@ -1742,7 +1743,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices found</div> : filtered.map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
           ))}
         </div>
       </div>
