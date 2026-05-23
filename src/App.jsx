@@ -667,11 +667,15 @@ export default function BookkeeperApp() {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!inv.pdf_path) {
-        await fetch("/.netlify/functions/generate-invoice-pdf", {
+        const pdfResp = await fetch("/.netlify/functions/generate-invoice-pdf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
         });
+        if (!pdfResp.ok) {
+          const pdfErr = await pdfResp.json().catch(() => ({}));
+          throw new Error(pdfErr.error || "PDF generation failed");
+        }
       }
       const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
         method: "POST",
@@ -679,7 +683,7 @@ export default function BookkeeperApp() {
         body: JSON.stringify({ invoice_id: inv.id }),
       });
       const result = await resp.json();
-      if (!resp.ok) throw new Error(result.error || "Send failed");
+      if (!resp.ok) throw new Error(result.detail ? `${result.error}: ${result.detail}` : result.error || "Send failed");
       setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, status: i.status === "draft" ? "sent" : i.status, sent_at: new Date().toISOString() } : i));
       alert(`Sent to ${inv.contact_email}`);
     } catch (err) {

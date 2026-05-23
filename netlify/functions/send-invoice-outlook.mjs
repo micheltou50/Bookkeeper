@@ -208,18 +208,32 @@ export default async (req) => {
   };
   if (pdfAttachment) message.attachments = [pdfAttachment];
 
-  const sendResp = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ message, saveToSentItems: true }),
-  });
+  const mailPayload = JSON.stringify({ message, saveToSentItems: true });
+
+  const doSend = async (token) => {
+    return fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: mailPayload,
+    });
+  };
+
+  let sendResp = await doSend(accessToken);
+
+  if (sendResp.status === 401 && refreshToken) {
+    console.log("Access token rejected, refreshing...");
+    const newToken = await refreshAccessToken(conn.id, refreshToken);
+    if (newToken) {
+      accessToken = newToken;
+      sendResp = await doSend(accessToken);
+    }
+  }
 
   if (!sendResp.ok) {
-    console.error("Graph sendMail failed:", sendResp.status);
-    return new Response(JSON.stringify({ error: "Failed to send email via Outlook" }), { status: 500, headers: { "Content-Type": "application/json" } });
+    let graphError = "";
+    try { const errBody = await sendResp.json(); graphError = JSON.stringify(errBody); } catch {}
+    console.error("Graph sendMail failed:", sendResp.status, graphError);
+    return new Response(JSON.stringify({ error: `Outlook send failed (${sendResp.status})`, detail: graphError }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
 
   await supabase.from("bk_invoices").update({
