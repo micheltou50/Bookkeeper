@@ -613,7 +613,7 @@ export default function BookkeeperApp() {
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
     const body = buildEmailBody(inv);
-    window.location.href = `ms-outlook://compose?to=${encodeURIComponent(inv.contact_email || "")}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = `mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     downloadPDF(inv);
     if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
   };
@@ -624,7 +624,7 @@ export default function BookkeeperApp() {
     const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
     const overdueDays = inv.due_date ? Math.max(0, Math.floor((Date.now() - new Date(inv.due_date)) / 86400000)) : 0;
     const body = `Hi ${inv.contact_name || ""},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${bName}`;
-    window.location.href = `ms-outlook://compose?to=${encodeURIComponent(inv.contact_email || "")}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = `mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
   };
 
