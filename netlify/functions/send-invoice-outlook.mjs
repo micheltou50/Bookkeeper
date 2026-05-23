@@ -52,31 +52,17 @@ function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
 }
 
-const DEFAULT_INVOICE_TEMPLATE = `Hi {contact_name},
+const DEFAULT_INVOICE_TEMPLATE = `<p>Hi {contact_name},</p><p>Please find attached invoice {number} for {amount}.</p>{due_date_line}{payment_details}<p>Kind regards,<br>{signature}</p>`;
 
-Please find attached invoice {number} for {amount}.
+const DEFAULT_QUOTE_TEMPLATE = `<p>Hi {contact_name},</p><p>Please find attached quote {number} for {amount}.</p><p>This quote is valid until {due_date}.</p><p>Kind regards,<br>{signature}</p>`;
 
-{due_date_line}
-
-{payment_details}
-
-Kind regards,
-{signature}`;
-
-const DEFAULT_QUOTE_TEMPLATE = `Hi {contact_name},
-
-Please find attached quote {number} for {amount}.
-
-This quote is valid until {due_date}. Payment details will be provided upon acceptance.
-
-Kind regards,
-{signature}`;
+const HTML_VARS = new Set(["payment_details", "signature", "due_date_line"]);
 
 function renderTemplate(template, vars) {
   const isHtml = /<[a-z][\s\S]*>/i.test(template);
   let out = template;
   for (const [k, v] of Object.entries(vars)) {
-    const safe = k === "payment_details" || k === "signature" ? (v || "") : escapeHtml(v || "");
+    const safe = HTML_VARS.has(k) ? (v || "") : escapeHtml(v || "");
     out = out.replaceAll(`{${k}}`, safe);
   }
   if (!isHtml) {
@@ -182,7 +168,9 @@ export default async (req) => {
         : `<p>Payment is due by <strong>${fmtDate(inv.due_date)}</strong>.</p>`)
     : "";
 
-  const signatureHtml = profile?.email_signature || `<strong>${escapeHtml(bName)}</strong>`;
+  const signatureHtml = profile?.email_signature
+    ? profile.email_signature.replace(/\n/g, "<br>")
+    : `<strong>${escapeHtml(bName)}</strong>${profile?.email ? `<br>${escapeHtml(profile.email)}` : ""}${profile?.phone ? ` · ${escapeHtml(profile.phone)}` : ""}`;
 
   const templateVars = {
     contact_name: inv.contact_name || "there",
