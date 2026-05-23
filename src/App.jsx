@@ -106,6 +106,7 @@ const Icons = {
   Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
   Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
   Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
+  Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
 };
 
 function LoginScreen() {
@@ -613,9 +614,41 @@ export default function BookkeeperApp() {
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
     const body = buildEmailBody(inv);
-    window.location.href = `mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     downloadPDF(inv);
     if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
+  };
+
+  const [outlookDraftLoading, setOutlookDraftLoading] = useState(null);
+
+  const createOutlookDraft = async (inv) => {
+    if (!emailConn) { alert("Connect Outlook in Settings first."); return; }
+    setOutlookDraftLoading(inv.id);
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) throw new Error("Not authenticated");
+      if (!inv.pdf_path) {
+        await fetch("/.netlify/functions/generate-invoice-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
+        });
+      }
+      const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: inv.id, draft: true }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "Draft creation failed");
+      if (result.webLink) window.open(result.webLink, "_blank");
+      alert("Draft created in Outlook with PDF attached. Open Outlook to review and send.");
+    } catch (err) {
+      console.error("Outlook draft error:", err);
+      alert("Failed to create Outlook draft: " + err.message);
+    } finally {
+      setOutlookDraftLoading(null);
+    }
   };
 
   const sendReminder = (inv) => {
@@ -1087,6 +1120,9 @@ export default function BookkeeperApp() {
             <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
               <Icons.Send /> Send via Email
             </button>
+            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); await createOutlookDraft({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
+              <Icons.Outlook /> {outlookDraftLoading === existing.id ? "Creating…" : "Open in Outlook"}
+            </button>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button onClick={() => downloadPDF(existing)} disabled={pdfLoading === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: pdfLoading === existing.id ? "#94a3b8" : "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: pdfLoading === existing.id ? 0.5 : 1 }}>
@@ -1114,7 +1150,11 @@ export default function BookkeeperApp() {
   };
 
   const BusinessSettings = () => {
-    const [f, setF] = useState({ ...profile });
+    const [f, setF] = useState(() => ({
+      ...profile,
+      email_template_invoice: profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE,
+      email_template_quote: profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE,
+    }));
     const [logoPreview, setLogoPreview] = useState(null);
     const fileRef = useRef(null);
 
@@ -1384,6 +1424,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       <button onClick={() => sendInvoice(inv)} title="Send via Email" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
+                      <button onClick={() => createOutlookDraft(inv)} disabled={outlookDraftLoading === inv.id} title="Open in Outlook" style={{ background: "none", border: "none", color: outlookDraftLoading === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookDraftLoading === inv.id ? 0.5 : 1 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Outlook />}</button>
                       {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>

@@ -84,7 +84,7 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
-  const { invoice_id } = body;
+  const { invoice_id, draft } = body;
   if (!invoice_id || !authToken) {
     return new Response(JSON.stringify({ error: "invoice_id and Authorization header required" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
@@ -187,7 +187,8 @@ export default async (req) => {
   const template = customTemplate?.trim() || (inv.type === "quote" ? DEFAULT_QUOTE_TEMPLATE : DEFAULT_INVOICE_TEMPLATE);
 
   const subject = `${docType} ${inv.number} from ${bName}`;
-  const htmlBody = renderTemplate(template, templateVars);
+  const rawBody = renderTemplate(template, templateVars);
+  const htmlBody = `<div style="font-family: 'Century Gothic', CenturyGothic, AppleGothic, sans-serif; font-size: 11pt;">${rawBody}</div>`;
 
   const message = {
     subject,
@@ -196,24 +197,46 @@ export default async (req) => {
   };
   if (pdfAttachment) message.attachments = [pdfAttachment];
 
-  const mailPayload = JSON.stringify({ message, saveToSentItems: true });
-
-  const doSend = async (token) => {
-    return fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+  const doGraph = async (token, url, payload) => {
+    return fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: mailPayload,
+      body: payload,
     });
   };
 
-  let sendResp = await doSend(accessToken);
+  if (draft) {
+    const draftPayload = JSON.stringify(message);
+    let draftResp = await doGraph(accessToken, "https://graph.microsoft.com/v1.0/me/messages", draftPayload);
+
+    if (draftResp.status === 401 && refreshToken) {
+      const newToken = await refreshAccessToken(conn.id, refreshToken);
+      if (newToken) {
+        accessToken = newToken;
+        draftResp = await doGraph(accessToken, "https://graph.microsoft.com/v1.0/me/messages", draftPayload);
+      }
+    }
+
+    if (!draftResp.ok) {
+      let graphError = "";
+      try { const errBody = await draftResp.json(); graphError = JSON.stringify(errBody); } catch {}
+      console.error("Graph draft creation failed:", draftResp.status, graphError);
+      return new Response(JSON.stringify({ error: `Draft creation failed (${draftResp.status})`, detail: graphError }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
+
+    const created = await draftResp.json();
+    return new Response(JSON.stringify({ success: true, draft: true, webLink: created.webLink, messageId: created.id }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
+  const mailPayload = JSON.stringify({ message, saveToSentItems: true });
+  let sendResp = await doGraph(accessToken, "https://graph.microsoft.com/v1.0/me/sendMail", mailPayload);
 
   if (sendResp.status === 401 && refreshToken) {
     console.log("Access token rejected, refreshing...");
     const newToken = await refreshAccessToken(conn.id, refreshToken);
     if (newToken) {
       accessToken = newToken;
-      sendResp = await doSend(accessToken);
+      sendResp = await doGraph(accessToken, "https://graph.microsoft.com/v1.0/me/sendMail", mailPayload);
     }
   }
 
