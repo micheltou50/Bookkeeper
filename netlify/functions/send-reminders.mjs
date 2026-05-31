@@ -1,12 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
+import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
+
+const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
+const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
-
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const FROM_EMAIL = process.env.REMINDER_FROM_EMAIL || "noreply@mworxgroup.com.au";
 
 const THRESHOLDS = [1, 7, 14, 30];
 
@@ -16,6 +17,71 @@ function fmtAUD(n) {
 
 function fmtDate(d) {
   return new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+// --- Outlook / Microsoft Graph sending (mirrors send-invoice-outlook.mjs) ---
+
+async function refreshAccessToken(connectionId, decryptedRefreshToken) {
+  if (!decryptedRefreshToken) return null;
+  const resp = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      refresh_token: decryptedRefreshToken,
+      grant_type: "refresh_token",
+      scope: "offline_access User.Read Mail.Send Mail.ReadWrite",
+    }),
+  });
+  if (!resp.ok) {
+    console.error("Token refresh failed:", resp.status);
+    return null;
+  }
+  const tokens = await resp.json();
+  const expiresAt = new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString();
+  await supabase.from("bk_email_connections").update({
+    access_token: encryptToken(tokens.access_token),
+    refresh_token: encryptToken(tokens.refresh_token || decryptedRefreshToken),
+    expires_at: expiresAt,
+    updated_at: new Date().toISOString(),
+  }).eq("id", connectionId);
+  return tokens.access_token;
+}
+
+const graphSend = (token, message) => fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  body: JSON.stringify({ message, saveToSentItems: true }),
+});
+
+// Returns { ok: true } or { ok: false, detail } — never throws.
+async function sendViaOutlook(conn, message) {
+  let accessToken, refreshToken;
+  try {
+    accessToken = decryptToken(conn.access_token);
+    refreshToken = conn.refresh_token ? decryptToken(conn.refresh_token) : null;
+  } catch {
+    return { ok: false, detail: "Outlook connection invalid — reconnect needed" };
+  }
+
+  // Proactively refresh if the stored access token has expired.
+  if (new Date(conn.expires_at) < new Date()) {
+    const refreshed = await refreshAccessToken(conn.id, refreshToken);
+    if (!refreshed) return { ok: false, detail: "Token refresh failed — reconnect Outlook in Settings" };
+    accessToken = refreshed;
+  }
+
+  let resp = await graphSend(accessToken, message);
+  if (resp.status === 401 && refreshToken) {
+    const newToken = await refreshAccessToken(conn.id, refreshToken);
+    if (newToken) resp = await graphSend(newToken, message);
+  }
+
+  if (resp.ok) return { ok: true };
+  let detail = `Graph error ${resp.status}`;
+  try { detail = `Graph ${resp.status}: ${JSON.stringify(await resp.json())}`.slice(0, 500); } catch { /* keep status */ }
+  return { ok: false, detail };
 }
 
 function buildReminderHTML(inv, profile, daysOverdue) {
@@ -129,6 +195,11 @@ async function runReminders({ dryRun }) {
   const profileMap = {};
   for (const p of profiles || []) profileMap[`${p.user_id}|${p.business_id}`] = p;
 
+  // Outlook connection per user+business — reminders send from this mailbox.
+  const { data: conns } = await supabase.from("bk_email_connections").select("*").eq("provider", "outlook");
+  const connMap = {};
+  for (const c of conns || []) connMap[`${c.user_id}|${c.business_id}`] = c;
+
   let sent = 0, skipped = 0, failed = 0;
   const preview = [];
 
@@ -140,11 +211,11 @@ async function runReminders({ dryRun }) {
     const profile = profileMap[`${inv.user_id}|${inv.business_id}`] || {};
     const bName = profile.name || "Our company";
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
-
     const subject = `Reminder: ${docType} ${inv.number} from ${bName} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
+    const conn = connMap[`${inv.user_id}|${inv.business_id}`];
 
     if (dryRun) {
-      preview.push({ invoice: inv.number, to: inv.contact_email, daysOverdue, subject });
+      preview.push({ invoice: inv.number, to: inv.contact_email, daysOverdue, subject, sendableVia: conn ? `Outlook (${conn.email})` : "NO OUTLOOK CONNECTION" });
       continue;
     }
 
@@ -160,29 +231,27 @@ async function runReminders({ dryRun }) {
       continue;
     }
 
-    const html = buildReminderHTML(inv, profile, daysOverdue);
-    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
-    const text = `Hi ${inv.contact_name || "there"},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmtAUD(inv.total || 0)} was due on ${fmtDate(inv.due_date)} (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago).${profile.bsb ? `\n\nBank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : ""}\n\nKind regards,\n${sig}`;
-
-    try {
-      const resp = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: `${bName} <${FROM_EMAIL}>`, to: inv.contact_email, subject, html, text }),
-      });
-      if (resp.ok) {
-        sent++;
-        await supabase.from("bk_reminder_log").update({ status: "sent" }).eq("id", claim.id);
-      } else {
-        failed++;
-        const detail = await resp.text();
-        console.error(`Failed to send to ${inv.contact_email}:`, detail);
-        await supabase.from("bk_reminder_log").update({ status: "failed", detail: detail.slice(0, 500) }).eq("id", claim.id);
-      }
-    } catch (err) {
+    if (!conn) {
       failed++;
-      console.error(`Email error for ${inv.number}:`, err.message);
-      await supabase.from("bk_reminder_log").update({ status: "failed", detail: String(err.message).slice(0, 500) }).eq("id", claim.id);
+      await supabase.from("bk_reminder_log").update({ status: "failed", detail: "No Outlook connection for this business — connect Outlook in Settings" }).eq("id", claim.id);
+      continue;
+    }
+
+    const html = buildReminderHTML(inv, profile, daysOverdue);
+    const message = {
+      subject,
+      body: { contentType: "HTML", content: html },
+      toRecipients: [{ emailAddress: { address: inv.contact_email, name: inv.contact_name || "" } }],
+    };
+
+    const res = await sendViaOutlook(conn, message);
+    if (res.ok) {
+      sent++;
+      await supabase.from("bk_reminder_log").update({ status: "sent" }).eq("id", claim.id);
+    } else {
+      failed++;
+      console.error(`Failed to send ${inv.number} to ${inv.contact_email}:`, res.detail);
+      await supabase.from("bk_reminder_log").update({ status: "failed", detail: String(res.detail).slice(0, 500) }).eq("id", claim.id);
     }
   }
 
@@ -194,7 +263,7 @@ const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, 
 export default async (req) => {
   // A manual invocation comes from the app carrying a Supabase auth token
   // and/or a dryRun query param. The scheduled (@daily) cron run has neither
-  // and proceeds without auth exactly as before.
+  // and proceeds without auth.
   const authHeader = req.headers.get("authorization");
   const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   let dryRun = false;
@@ -218,14 +287,14 @@ export default async (req) => {
     if (!user) return json({ error: "Unauthorized" }, 401);
   }
 
-  // Config requirements: Supabase is always needed; Resend is only needed for
-  // a real send (dry runs send nothing, so they work without it).
+  // Config requirements: Supabase always; Microsoft creds only for a real send
+  // (dry runs send nothing, so they work without them).
   if (!supabase) {
     return isManual ? json({ error: "Server not configured (Supabase)" }, 500) : new Response("Not configured", { status: 200 });
   }
-  if (!RESEND_API_KEY && !dryRun) {
-    console.log("Missing RESEND_API_KEY");
-    return isManual ? json({ error: "Email sending is not configured (RESEND_API_KEY missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
+  if (!dryRun && (!CLIENT_ID || !CLIENT_SECRET)) {
+    console.log("Missing Microsoft OAuth credentials");
+    return isManual ? json({ error: "Outlook sending not configured (Microsoft credentials missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
   }
 
   const result = await runReminders({ dryRun });
