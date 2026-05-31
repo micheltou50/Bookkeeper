@@ -1193,8 +1193,10 @@ export default function BookkeeperApp() {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || "Request failed");
+        const raw = await resp.text();
+        let data;
+        try { data = JSON.parse(raw); } catch { data = null; }
+        if (!resp.ok || !data) throw new Error((data && data.error) || raw.slice(0, 200) || `Request failed (${resp.status})`);
         setReminderResult(data);
       } catch (err) {
         setReminderResult({ error: err.message });

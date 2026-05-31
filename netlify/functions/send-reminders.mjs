@@ -189,12 +189,9 @@ async function runReminders({ dryRun }) {
   return { ok: true, status: 200, sent, skipped, failed, dryRun: !!dryRun, preview };
 }
 
-export default async (req) => {
-  if (!RESEND_API_KEY || !supabase) {
-    console.log("Missing RESEND_API_KEY or Supabase config");
-    return new Response("Not configured", { status: 200 });
-  }
+const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
 
+export default async (req) => {
   // A manual invocation comes from the app carrying a Supabase auth token
   // and/or a dryRun query param. The scheduled (@daily) cron run has neither
   // and proceeds without auth exactly as before.
@@ -212,25 +209,31 @@ export default async (req) => {
 
   if (isManual) {
     // Any authenticated app user may trigger or preview reminders.
-    if (!authToken) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-    }
+    if (!authToken) return json({ error: "Unauthorized" }, 401);
     const userClient = createClient(
       process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
       process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
     );
     const { data: { user } } = await userClient.auth.getUser(authToken);
-    if (!user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-    }
+    if (!user) return json({ error: "Unauthorized" }, 401);
+  }
+
+  // Config requirements: Supabase is always needed; Resend is only needed for
+  // a real send (dry runs send nothing, so they work without it).
+  if (!supabase) {
+    return isManual ? json({ error: "Server not configured (Supabase)" }, 500) : new Response("Not configured", { status: 200 });
+  }
+  if (!RESEND_API_KEY && !dryRun) {
+    console.log("Missing RESEND_API_KEY");
+    return isManual ? json({ error: "Email sending is not configured (RESEND_API_KEY missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
   }
 
   const result = await runReminders({ dryRun });
-  if (!result.ok) return new Response(result.message, { status: result.status });
-
-  if (isManual) {
-    return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+  if (!result.ok) {
+    return isManual ? json({ error: result.message }, result.status) : new Response(result.message, { status: result.status });
   }
+
+  if (isManual) return json(result);
   return new Response(`Sent ${result.sent} reminders (skipped ${result.skipped}, failed ${result.failed})`, { status: 200 });
 };
 
