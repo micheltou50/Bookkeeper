@@ -18,7 +18,7 @@ const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPA
 // ("unexpected end of JSON input") instead of a readable error. Returning null
 // lets the handler report a clean "not configured" message instead.
 function makeServiceClient() {
-  const key = process.env.SUPABASE_SERVICE_KEY;
+  const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
   if (!SUPABASE_URL || !key) return null;
   try {
     return createClient(SUPABASE_URL, key);
@@ -447,7 +447,7 @@ export default async (req) => {
     }
 
     if (!supabase) {
-      return isManual ? json({ error: "Server not configured: SUPABASE_SERVICE_KEY is missing in Netlify environment variables" }, 500) : new Response("Not configured", { status: 200 });
+      return isManual ? json({ error: "Server not configured: no Supabase service key found. Set SUPABASE_SERVICE_KEY (or SUPABASE_SERVICE_ROLE_KEY) in Netlify and redeploy. Make sure its Scope includes Functions." }, 500) : new Response("Not configured", { status: 200 });
     }
     if (!dryRun && (!CLIENT_ID || !CLIENT_SECRET)) {
       console.log("Missing Microsoft OAuth credentials");

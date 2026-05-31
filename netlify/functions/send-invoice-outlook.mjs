@@ -6,7 +6,7 @@ const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY
 );
 
 const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
