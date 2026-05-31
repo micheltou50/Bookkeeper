@@ -4,17 +4,21 @@ import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 
+// The project URL is public (it's already in src/supabaseClient.js), so it's
+// safe to hard-code as a fallback. Only the keys are secret.
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://yzndkdlzgegrcotfeqlp.supabase.co";
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
 // Build the client defensively. createClient throws "supabaseKey is required"
 // if the key is missing — and because this runs at module load (before the
 // handler's try/catch), that throw would surface as an empty lambda response
 // ("unexpected end of JSON input") instead of a readable error. Returning null
 // lets the handler report a clean "not configured" message instead.
 function makeServiceClient() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) return null;
+  if (!SUPABASE_URL || !key) return null;
   try {
-    return createClient(url, key);
+    return createClient(SUPABASE_URL, key);
   } catch (e) {
     console.error("Failed to create Supabase client:", e.message);
     return null;
@@ -310,19 +314,18 @@ export default async (req) => {
     if (isManual) {
       // Any authenticated app user may trigger or preview reminders.
       if (!authToken) return json({ error: "Unauthorized" }, 401);
-      const userClient = createClient(
-        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-        process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
-      );
+      if (!SUPABASE_ANON_KEY) {
+        return json({ error: "Server not configured: VITE_SUPABASE_ANON_KEY (or SUPABASE_ANON_KEY) is missing in Netlify environment variables" }, 500);
+      }
+      const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       const { data: { user }, error: authErr } = await userClient.auth.getUser(authToken);
       if (authErr || !user) return json({ error: "Unauthorized" }, 401);
     }
 
-    // Config requirements: Supabase always; Microsoft creds only for a real send
-    // (dry runs send nothing, so they work without them).
+    // Config requirements: Supabase service key always; Microsoft creds only for
+    // a real send (dry runs send nothing, so they work without them).
     if (!supabase) {
-      const which = !(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) ? "SUPABASE_URL" : "SUPABASE_SERVICE_KEY";
-      return isManual ? json({ error: `Server not configured: ${which} is missing in Netlify environment variables` }, 500) : new Response("Not configured", { status: 200 });
+      return isManual ? json({ error: "Server not configured: SUPABASE_SERVICE_KEY is missing in Netlify environment variables" }, 500) : new Response("Not configured", { status: 200 });
     }
     if (!dryRun && (!CLIENT_ID || !CLIENT_SECRET)) {
       console.log("Missing Microsoft OAuth credentials");
