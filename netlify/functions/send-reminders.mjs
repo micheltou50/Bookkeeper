@@ -4,10 +4,24 @@ import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// Build the client defensively. createClient throws "supabaseKey is required"
+// if the key is missing — and because this runs at module load (before the
+// handler's try/catch), that throw would surface as an empty lambda response
+// ("unexpected end of JSON input") instead of a readable error. Returning null
+// lets the handler report a clean "not configured" message instead.
+function makeServiceClient() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) return null;
+  try {
+    return createClient(url, key);
+  } catch (e) {
+    console.error("Failed to create Supabase client:", e.message);
+    return null;
+  }
+}
+
+const supabase = makeServiceClient();
 
 const THRESHOLDS = [1, 7, 14, 30];
 
@@ -186,7 +200,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
 </html>`;
 }
 
-async function runReminders({ dryRun }) {
+export async function runReminders({ dryRun }) {
   const now = new Date();
   const todayStr = now.toISOString().split("T")[0];
 
@@ -307,7 +321,8 @@ export default async (req) => {
     // Config requirements: Supabase always; Microsoft creds only for a real send
     // (dry runs send nothing, so they work without them).
     if (!supabase) {
-      return isManual ? json({ error: "Server not configured (Supabase)" }, 500) : new Response("Not configured", { status: 200 });
+      const which = !(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) ? "SUPABASE_URL" : "SUPABASE_SERVICE_KEY";
+      return isManual ? json({ error: `Server not configured: ${which} is missing in Netlify environment variables` }, 500) : new Response("Not configured", { status: 200 });
     }
     if (!dryRun && (!CLIENT_ID || !CLIENT_SECRET)) {
       console.log("Missing Microsoft OAuth credentials");
