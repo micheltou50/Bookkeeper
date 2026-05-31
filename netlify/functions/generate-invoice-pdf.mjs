@@ -205,16 +205,19 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: "invoice_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
-  // Verify the user owns this invoice
-  let userId = null;
-  if (auth_token) {
-    const userClient = createClient(
-      process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-      process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
-    );
-    const { data: { user } } = await userClient.auth.getUser(auth_token);
-    if (user) userId = user.id;
+  // Authenticate the requesting user
+  if (!auth_token) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
   }
+  const userClient = createClient(
+    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+    process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+  );
+  const { data: { user } } = await userClient.auth.getUser(auth_token);
+  if (!user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+  }
+  const userId = user.id;
 
   // Fetch invoice
   const { data: inv, error: invErr } = await supabase
@@ -228,7 +231,7 @@ export default async (req) => {
   }
 
   // Check ownership
-  if (userId && inv.user_id !== userId) {
+  if (inv.user_id !== userId) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 403, headers: { "Content-Type": "application/json" } });
   }
 

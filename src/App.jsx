@@ -119,11 +119,16 @@ function LoginScreen() {
   const handleSubmit = async () => {
     setLoading(true);
     setError("");
-    const { error } = isSignUp
-      ? await supabase.auth.signUp({ email, password })
-      : await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) setError(error.message);
+    if (isSignUp) {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      setLoading(false);
+      if (error) { setError(error.message); return; }
+      if (!data.session) setError("Account created. Check your email to confirm, then sign in.");
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      setLoading(false);
+      if (error) setError(error.message);
+    }
   };
 
   const inputStyle = { width: "100%", padding: "12px 16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, color: "#0f172a", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
@@ -302,6 +307,7 @@ export default function BookkeeperApp() {
   const loadData = useCallback(async (businessId) => {
     if (!session) return;
     setLoading(true);
+    try {
     const [cRes, iRes, tRes, pRes, jRes, eRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
@@ -346,6 +352,11 @@ export default function BookkeeperApp() {
         inv.items = existing?.items || [];
       }
       setInvoices(freshInv);
+    }
+    } catch (err) {
+      console.error("Failed to load data:", err);
+    } finally {
+      setLoading(false);
     }
   }, [session]);
 
@@ -446,7 +457,7 @@ export default function BookkeeperApp() {
   const addContact = async (c, keepModal) => {
     const row = { user_id: session.user.id, business_id: biz, name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
     const { data: inserted } = await supabase.from("bk_contacts").insert(row).select().single();
-    if (inserted) setContacts((prev) => [...prev, inserted].sort((a, b) => a.name.localeCompare(b.name)));
+    if (inserted) setContacts((prev) => [...prev, inserted].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
     if (!keepModal) setModal(null);
     return inserted;
   };
@@ -454,7 +465,7 @@ export default function BookkeeperApp() {
   const updateContact = async (id, c) => {
     const row = { name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
     const { data: updated } = await supabase.from("bk_contacts").update(row).eq("id", id).select().single();
-    if (updated) setContacts((prev) => prev.map((x) => (x.id === id ? updated : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    if (updated) setContacts((prev) => prev.map((x) => (x.id === id ? updated : x)).sort((a, b) => (a.name || "").localeCompare(b.name || "")));
     setModal(null);
     setEditItem(null);
   };
@@ -486,10 +497,15 @@ export default function BookkeeperApp() {
   };
 
   const updateInvoice = async (id, updates) => {
-    const dbUpdates = { ...updates };
-    const items = dbUpdates.items;
-    delete dbUpdates.items;
-    await supabase.from("bk_invoices").update(dbUpdates).eq("id", id);
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "notes", "status", "total", "paid_date"];
+    const dbUpdates = {};
+    for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
+    if ("date" in dbUpdates) dbUpdates.date = dbUpdates.date || null;
+    if ("due_date" in dbUpdates) dbUpdates.due_date = dbUpdates.due_date || null;
+    if ("paid_date" in dbUpdates) dbUpdates.paid_date = dbUpdates.paid_date || null;
+    const items = updates.items;
+    const { error: updErr } = await supabase.from("bk_invoices").update(dbUpdates).eq("id", id);
+    if (updErr) { alert("Failed to save invoice: " + updErr.message); return; }
     if (items) {
       await supabase.from("bk_invoice_items").delete().eq("invoice_id", id);
       const itemRows = items.map((it, idx) => ({ invoice_id: id, description: it.description, note: it.note, qty: Number(it.qty) || 1, rate: Number(it.rate) || 0, sort_order: idx }));
@@ -627,13 +643,13 @@ export default function BookkeeperApp() {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) throw new Error("Not authenticated");
-      if (!inv.pdf_path) {
-        await fetch("/.netlify/functions/generate-invoice-pdf", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
-        });
-      }
+      // Always (re)generate the PDF so the attachment reflects the latest edits
+      const pdfResp = await fetch("/.netlify/functions/generate-invoice-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
+      });
+      if (!pdfResp.ok) console.error("PDF generation failed before Outlook draft; draft may lack the latest attachment");
       const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -820,18 +836,24 @@ export default function BookkeeperApp() {
       setScannedUrl(dataUrl);
 
       setPhase("processing");
+      let filePath = null;
       try {
         const base64 = dataUrl.split(",")[1];
         const blob = await (await fetch(dataUrl)).blob();
-        const filePath = `${session.user.id}/${Date.now()}_receipt.jpg`;
+        filePath = `${session.user.id}/${Date.now()}_receipt.jpg`;
         await supabase.storage.from("receipts").upload(filePath, blob, { contentType: "image/jpeg" });
-        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
         if (!resp.ok) throw new Error("Failed to process receipt");
         const result = await resp.json();
         const fromReimbursements = page === "reimbursements";
         setAiData({ ...result, receiptPath: filePath, scannedUrl: dataUrl, fromReimbursements });
         setModal("expense");
-      } catch (err) { setError(err.message || "Failed to process receipt"); setPhase("scan"); }
+      } catch (err) {
+        if (filePath) supabase.storage.from("receipts").remove([filePath]).catch(() => {});
+        setError(err.message || "Failed to process receipt");
+        setPhase("scan");
+      }
     };
 
     const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setCorners(null); setError(""); };
@@ -914,7 +936,7 @@ export default function BookkeeperApp() {
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Expense</h3>
-          <button onClick={() => { setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <button onClick={() => { if (ai?.receiptPath) supabase.storage.from("receipts").remove([ai.receiptPath]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         {ai && (
           <div style={{ background: hasWarnings ? "#fffbeb" : "#ecfdf5", border: "1px solid " + (hasWarnings ? "#fde68a" : "#86efac"), borderRadius: 8, padding: 12, marginBottom: 16 }}>
@@ -1259,8 +1281,7 @@ export default function BookkeeperApp() {
 
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const [yr, mo] = thisMonth.split("-").map(Number);
-    const monthTxns = txns.filter((t) => { const d = new Date(t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; });
+    const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
     const outstanding = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
     const overdue = invoices.filter((i) => i.status === "overdue").length;
@@ -1662,8 +1683,7 @@ export default function BookkeeperApp() {
 
   const MobileDashboard = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const [yr, mo] = thisMonth.split("-").map(Number);
-    const monthTxns = txns.filter((t) => { const d = new Date(t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; });
+    const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
     const outstanding = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
     const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
@@ -1848,7 +1868,7 @@ export default function BookkeeperApp() {
       <>
         <MobileLayout />
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); setAiData(null); } }}>
+          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); } }}>
             <div style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
@@ -1884,7 +1904,7 @@ export default function BookkeeperApp() {
           <div style={s.content}><PageComponent /></div>
         </div>
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditItem(null); setAiData(null); } }}>
+          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); } }}>
             <div style={s.modalContent}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}

@@ -135,6 +135,7 @@ export default async () => {
   let sent = 0;
 
   for (const inv of invoices || []) {
+    if (inv.type === "quote") continue; // quotes don't get payment reminders
     const daysOverdue = Math.floor((now - new Date(inv.due_date)) / 86400000);
     if (daysOverdue < 1) continue;
     if (daysOverdue !== 1 && daysOverdue !== 7 && daysOverdue !== 14 && daysOverdue !== 30) continue;

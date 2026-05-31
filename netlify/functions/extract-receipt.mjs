@@ -1,10 +1,26 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { createClient } from "@supabase/supabase-js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+const userClient = createClient(
+  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+  process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+);
 
 export default async (req) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
+  }
+
+  const authHeader = req.headers.get("authorization");
+  const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!authToken) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+  }
+  const { data: { user } } = await userClient.auth.getUser(authToken);
+  if (!user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
   }
 
   try {
@@ -18,7 +34,7 @@ export default async (req) => {
     }
 
     const response = await client.messages.create({
-      model: "claude-haiku-3-5-20241022",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
       messages: [
         {
