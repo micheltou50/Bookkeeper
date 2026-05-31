@@ -1301,7 +1301,7 @@ export default function BookkeeperApp() {
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
           <label style={{ ...s.label, marginBottom: 8 }}>Payment Reminders</label>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Overdue reminders send automatically each day, at 1, 7, 14 and 30 days overdue. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
+            Overdue reminders send automatically each day from your connected Outlook, at 1, 7, 14 and 30 days overdue. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
@@ -1315,7 +1315,7 @@ export default function BookkeeperApp() {
                 <div>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Preview — {reminderResult.preview.length} reminder{reminderResult.preview.length === 1 ? "" : "s"} would be sent:</div>
                   {reminderResult.preview.length === 0 ? <div style={{ color: "#64748b" }}>No invoices are at a 1, 7, 14 or 30-day overdue mark today.</div> : reminderResult.preview.map((p, i) => (
-                    <div key={i} style={{ color: "#64748b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue)</div>
+                    <div key={i} style={{ color: p.sendableVia && p.sendableVia.startsWith("Outlook") ? "#64748b" : "#991b1b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue){p.sendableVia ? ` · ${p.sendableVia}` : ""}</div>
                   ))}
                 </div>
               ) : (
