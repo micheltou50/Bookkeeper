@@ -7,7 +7,10 @@ const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 // The project URL is public (it's already in src/supabaseClient.js), so it's
 // safe to hard-code as a fallback. Only the keys are secret.
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://yzndkdlzgegrcotfeqlp.supabase.co";
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+// The anon key is PUBLIC by design (it's already shipped in the browser bundle),
+// so hard-coding it as a fallback is safe and means the manual reminder trigger
+// works without an extra Netlify env var. Only the service key stays secret.
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl6bmRrZGx6Z2VncmNvdGZlcWxwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MzY2NzgsImV4cCI6MjA5NDMxMjY3OH0.GOWxurft8r0NlQv9phY4MRFcYM8iGdy4fWdphLxc72s";
 
 // Build the client defensively. createClient throws "supabaseKey is required"
 // if the key is missing — and because this runs at module load (before the
