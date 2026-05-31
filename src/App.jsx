@@ -632,7 +632,9 @@ export default function BookkeeperApp() {
     const body = buildEmailBody(inv);
     window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     downloadPDF(inv);
-    if (inv.status === "draft") updateInvoice(inv.id, { status: "sent" });
+    // Note: this only opens the user's email app + downloads the PDF. We cannot
+    // know whether the email was actually sent, so we do NOT auto-mark "sent".
+    // Use "Open in Outlook" for a tracked send, or set the status manually.
   };
 
   const [outlookDraftLoading, setOutlookDraftLoading] = useState(null);
@@ -643,13 +645,18 @@ export default function BookkeeperApp() {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) throw new Error("Not authenticated");
-      // Always (re)generate the PDF so the attachment reflects the latest edits
+      // Always (re)generate the PDF so the attachment reflects the latest edits.
+      // Fail hard if it doesn't succeed — never create a draft without the PDF.
       const pdfResp = await fetch("/.netlify/functions/generate-invoice-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
       });
-      if (!pdfResp.ok) console.error("PDF generation failed before Outlook draft; draft may lack the latest attachment");
+      if (!pdfResp.ok) {
+        let detail = "";
+        try { detail = (await pdfResp.json()).error || ""; } catch { /* ignore */ }
+        throw new Error("Could not generate the invoice PDF, so the Outlook draft was not created. " + (detail || "Please try again."));
+      }
       const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -1141,7 +1148,7 @@ export default function BookkeeperApp() {
         {existing && (<>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
-              <Icons.Send /> Send via Email
+              <Icons.Send /> Open Email + PDF
             </button>
             <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); await createOutlookDraft({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
               <Icons.Outlook /> {outlookDraftLoading === existing.id ? "Creating…" : "Open in Outlook"}
@@ -1189,7 +1196,7 @@ export default function BookkeeperApp() {
       setReminderResult(null);
       try {
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch(`/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}`, {
+        const resp = await fetch(`/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}&business_id=${encodeURIComponent(biz)}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -1311,15 +1318,20 @@ export default function BookkeeperApp() {
             <div style={{ marginTop: 10, padding: 12, background: reminderResult.error ? "#fef2f2" : "#f8fafc", border: `1px solid ${reminderResult.error ? "#fecaca" : "#e2e8f0"}`, borderRadius: 8, fontSize: 12, color: "#334155" }}>
               {reminderResult.error ? (
                 <div style={{ color: "#991b1b" }}>Error: {reminderResult.error}</div>
-              ) : reminderResult.dryRun ? (
-                <div>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Preview — {reminderResult.preview.length} reminder{reminderResult.preview.length === 1 ? "" : "s"} would be sent:</div>
-                  {reminderResult.preview.length === 0 ? <div style={{ color: "#64748b" }}>No invoices are at a 1, 7, 14 or 30-day overdue mark today.</div> : reminderResult.preview.map((p, i) => (
-                    <div key={i} style={{ color: p.sendableVia && p.sendableVia.startsWith("Outlook") ? "#64748b" : "#991b1b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue){p.sendableVia ? ` · ${p.sendableVia}` : ""}</div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ fontWeight: 600 }}>Sent {reminderResult.sent} · skipped {reminderResult.skipped} (already sent) · failed {reminderResult.failed}</div>
+              ) : reminderResult.dryRun ? (() => {
+                const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_outlook_connection: "No Outlook connection", token_error: "Outlook needs reconnect", skipped_not_due: "Not due yet" };
+                const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_outlook_connection: "#991b1b", token_error: "#991b1b", skipped_not_due: "#64748b" };
+                const willSend = reminderResult.preview.filter(p => p.status === "will_send" || p.status === "failed_retryable").length;
+                return (
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Preview — {willSend} reminder{willSend === 1 ? "" : "s"} would be sent now:</div>
+                    {reminderResult.preview.length === 0 ? <div style={{ color: "#64748b" }}>No overdue invoices found for this business.</div> : reminderResult.preview.map((p, i) => (
+                      <div key={i} style={{ color: COLORS[p.status] || "#64748b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue) — <strong>{LABELS[p.status] || p.status}</strong>{p.sendableVia ? ` · ${p.sendableVia}` : ""}</div>
+                    ))}
+                  </div>
+                );
+              })() : (
+                <div style={{ fontWeight: 600 }}>Sent {reminderResult.sent} · skipped {reminderResult.skipped} · failed {reminderResult.failed}</div>
               )}
             </div>
           )}
@@ -1495,7 +1507,7 @@ export default function BookkeeperApp() {
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      <button onClick={() => sendInvoice(inv)} title="Send via Email" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
+                      <button onClick={() => sendInvoice(inv)} title="Open email app + download PDF" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
                       <button onClick={() => createOutlookDraft(inv)} disabled={outlookDraftLoading === inv.id} title="Open in Outlook" style={{ background: "none", border: "none", color: outlookDraftLoading === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookDraftLoading === inv.id ? 0.5 : 1 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Outlook />}</button>
                       {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>

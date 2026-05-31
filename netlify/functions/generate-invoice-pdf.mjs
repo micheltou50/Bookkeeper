@@ -16,6 +16,20 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+// Escape user-controlled strings before they go into the invoice HTML so a
+// stray "<", "&", or quote in a name/address/notes can't break the layout.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Return a shallow copy with the named string fields HTML-escaped. Fields used
+// for logic (inv.type, profile.business_id) are intentionally left untouched.
+function escFields(obj, keys) {
+  const out = { ...(obj || {}) };
+  for (const k of keys) if (typeof out[k] === "string") out[k] = esc(out[k]);
+  return out;
+}
+
 async function fetchLogoBase64(logoUrl) {
   if (!logoUrl) return null;
   try {
@@ -47,6 +61,11 @@ async function fetchLogoBase64(logoUrl) {
 }
 
 function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
+  // Escape user-controlled text once, up front. Logic fields (inv.type,
+  // profile.business_id) are not in these lists, so comparisons still work.
+  inv = escFields(inv, ["number", "contact_name", "contact_company", "contact_abn", "contact_address", "contact_email", "contact_phone", "job", "notes"]);
+  profile = escFields(profile, ["name", "abn", "address", "email", "phone", "bank_name", "account_name", "bsb", "account_number"]);
+  items = (items || []).map((it) => escFields(it, ["description", "note"]));
   const accent = profile.business_id === "mworx" ? "#0d9488" : "#0f766e";
   const docType = inv.type === "quote" ? "QUOTE" : "INVOICE";
   const isQuote = inv.type === "quote";

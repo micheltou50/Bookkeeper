@@ -28,6 +28,8 @@ function makeServiceClient() {
 const supabase = makeServiceClient();
 
 const THRESHOLDS = [1, 7, 14, 30];
+const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || "Australia/Sydney";
+const STALE_SENDING_MS = 30 * 60 * 1000; // a "sending" claim older than this is retryable
 
 function fmtAUD(n) {
   return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
@@ -37,7 +39,45 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-// --- Outlook / Microsoft Graph sending (mirrors send-invoice-outlook.mjs) ---
+// Escape user-controlled values before injecting them into email HTML so a
+// stray "<", "&", or quote in a name/address can't break rendering or markup.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// --- Business-local date logic (item 4) ---------------------------------------
+// Use the business timezone, not UTC, so reminders fire on the right calendar
+// day around midnight. en-CA formats as YYYY-MM-DD.
+function businessTodayStr() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: BUSINESS_TZ });
+}
+
+function daysOverdueFor(dueDate) {
+  const today = businessTodayStr();
+  const a = new Date(today + "T00:00:00Z").getTime();
+  const b = new Date(String(dueDate).slice(0, 10) + "T00:00:00Z").getTime();
+  return Math.round((a - b) / 86400000);
+}
+
+// The highest threshold that has been reached (item 5): if a cron day was
+// missed, the next run still sends the highest unsent threshold <= daysOverdue.
+function applicableThreshold(daysOverdue) {
+  let best = null;
+  for (const t of THRESHOLDS) if (t <= daysOverdue) best = t;
+  return best;
+}
+
+// --- Outlook / Microsoft Graph sending (mirrors send-invoice-outlook.mjs) -----
+
+async function fetchWithTimeout(url, options, ms = 12000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 async function refreshAccessToken(connectionId, decryptedRefreshToken) {
   if (!decryptedRefreshToken) return null;
@@ -65,18 +105,6 @@ async function refreshAccessToken(connectionId, decryptedRefreshToken) {
     updated_at: new Date().toISOString(),
   }).eq("id", connectionId);
   return tokens.access_token;
-}
-
-// fetch with a hard timeout so a hung Microsoft call can't run out the
-// function's wall-clock limit (which would yield an empty lambda response).
-async function fetchWithTimeout(url, options, ms = 12000) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(t);
-  }
 }
 
 const graphSend = (token, message) => fetchWithTimeout("https://graph.microsoft.com/v1.0/me/sendMail", {
@@ -121,18 +149,18 @@ function buildReminderHTML(inv, profile, daysOverdue) {
   const total = fmtAUD(inv.total || 0);
 
   const logoHTML = profile.logo_url
-    ? `<img src="${profile.logo_url}" alt="${bName}" style="height:44px;border-radius:6px" />`
-    : `<div style="background:#1a1a2e;color:#fff;padding:10px 20px;border-radius:6px;font-size:16px;font-weight:800;display:inline-block">${bName}</div>`;
+    ? `<img src="${esc(profile.logo_url)}" alt="${esc(bName)}" style="height:44px;border-radius:6px" />`
+    : `<div style="background:#1a1a2e;color:#fff;padding:10px 20px;border-radius:6px;font-size:16px;font-weight:800;display:inline-block">${esc(bName)}</div>`;
 
   const bankHTML = (profile.bsb || profile.account_number) ? `
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:20px 24px;margin:24px 0">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:12px">Payment Details</div>
       <table style="font-size:14px;color:#334155;line-height:1.8">
-        ${profile.bank_name ? `<tr><td style="color:#64748b;padding-right:16px">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
-        <tr><td style="color:#64748b;padding-right:16px">Account Name</td><td style="font-weight:600">${profile.account_name || profile.name || bName}</td></tr>
-        ${profile.bsb ? `<tr><td style="color:#64748b;padding-right:16px">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
-        ${profile.account_number ? `<tr><td style="color:#64748b;padding-right:16px">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
-        <tr><td style="color:#64748b;padding-right:16px">Reference</td><td style="font-weight:600">${inv.number}</td></tr>
+        ${profile.bank_name ? `<tr><td style="color:#64748b;padding-right:16px">Bank</td><td style="font-weight:600">${esc(profile.bank_name)}</td></tr>` : ""}
+        <tr><td style="color:#64748b;padding-right:16px">Account Name</td><td style="font-weight:600">${esc(profile.account_name || profile.name || bName)}</td></tr>
+        ${profile.bsb ? `<tr><td style="color:#64748b;padding-right:16px">BSB</td><td style="font-weight:600">${esc(profile.bsb)}</td></tr>` : ""}
+        ${profile.account_number ? `<tr><td style="color:#64748b;padding-right:16px">Account Number</td><td style="font-weight:600">${esc(profile.account_number)}</td></tr>` : ""}
+        <tr><td style="color:#64748b;padding-right:16px">Reference</td><td style="font-weight:600">${esc(inv.number)}</td></tr>
       </table>
     </div>` : "";
 
@@ -151,13 +179,13 @@ function buildReminderHTML(inv, profile, daysOverdue) {
 
       <div style="padding:0 36px 32px">
         <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1e293b">Payment Reminder</h1>
-        <p style="margin:0 0 24px;font-size:14px;color:#64748b">${docType} ${inv.number} is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue</p>
+        <p style="margin:0 0 24px;font-size:14px;color:#64748b">${docType} ${esc(inv.number)} is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue</p>
 
         <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:20px 24px;margin-bottom:24px">
           <table style="width:100%;font-size:14px">
             <tr>
               <td style="color:#64748b;padding-bottom:8px">${docType} Number</td>
-              <td style="text-align:right;font-weight:600;color:#1e293b;padding-bottom:8px">${inv.number}</td>
+              <td style="text-align:right;font-weight:600;color:#1e293b;padding-bottom:8px">${esc(inv.number)}</td>
             </tr>
             <tr>
               <td style="color:#64748b;padding-bottom:8px">Due Date</td>
@@ -171,10 +199,10 @@ function buildReminderHTML(inv, profile, daysOverdue) {
         </div>
 
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 4px">
-          Hi ${inv.contact_name || "there"},
+          Hi ${esc(inv.contact_name || "there")},
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 24px">
-          This is a friendly reminder that ${docType.toLowerCase()} <strong>${inv.number}</strong> for <strong>${total}</strong> was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago). We'd appreciate prompt payment at your earliest convenience.
+          This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago). We'd appreciate prompt payment at your earliest convenience.
         </p>
 
         ${bankHTML}
@@ -184,38 +212,107 @@ function buildReminderHTML(inv, profile, daysOverdue) {
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:24px 0 0">
           Kind regards,<br>
-          <strong>${bName}</strong>${profile.abn ? `<br>ABN: ${profile.abn}` : ""}${profile.address ? `<br>${profile.address}` : ""}${profile.email ? `<br>${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
+          <strong>${esc(bName)}</strong>${profile.abn ? `<br>ABN: ${esc(profile.abn)}` : ""}${profile.address ? `<br>${esc(profile.address)}` : ""}${profile.email ? `<br>${esc(profile.email)}` : ""}${profile.phone ? ` · ${esc(profile.phone)}` : ""}
         </p>
       </div>
 
       <div style="background:#f8fafc;padding:20px 36px;border-top:1px solid #e2e8f0;text-align:center">
         <p style="margin:0;font-size:11px;color:#94a3b8">
-          ${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}
+          ${esc(bName)}${profile.abn ? ` · ABN ${esc(profile.abn)}` : ""}${profile.email ? ` · ${esc(profile.email)}` : ""}${profile.phone ? ` · ${esc(profile.phone)}` : ""}
         </p>
       </div>
 
     </div>
 
     <p style="text-align:center;font-size:11px;color:#94a3b8;margin-top:16px">
-      This is an automated reminder from ${bName}.
+      This is an automated reminder from ${esc(bName)}.
     </p>
   </div>
 </body>
 </html>`;
 }
 
-export async function runReminders({ dryRun }) {
-  const now = new Date();
-  const todayStr = now.toISOString().split("T")[0];
+// Upsert a reminder-log row keyed by (invoice_id, threshold). created_at is
+// refreshed on every claim so staleness is measured from the last attempt.
+async function writeLog(inv, threshold, status, detail) {
+  await supabase.from("bk_reminder_log").upsert(
+    {
+      invoice_id: inv.id,
+      threshold,
+      sent_to: inv.contact_email,
+      status,
+      detail: detail ? String(detail).slice(0, 500) : null,
+      created_at: new Date().toISOString(),
+    },
+    { onConflict: "invoice_id,threshold" }
+  );
+}
 
-  const { data: invoices, error } = await supabase
+// Atomically claim the right to send. Returns the row id on success, or null if
+// another concurrent run already holds the claim.
+// - New (no prior row): INSERT. The unique (invoice_id, threshold) constraint
+//   means only one concurrent writer wins; the loser's insert errors -> null.
+// - Retry (failed/stale row): compare-and-swap UPDATE guarded on the exact
+//   status + created_at we observed, so only one writer flips it to "sending".
+async function claimLog(inv, threshold, logRow) {
+  if (!logRow) {
+    const { data, error } = await supabase
+      .from("bk_reminder_log")
+      .insert({ invoice_id: inv.id, threshold, sent_to: inv.contact_email, status: "sending", created_at: new Date().toISOString() })
+      .select("id")
+      .single();
+    return error || !data ? null : data.id;
+  }
+  const { data, error } = await supabase
+    .from("bk_reminder_log")
+    .update({ status: "sending", sent_to: inv.contact_email, created_at: new Date().toISOString() })
+    .eq("id", logRow.id)
+    .eq("status", logRow.status)
+    .eq("created_at", logRow.created_at)
+    .select("id")
+    .single();
+  return error || !data ? null : data.id;
+}
+
+async function setLogStatus(id, status, detail) {
+  await supabase.from("bk_reminder_log")
+    .update({ status, detail: detail ? String(detail).slice(0, 500) : null })
+    .eq("id", id);
+}
+
+// Classify what would/should happen for one invoice at its applicable threshold.
+// Returns { threshold, disposition } where disposition is one of:
+// skipped_not_due | already_sent | in_progress | will_send | failed_retryable
+function classify(inv, daysOverdue, logRow) {
+  const threshold = applicableThreshold(daysOverdue);
+  if (!threshold) return { threshold: null, disposition: "skipped_not_due" };
+  if (!logRow) return { threshold, disposition: "will_send" };
+  if (logRow.status === "sent") return { threshold, disposition: "already_sent" };
+  if (logRow.status === "sending") {
+    const stale = Date.now() - new Date(logRow.created_at).getTime() > STALE_SENDING_MS;
+    return { threshold, disposition: stale ? "failed_retryable" : "in_progress" };
+  }
+  // status === "failed" (or anything else) -> retry
+  return { threshold, disposition: "failed_retryable" };
+}
+
+// dryRun: classify everything, send nothing.
+// userId/businessId: when provided (manual run) the query is scoped to that
+// user + business. The scheduled cron run passes neither and stays global.
+export async function runReminders({ dryRun, userId = null, businessId = null }) {
+  const todayStr = businessTodayStr();
+
+  let query = supabase
     .from("bk_invoices")
     .select("*")
     .in("status", ["sent", "overdue"])
     .not("due_date", "is", null)
     .not("contact_email", "is", null)
     .lt("due_date", todayStr);
+  if (userId) query = query.eq("user_id", userId);
+  if (businessId) query = query.eq("business_id", businessId);
 
+  const { data: invoices, error } = await query;
   if (error) {
     console.error("DB error:", error.message);
     return { ok: false, status: 500, message: "DB error" };
@@ -225,7 +322,6 @@ export async function runReminders({ dryRun }) {
   const profileMap = {};
   for (const p of profiles || []) profileMap[`${p.user_id}|${p.business_id}`] = p;
 
-  // Outlook connection per user+business — reminders send from this mailbox.
   const { data: conns } = await supabase.from("bk_email_connections").select("*").eq("provider", "outlook");
   const connMap = {};
   for (const c of conns || []) connMap[`${c.user_id}|${c.business_id}`] = c;
@@ -235,41 +331,64 @@ export async function runReminders({ dryRun }) {
 
   for (const inv of invoices || []) {
     if (inv.type === "quote") continue; // quotes don't get payment reminders
-    const daysOverdue = Math.floor((now - new Date(inv.due_date)) / 86400000);
-    if (!THRESHOLDS.includes(daysOverdue)) continue;
 
+    const daysOverdue = daysOverdueFor(inv.due_date);
     const profile = profileMap[`${inv.user_id}|${inv.business_id}`] || {};
-    const bName = profile.name || "Our company";
-    const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    const subject = `Reminder: ${docType} ${inv.number} from ${bName} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
     const conn = connMap[`${inv.user_id}|${inv.business_id}`];
 
+    // What threshold applies, and has it already been handled?
+    const probe = applicableThreshold(daysOverdue);
+    let logRow = null;
+    if (probe) {
+      const { data } = await supabase
+        .from("bk_reminder_log")
+        .select("*")
+        .eq("invoice_id", inv.id)
+        .eq("threshold", probe)
+        .maybeSingle();
+      logRow = data;
+    }
+    const { threshold, disposition } = classify(inv, daysOverdue, logRow);
+
+    // Decide a user-facing status that also reflects the Outlook connection.
+    let status = disposition;
+    const wouldSend = disposition === "will_send" || disposition === "failed_retryable";
+    if (wouldSend) {
+      if (!conn) status = "no_outlook_connection";
+      else if (new Date(conn.expires_at) < new Date() && !conn.refresh_token) status = "token_error";
+      else status = disposition; // will_send or failed_retryable
+    }
+
     if (dryRun) {
-      preview.push({ invoice: inv.number, to: inv.contact_email, daysOverdue, subject, sendableVia: conn ? `Outlook (${conn.email})` : "NO OUTLOOK CONNECTION" });
+      preview.push({
+        invoice: inv.number,
+        to: inv.contact_email,
+        daysOverdue,
+        threshold,
+        status,
+        sendableVia: conn ? `Outlook (${conn.email})` : null,
+      });
       continue;
     }
 
-    // Idempotency: claim this (invoice, threshold) before sending. A duplicate
-    // claim fails on the unique constraint, so the reminder is never sent twice.
-    const { data: claim, error: claimErr } = await supabase
-      .from("bk_reminder_log")
-      .insert({ invoice_id: inv.id, threshold: daysOverdue, sent_to: inv.contact_email, status: "sending" })
-      .select("id")
-      .single();
-    if (claimErr || !claim) {
-      skipped++; // already sent for this threshold (or claim failed) — do not re-send
+    // ---- real send ----
+    if (disposition === "skipped_not_due" || disposition === "already_sent" || disposition === "in_progress") {
+      skipped++;
       continue;
     }
-
     if (!conn) {
       failed++;
-      await supabase.from("bk_reminder_log").update({ status: "failed", detail: "No Outlook connection for this business — connect Outlook in Settings" }).eq("id", claim.id);
+      await writeLog(inv, threshold, "failed", "No Outlook connection for this business — connect Outlook in Settings");
       continue;
     }
+
+    // Atomically claim before sending. If null, another run beat us to it.
+    const claimId = await claimLog(inv, threshold, logRow);
+    if (!claimId) { skipped++; continue; }
 
     const html = buildReminderHTML(inv, profile, daysOverdue);
     const message = {
-      subject,
+      subject: `Reminder: ${inv.type === "quote" ? "Quote" : "Invoice"} ${inv.number} from ${profile.name || "Our company"} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`,
       body: { contentType: "HTML", content: html },
       toRecipients: [{ emailAddress: { address: inv.contact_email, name: inv.contact_name || "" } }],
     };
@@ -277,11 +396,11 @@ export async function runReminders({ dryRun }) {
     const res = await sendViaOutlook(conn, message);
     if (res.ok) {
       sent++;
-      await supabase.from("bk_reminder_log").update({ status: "sent" }).eq("id", claim.id);
+      await setLogStatus(claimId, "sent", null);
     } else {
       failed++;
       console.error(`Failed to send ${inv.number} to ${inv.contact_email}:`, res.detail);
-      await supabase.from("bk_reminder_log").update({ status: "failed", detail: String(res.detail).slice(0, 500) }).eq("id", claim.id);
+      await setLogStatus(claimId, "failed", res.detail);
     }
   }
 
@@ -296,23 +415,24 @@ export default async (req) => {
   // Catching it guarantees a JSON response with the real cause.
   let isManual = false;
   try {
-    // A manual invocation comes from the app carrying a Supabase auth token
-    // and/or a dryRun query param. The scheduled (@daily) cron run has neither
-    // and proceeds without auth.
     const authHeader = req.headers?.get?.("authorization");
     const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     let dryRun = false;
+    let businessId = null;
     try {
       const url = new URL(req.url);
       dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
+      businessId = url.searchParams.get("business_id") || null;
     } catch {
       // No parseable URL on some scheduled invocations — treat as cron run.
     }
 
     isManual = !!authToken || dryRun;
 
+    let userId = null;
     if (isManual) {
-      // Any authenticated app user may trigger or preview reminders.
+      // Any authenticated app user may trigger/preview, but only for their own
+      // user + active business (scoping happens in runReminders).
       if (!authToken) return json({ error: "Unauthorized" }, 401);
       if (!SUPABASE_ANON_KEY) {
         return json({ error: "Server not configured: VITE_SUPABASE_ANON_KEY (or SUPABASE_ANON_KEY) is missing in Netlify environment variables" }, 500);
@@ -320,10 +440,9 @@ export default async (req) => {
       const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       const { data: { user }, error: authErr } = await userClient.auth.getUser(authToken);
       if (authErr || !user) return json({ error: "Unauthorized" }, 401);
+      userId = user.id;
     }
 
-    // Config requirements: Supabase service key always; Microsoft creds only for
-    // a real send (dry runs send nothing, so they work without them).
     if (!supabase) {
       return isManual ? json({ error: "Server not configured: SUPABASE_SERVICE_KEY is missing in Netlify environment variables" }, 500) : new Response("Not configured", { status: 200 });
     }
@@ -332,7 +451,9 @@ export default async (req) => {
       return isManual ? json({ error: "Outlook sending not configured (Microsoft credentials missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
     }
 
-    const result = await runReminders({ dryRun });
+    // Manual run: scope to this user + their active business.
+    // Cron run: global (userId/businessId stay null).
+    const result = await runReminders({ dryRun, userId, businessId: isManual ? businessId : null });
     if (!result.ok) {
       return isManual ? json({ error: result.message }, result.status) : new Response(result.message, { status: result.status });
     }

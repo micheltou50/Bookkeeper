@@ -11,10 +11,22 @@ const supabase = createClient(
 
 const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 
+// fetch with a hard timeout so a hung Microsoft call can't run out the
+// function's wall-clock limit (which would yield an empty lambda response).
+async function fetchWithTimeout(url, options, ms = 12000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function refreshAccessToken(connectionId, decryptedRefreshToken) {
   if (!decryptedRefreshToken) return null;
 
-  const resp = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+  const resp = await fetchWithTimeout("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -137,23 +149,27 @@ export default async (req) => {
   const bName = profile?.name || "Our company";
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
 
+  // The invoice PDF is required — never send/draft an invoice email without it.
   let pdfAttachment = null;
-  if (inv.pdf_path) {
-    const { data: pdfData } = await supabase.storage.from("invoices").download(inv.pdf_path);
-    if (pdfData) {
-      const buf = Buffer.from(await pdfData.arrayBuffer());
-      if (buf.length <= MAX_ATTACHMENT_BYTES) {
-        pdfAttachment = {
-          "@odata.type": "#microsoft.graph.fileAttachment",
-          name: `${docType}-${inv.number || "draft"}.pdf`,
-          contentType: "application/pdf",
-          contentBytes: buf.toString("base64"),
-        };
-      } else {
-        console.warn(`PDF too large for inline attachment (${buf.length} bytes), sending without attachment`);
-      }
-    }
+  if (!inv.pdf_path) {
+    return new Response(JSON.stringify({ error: "Invoice PDF has not been generated yet. Please try again." }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
+  const { data: pdfData, error: pdfErr } = await supabase.storage.from("invoices").download(inv.pdf_path);
+  if (pdfErr || !pdfData) {
+    console.error("PDF download failed:", pdfErr?.message);
+    return new Response(JSON.stringify({ error: "Could not load the invoice PDF. Please regenerate it and try again." }), { status: 500, headers: { "Content-Type": "application/json" } });
+  }
+  const buf = Buffer.from(await pdfData.arrayBuffer());
+  if (buf.length > MAX_ATTACHMENT_BYTES) {
+    console.warn(`PDF too large for inline attachment (${buf.length} bytes)`);
+    return new Response(JSON.stringify({ error: "The invoice PDF is too large to attach (over 3 MB). Please simplify the invoice or send it manually." }), { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+  pdfAttachment = {
+    "@odata.type": "#microsoft.graph.fileAttachment",
+    name: `${docType}-${inv.number || "draft"}.pdf`,
+    contentType: "application/pdf",
+    contentBytes: buf.toString("base64"),
+  };
 
   const accountName = profile?.account_name || profile?.name || bName;
   const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
@@ -198,7 +214,7 @@ export default async (req) => {
   if (pdfAttachment) message.attachments = [pdfAttachment];
 
   const doGraph = async (token, url, payload) => {
-    return fetch(url, {
+    return fetchWithTimeout(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: payload,
@@ -221,7 +237,7 @@ export default async (req) => {
       let graphError = "";
       try { const errBody = await draftResp.json(); graphError = JSON.stringify(errBody); } catch {}
       console.error("Graph draft creation failed:", draftResp.status, graphError);
-      return new Response(JSON.stringify({ error: `Draft creation failed (${draftResp.status})`, detail: graphError }), { status: 500, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Could not create the Outlook draft. Please reconnect Outlook in Settings and try again." }), { status: 502, headers: { "Content-Type": "application/json" } });
     }
 
     const created = await draftResp.json();
@@ -244,7 +260,7 @@ export default async (req) => {
     let graphError = "";
     try { const errBody = await sendResp.json(); graphError = JSON.stringify(errBody); } catch {}
     console.error("Graph sendMail failed:", sendResp.status, graphError);
-    return new Response(JSON.stringify({ error: `Outlook send failed (${sendResp.status})`, detail: graphError }), { status: 500, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: "Could not send the email via Outlook. Please reconnect Outlook in Settings and try again." }), { status: 502, headers: { "Content-Type": "application/json" } });
   }
 
   await supabase.from("bk_invoices").update({
