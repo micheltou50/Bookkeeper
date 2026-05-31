@@ -7,7 +7,6 @@ const supabase = createClient(
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.REMINDER_FROM_EMAIL || "noreply@mworxgroup.com.au";
-const TRIGGER_KEY = process.env.REMINDER_TRIGGER_KEY;
 
 const THRESHOLDS = [1, 7, 14, 30];
 
@@ -196,24 +195,34 @@ export default async (req) => {
     return new Response("Not configured", { status: 200 });
   }
 
-  // Manual invocation: any request carrying a key or dryRun must present the
-  // correct REMINDER_TRIGGER_KEY. Requests with neither are treated as the
-  // scheduled (@daily) cron run and proceed exactly as before.
-  let isManual = false;
+  // A manual invocation comes from the app carrying a Supabase auth token
+  // and/or a dryRun query param. The scheduled (@daily) cron run has neither
+  // and proceeds without auth exactly as before.
+  const authHeader = req.headers.get("authorization");
+  const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   let dryRun = false;
   try {
     const url = new URL(req.url);
-    const key = url.searchParams.get("key") || req.headers.get("x-reminder-key");
-    const dryRunRequested = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
-    if (key || dryRunRequested) {
-      isManual = true;
-      if (!TRIGGER_KEY || key !== TRIGGER_KEY) {
-        return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } });
-      }
-      dryRun = dryRunRequested;
-    }
+    dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
   } catch {
-    // No parseable URL (some scheduled invocations) — fall through as cron run.
+    // No parseable URL on some scheduled invocations — treat as cron run.
+  }
+
+  const isManual = !!authToken || dryRun;
+
+  if (isManual) {
+    // Any authenticated app user may trigger or preview reminders.
+    if (!authToken) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+    }
+    const userClient = createClient(
+      process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+      process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+    );
+    const { data: { user } } = await userClient.auth.getUser(authToken);
+    if (!user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+    }
   }
 
   const result = await runReminders({ dryRun });

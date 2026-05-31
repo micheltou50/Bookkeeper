@@ -1180,6 +1180,28 @@ export default function BookkeeperApp() {
     }));
     const [logoPreview, setLogoPreview] = useState(null);
     const fileRef = useRef(null);
+    const [reminderRunning, setReminderRunning] = useState(false);
+    const [reminderResult, setReminderResult] = useState(null);
+
+    const runReminderJob = async (dryRun) => {
+      if (!dryRun && !window.confirm("Send overdue payment reminders now? Emails will go out to clients whose invoices are 1, 7, 14 or 30 days overdue.")) return;
+      setReminderRunning(true);
+      setReminderResult(null);
+      try {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const resp = await fetch(`/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "Request failed");
+        setReminderResult(data);
+      } catch (err) {
+        setReminderResult({ error: err.message });
+      } finally {
+        setReminderRunning(false);
+      }
+    };
 
     useEffect(() => {
       if (!f.logo_url) { setLogoPreview(null); return; }
@@ -1273,6 +1295,32 @@ export default function BookkeeperApp() {
             <label style={s.label}>Signature (HTML allowed)</label>
             <textarea value={f.email_signature || ""} onChange={(e) => setF({ ...f, email_signature: e.target.value })} placeholder={`${f.name || "Your name"}\n${f.email || "your@email.com"} · ${f.phone || "+61 ..."}`} rows={5} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 80 }} />
           </div>
+        </div>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+          <label style={{ ...s.label, marginBottom: 8 }}>Payment Reminders</label>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+            Overdue reminders send automatically each day, at 1, 7, 14 and 30 days overdue. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
+            <button onClick={() => runReminderJob(false)} disabled={reminderRunning} style={{ ...s.btn("#f59e0b"), opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Send Reminders Now"}</button>
+          </div>
+          {reminderResult && (
+            <div style={{ marginTop: 10, padding: 12, background: reminderResult.error ? "#fef2f2" : "#f8fafc", border: `1px solid ${reminderResult.error ? "#fecaca" : "#e2e8f0"}`, borderRadius: 8, fontSize: 12, color: "#334155" }}>
+              {reminderResult.error ? (
+                <div style={{ color: "#991b1b" }}>Error: {reminderResult.error}</div>
+              ) : reminderResult.dryRun ? (
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Preview — {reminderResult.preview.length} reminder{reminderResult.preview.length === 1 ? "" : "s"} would be sent:</div>
+                  {reminderResult.preview.length === 0 ? <div style={{ color: "#64748b" }}>No invoices are at a 1, 7, 14 or 30-day overdue mark today.</div> : reminderResult.preview.map((p, i) => (
+                    <div key={i} style={{ color: "#64748b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue)</div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontWeight: 600 }}>Sent {reminderResult.sent} · skipped {reminderResult.skipped} (already sent) · failed {reminderResult.failed}</div>
+              )}
+            </div>
+          )}
         </div>
         <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
       </div>
