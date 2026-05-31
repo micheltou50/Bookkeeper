@@ -23,7 +23,7 @@ function fmtDate(d) {
 
 async function refreshAccessToken(connectionId, decryptedRefreshToken) {
   if (!decryptedRefreshToken) return null;
-  const resp = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+  const resp = await fetchWithTimeout("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -49,7 +49,19 @@ async function refreshAccessToken(connectionId, decryptedRefreshToken) {
   return tokens.access_token;
 }
 
-const graphSend = (token, message) => fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+// fetch with a hard timeout so a hung Microsoft call can't run out the
+// function's wall-clock limit (which would yield an empty lambda response).
+async function fetchWithTimeout(url, options, ms = 12000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const graphSend = (token, message) => fetchWithTimeout("https://graph.microsoft.com/v1.0/me/sendMail", {
   method: "POST",
   headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   body: JSON.stringify({ message, saveToSentItems: true }),
@@ -261,49 +273,59 @@ async function runReminders({ dryRun }) {
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
 
 export default async (req) => {
-  // A manual invocation comes from the app carrying a Supabase auth token
-  // and/or a dryRun query param. The scheduled (@daily) cron run has neither
-  // and proceeds without auth.
-  const authHeader = req.headers.get("authorization");
-  const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  let dryRun = false;
+  // Wrap everything: an unhandled throw returns an empty body, which Netlify
+  // surfaces as "error decoding lambda response: unexpected end of JSON input".
+  // Catching it guarantees a JSON response with the real cause.
+  let isManual = false;
   try {
-    const url = new URL(req.url);
-    dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
-  } catch {
-    // No parseable URL on some scheduled invocations — treat as cron run.
-  }
+    // A manual invocation comes from the app carrying a Supabase auth token
+    // and/or a dryRun query param. The scheduled (@daily) cron run has neither
+    // and proceeds without auth.
+    const authHeader = req.headers?.get?.("authorization");
+    const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    let dryRun = false;
+    try {
+      const url = new URL(req.url);
+      dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
+    } catch {
+      // No parseable URL on some scheduled invocations — treat as cron run.
+    }
 
-  const isManual = !!authToken || dryRun;
+    isManual = !!authToken || dryRun;
 
-  if (isManual) {
-    // Any authenticated app user may trigger or preview reminders.
-    if (!authToken) return json({ error: "Unauthorized" }, 401);
-    const userClient = createClient(
-      process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-      process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
-    );
-    const { data: { user } } = await userClient.auth.getUser(authToken);
-    if (!user) return json({ error: "Unauthorized" }, 401);
-  }
+    if (isManual) {
+      // Any authenticated app user may trigger or preview reminders.
+      if (!authToken) return json({ error: "Unauthorized" }, 401);
+      const userClient = createClient(
+        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+        process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+      );
+      const { data: { user }, error: authErr } = await userClient.auth.getUser(authToken);
+      if (authErr || !user) return json({ error: "Unauthorized" }, 401);
+    }
 
-  // Config requirements: Supabase always; Microsoft creds only for a real send
-  // (dry runs send nothing, so they work without them).
-  if (!supabase) {
-    return isManual ? json({ error: "Server not configured (Supabase)" }, 500) : new Response("Not configured", { status: 200 });
-  }
-  if (!dryRun && (!CLIENT_ID || !CLIENT_SECRET)) {
-    console.log("Missing Microsoft OAuth credentials");
-    return isManual ? json({ error: "Outlook sending not configured (Microsoft credentials missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
-  }
+    // Config requirements: Supabase always; Microsoft creds only for a real send
+    // (dry runs send nothing, so they work without them).
+    if (!supabase) {
+      return isManual ? json({ error: "Server not configured (Supabase)" }, 500) : new Response("Not configured", { status: 200 });
+    }
+    if (!dryRun && (!CLIENT_ID || !CLIENT_SECRET)) {
+      console.log("Missing Microsoft OAuth credentials");
+      return isManual ? json({ error: "Outlook sending not configured (Microsoft credentials missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
+    }
 
-  const result = await runReminders({ dryRun });
-  if (!result.ok) {
-    return isManual ? json({ error: result.message }, result.status) : new Response(result.message, { status: result.status });
-  }
+    const result = await runReminders({ dryRun });
+    if (!result.ok) {
+      return isManual ? json({ error: result.message }, result.status) : new Response(result.message, { status: result.status });
+    }
 
-  if (isManual) return json(result);
-  return new Response(`Sent ${result.sent} reminders (skipped ${result.skipped}, failed ${result.failed})`, { status: 200 });
+    if (isManual) return json(result);
+    return new Response(`Sent ${result.sent} reminders (skipped ${result.skipped}, failed ${result.failed})`, { status: 200 });
+  } catch (err) {
+    console.error("send-reminders fatal error:", err);
+    const msg = `${err?.name || "Error"}: ${err?.message || String(err)}`;
+    return isManual ? json({ error: msg }, 500) : new Response(msg, { status: 500 });
+  }
 };
 
 export const config = {
