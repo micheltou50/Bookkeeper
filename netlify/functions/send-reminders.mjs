@@ -7,6 +7,9 @@ const supabase = createClient(
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.REMINDER_FROM_EMAIL || "noreply@mworxgroup.com.au";
+const TRIGGER_KEY = process.env.REMINDER_TRIGGER_KEY;
+
+const THRESHOLDS = [1, 7, 14, 30];
 
 function fmtAUD(n) {
   return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
@@ -106,12 +109,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
 </html>`;
 }
 
-export default async () => {
-  if (!RESEND_API_KEY || !supabase) {
-    console.log("Missing RESEND_API_KEY or Supabase config");
-    return new Response("Not configured", { status: 200 });
-  }
-
+async function runReminders({ dryRun }) {
   const now = new Date();
   const todayStr = now.toISOString().split("T")[0];
 
@@ -125,26 +123,44 @@ export default async () => {
 
   if (error) {
     console.error("DB error:", error.message);
-    return new Response("DB error", { status: 500 });
+    return { ok: false, status: 500, message: "DB error" };
   }
 
   const { data: profiles } = await supabase.from("bk_profiles").select("*");
   const profileMap = {};
   for (const p of profiles || []) profileMap[`${p.user_id}|${p.business_id}`] = p;
 
-  let sent = 0;
+  let sent = 0, skipped = 0, failed = 0;
+  const preview = [];
 
   for (const inv of invoices || []) {
     if (inv.type === "quote") continue; // quotes don't get payment reminders
     const daysOverdue = Math.floor((now - new Date(inv.due_date)) / 86400000);
-    if (daysOverdue < 1) continue;
-    if (daysOverdue !== 1 && daysOverdue !== 7 && daysOverdue !== 14 && daysOverdue !== 30) continue;
+    if (!THRESHOLDS.includes(daysOverdue)) continue;
 
     const profile = profileMap[`${inv.user_id}|${inv.business_id}`] || {};
     const bName = profile.name || "Our company";
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
 
     const subject = `Reminder: ${docType} ${inv.number} from ${bName} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
+
+    if (dryRun) {
+      preview.push({ invoice: inv.number, to: inv.contact_email, daysOverdue, subject });
+      continue;
+    }
+
+    // Idempotency: claim this (invoice, threshold) before sending. A duplicate
+    // claim fails on the unique constraint, so the reminder is never sent twice.
+    const { data: claim, error: claimErr } = await supabase
+      .from("bk_reminder_log")
+      .insert({ invoice_id: inv.id, threshold: daysOverdue, sent_to: inv.contact_email, status: "sending" })
+      .select("id")
+      .single();
+    if (claimErr || !claim) {
+      skipped++; // already sent for this threshold (or claim failed) — do not re-send
+      continue;
+    }
+
     const html = buildReminderHTML(inv, profile, daysOverdue);
     const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
     const text = `Hi ${inv.contact_name || "there"},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmtAUD(inv.total || 0)} was due on ${fmtDate(inv.due_date)} (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago).${profile.bsb ? `\n\nBank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : ""}\n\nKind regards,\n${sig}`;
@@ -155,14 +171,58 @@ export default async () => {
         headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ from: `${bName} <${FROM_EMAIL}>`, to: inv.contact_email, subject, html, text }),
       });
-      if (resp.ok) sent++;
-      else console.error(`Failed to send to ${inv.contact_email}:`, await resp.text());
+      if (resp.ok) {
+        sent++;
+        await supabase.from("bk_reminder_log").update({ status: "sent" }).eq("id", claim.id);
+      } else {
+        failed++;
+        const detail = await resp.text();
+        console.error(`Failed to send to ${inv.contact_email}:`, detail);
+        await supabase.from("bk_reminder_log").update({ status: "failed", detail: detail.slice(0, 500) }).eq("id", claim.id);
+      }
     } catch (err) {
+      failed++;
       console.error(`Email error for ${inv.number}:`, err.message);
+      await supabase.from("bk_reminder_log").update({ status: "failed", detail: String(err.message).slice(0, 500) }).eq("id", claim.id);
     }
   }
 
-  return new Response(`Sent ${sent} reminders`, { status: 200 });
+  return { ok: true, status: 200, sent, skipped, failed, dryRun: !!dryRun, preview };
+}
+
+export default async (req) => {
+  if (!RESEND_API_KEY || !supabase) {
+    console.log("Missing RESEND_API_KEY or Supabase config");
+    return new Response("Not configured", { status: 200 });
+  }
+
+  // Manual invocation: any request carrying a key or dryRun must present the
+  // correct REMINDER_TRIGGER_KEY. Requests with neither are treated as the
+  // scheduled (@daily) cron run and proceed exactly as before.
+  let isManual = false;
+  let dryRun = false;
+  try {
+    const url = new URL(req.url);
+    const key = url.searchParams.get("key") || req.headers.get("x-reminder-key");
+    const dryRunRequested = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
+    if (key || dryRunRequested) {
+      isManual = true;
+      if (!TRIGGER_KEY || key !== TRIGGER_KEY) {
+        return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } });
+      }
+      dryRun = dryRunRequested;
+    }
+  } catch {
+    // No parseable URL (some scheduled invocations) — fall through as cron run.
+  }
+
+  const result = await runReminders({ dryRun });
+  if (!result.ok) return new Response(result.message, { status: result.status });
+
+  if (isManual) {
+    return new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  return new Response(`Sent ${result.sent} reminders (skipped ${result.skipped}, failed ${result.failed})`, { status: 200 });
 };
 
 export const config = {
