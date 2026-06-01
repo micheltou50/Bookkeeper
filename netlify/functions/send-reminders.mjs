@@ -1,39 +1,49 @@
 import { createClient } from "@supabase/supabase-js";
 
-// The project URL is public (it's already in src/supabaseClient.js), so it's
-// safe to hard-code as a fallback. Only the keys are secret.
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://yzndkdlzgegrcotfeqlp.supabase.co";
-// The anon key is PUBLIC by design (it's already shipped in the browser bundle),
-// so hard-coding it as a fallback is safe and means the manual reminder trigger
-// works without an extra Netlify env var. Only the service key stays secret.
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl6bmRrZGx6Z2VncmNvdGZlcWxwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3MzY2NzgsImV4cCI6MjA5NDMxMjY3OH0.GOWxurft8r0NlQv9phY4MRFcYM8iGdy4fWdphLxc72s";
-
-// Build the client defensively. createClient throws "supabaseKey is required"
-// if the key is missing — and because this runs at module load (before the
-// handler's try/catch), that throw would surface as an empty lambda response
-// ("unexpected end of JSON input") instead of a readable error. Returning null
-// lets the handler report a clean "not configured" message instead.
-function makeServiceClient() {
-  const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
-  if (!SUPABASE_URL || !key) return null;
-  try {
-    return createClient(SUPABASE_URL, key);
-  } catch (e) {
-    console.error("Failed to create Supabase client:", e.message);
-    return null;
-  }
+// Resolve ALL configuration from environment at request time. No hardcoded
+// secret/URL fallbacks: committing those values can trip Netlify secret
+// scanning / sensitive-variable policies, and a frozen module-load value would
+// also cache a null client during debugging.
+function getEnvConfig() {
+  return {
+    supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+    supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY,
+    supabaseServiceKey:
+      process.env.SUPABASE_SERVICE_KEY ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SERVICE_ROLE_KEY,
+    resendApiKey: process.env.RESEND_API_KEY,
+    reminderFromEmail: process.env.REMINDER_FROM_EMAIL || "noreply@mworxgroup.com.au",
+  };
 }
 
-const supabase = makeServiceClient();
+// Module-scoped handles, (re)assigned at the start of each request by
+// resolveRuntime() so the helper functions below can use them without
+// threading parameters through every call.
+let supabase = null;
+let RESEND_API_KEY = null;
+let REMINDER_FROM_EMAIL = "noreply@mworxgroup.com.au";
+
+function resolveRuntime() {
+  const cfg = getEnvConfig();
+  RESEND_API_KEY = cfg.resendApiKey;
+  REMINDER_FROM_EMAIL = cfg.reminderFromEmail;
+  if (cfg.supabaseUrl && cfg.supabaseServiceKey) {
+    try {
+      supabase = createClient(cfg.supabaseUrl, cfg.supabaseServiceKey);
+    } catch (e) {
+      console.error("Failed to create Supabase client:", e.message);
+      supabase = null;
+    }
+  } else {
+    supabase = null;
+  }
+  return cfg;
+}
 
 const THRESHOLDS = [1, 7, 14, 30];
 const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || "Australia/Sydney";
 const STALE_SENDING_MS = 30 * 60 * 1000; // a "sending" claim older than this is retryable
-
-// Reminders send via Resend (avoids the Microsoft 365 outbound IP-reputation
-// bounces). Requires RESEND_API_KEY and the domain verified in Resend.
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const REMINDER_FROM_EMAIL = process.env.REMINDER_FROM_EMAIL || "noreply@mworxgroup.com.au";
 
 function fmtAUD(n) {
   return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
@@ -363,12 +373,49 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
 
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
 
+// Safe runtime env diagnostic. Exposes only booleans, value LENGTHS, total env
+// count, Netlify system vars, and matching env-var NAMES — never any values.
+// ENV_SMOKE_TEST is a non-sensitive var you add in Netlify: if it's visible but
+// the SUPABASE_*/RESEND_* vars aren't, Netlify is withholding sensitive vars
+// (untrusted-deploy policy), not a code bug. If even ENV_SMOKE_TEST is missing,
+// it's the wrong deploy/scope/context.
+function buildEnvDiagnostic() {
+  const allKeys = Object.keys(process.env);
+  return {
+    totalEnvCount: allKeys.length,
+    netlifySystemVars: {
+      NETLIFY: !!process.env.NETLIFY,
+      AWS_REGION: !!process.env.AWS_REGION,
+      LAMBDA_TASK_ROOT: !!process.env.LAMBDA_TASK_ROOT,
+    },
+    has_ENV_SMOKE_TEST: !!process.env.ENV_SMOKE_TEST,
+    lengths: {
+      SUPABASE_SERVICE_KEY: (process.env.SUPABASE_SERVICE_KEY || "").length,
+      SUPABASE_SERVICE_ROLE_KEY: (process.env.SUPABASE_SERVICE_ROLE_KEY || "").length,
+      SERVICE_ROLE_KEY: (process.env.SERVICE_ROLE_KEY || "").length,
+      SUPABASE_URL: (process.env.SUPABASE_URL || "").length,
+      VITE_SUPABASE_URL: (process.env.VITE_SUPABASE_URL || "").length,
+      SUPABASE_ANON_KEY: (process.env.SUPABASE_ANON_KEY || "").length,
+      VITE_SUPABASE_ANON_KEY: (process.env.VITE_SUPABASE_ANON_KEY || "").length,
+      RESEND_API_KEY: (process.env.RESEND_API_KEY || "").length,
+      ANTHROPIC_API_KEY: (process.env.ANTHROPIC_API_KEY || "").length,
+      ENV_SMOKE_TEST: (process.env.ENV_SMOKE_TEST || "").length,
+    },
+    matchingNames: allKeys
+      .filter((k) => /SUPABASE|SERVICE|RESEND|ENV_SMOKE|ANTHROPIC/i.test(k))
+      .sort(),
+  };
+}
+
 export default async (req) => {
   // Wrap everything: an unhandled throw returns an empty body, which Netlify
   // surfaces as "error decoding lambda response: unexpected end of JSON input".
   // Catching it guarantees a JSON response with the real cause.
   let isManual = false;
   try {
+    // Resolve env config at request time (not module load).
+    const cfg = resolveRuntime();
+
     const authHeader = req.headers?.get?.("authorization");
     const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     let dryRun = false;
@@ -388,30 +435,22 @@ export default async (req) => {
       // Any authenticated app user may trigger/preview, but only for their own
       // user + active business (scoping happens in runReminders).
       if (!authToken) return json({ error: "Unauthorized" }, 401);
-      if (!SUPABASE_ANON_KEY) {
-        return json({ error: "Server not configured: VITE_SUPABASE_ANON_KEY (or SUPABASE_ANON_KEY) is missing in Netlify environment variables" }, 500);
+      if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+        const diagnostic = buildEnvDiagnostic();
+        console.error("send-reminders config diagnostic:", JSON.stringify(diagnostic));
+        return json({ error: "Server not configured: Supabase URL/anon key missing in Netlify environment variables", diagnostic }, 500);
       }
-      const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      const userClient = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
       const { data: { user }, error: authErr } = await userClient.auth.getUser(authToken);
       if (authErr || !user) return json({ error: "Unauthorized" }, 401);
       userId = user.id;
     }
 
     if (!supabase) {
-      // Safe diagnostic: report which relevant env-var NAMES the runtime sees,
-      // and presence booleans. No values are ever exposed.
-      const diag = {
-        has_SUPABASE_SERVICE_KEY: !!process.env.SUPABASE_SERVICE_KEY,
-        has_SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-        has_SERVICE_ROLE_KEY: !!process.env.SERVICE_ROLE_KEY,
-        has_SUPABASE_URL: !!process.env.SUPABASE_URL,
-        has_VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
-        serviceKeyLen: (process.env.SUPABASE_SERVICE_KEY || "").length,
-        visibleNames: Object.keys(process.env).filter((k) => /SUPABASE|SERVICE|RESEND/i.test(k)).sort(),
-      };
-      console.error("send-reminders config diagnostic:", JSON.stringify(diag));
+      const diagnostic = buildEnvDiagnostic();
+      console.error("send-reminders config diagnostic:", JSON.stringify(diagnostic));
       return isManual
-        ? json({ error: "Server not configured: no Supabase service key found at runtime.", diagnostic: diag }, 500)
+        ? json({ error: "Server not configured: no Supabase service key found at runtime.", diagnostic }, 500)
         : new Response("Not configured", { status: 200 });
     }
     if (!dryRun && !RESEND_API_KEY) {
