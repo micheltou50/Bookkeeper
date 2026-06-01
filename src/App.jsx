@@ -1319,8 +1319,8 @@ export default function BookkeeperApp() {
               {reminderResult.error ? (
                 <div style={{ color: "#991b1b" }}>Error: {reminderResult.error}</div>
               ) : reminderResult.dryRun ? (() => {
-                const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_outlook_connection: "No Outlook connection", token_error: "Outlook needs reconnect", skipped_not_due: "Not due yet" };
-                const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_outlook_connection: "#991b1b", token_error: "#991b1b", skipped_not_due: "#64748b" };
+                const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_outlook_connection: "No Outlook connection", no_email_sender: "No email sender configured", token_error: "Outlook needs reconnect", skipped_not_due: "Not due yet" };
+                const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_outlook_connection: "#991b1b", no_email_sender: "#991b1b", token_error: "#991b1b", skipped_not_due: "#64748b" };
                 const willSend = reminderResult.preview.filter(p => p.status === "will_send" || p.status === "failed_retryable").length;
                 return (
                   <div>
