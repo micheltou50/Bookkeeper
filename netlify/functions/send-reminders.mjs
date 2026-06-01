@@ -398,7 +398,21 @@ export default async (req) => {
     }
 
     if (!supabase) {
-      return isManual ? json({ error: "Server not configured: no Supabase service key found. Set SUPABASE_SERVICE_KEY (or SUPABASE_SERVICE_ROLE_KEY) in Netlify and redeploy. Make sure its Scope includes Functions." }, 500) : new Response("Not configured", { status: 200 });
+      // Safe diagnostic: report which relevant env-var NAMES the runtime sees,
+      // and presence booleans. No values are ever exposed.
+      const diag = {
+        has_SUPABASE_SERVICE_KEY: !!process.env.SUPABASE_SERVICE_KEY,
+        has_SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+        has_SERVICE_ROLE_KEY: !!process.env.SERVICE_ROLE_KEY,
+        has_SUPABASE_URL: !!process.env.SUPABASE_URL,
+        has_VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
+        serviceKeyLen: (process.env.SUPABASE_SERVICE_KEY || "").length,
+        visibleNames: Object.keys(process.env).filter((k) => /SUPABASE|SERVICE|RESEND/i.test(k)).sort(),
+      };
+      console.error("send-reminders config diagnostic:", JSON.stringify(diag));
+      return isManual
+        ? json({ error: "Server not configured: no Supabase service key found at runtime.", diagnostic: diag }, 500)
+        : new Response("Not configured", { status: 200 });
     }
     if (!dryRun && !RESEND_API_KEY) {
       console.log("Missing RESEND_API_KEY");
