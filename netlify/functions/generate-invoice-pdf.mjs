@@ -60,10 +60,43 @@ async function fetchLogoBase64(logoUrl) {
   }
 }
 
+// A single-line description renders as plain bold text. A multi-line one becomes a
+// bulleted scope list: non-indented lines get a "•", whitespace-led lines become
+// "◦" sub-items. Any leading bullet char the user typed is stripped. The text is
+// already HTML-escaped by escFields before this runs.
+function bulletizeScope(text, always = false) {
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length <= 1 && !always) return `<div style="font-weight:600;white-space:pre-wrap">${raw}</div>`;
+  return lines.map((l) => {
+    const sub = /^\s/.test(l);
+    const t = l.trim().replace(/^[-*•◦·]\s*/, "");
+    return `<div style="display:flex;gap:7px;margin-left:${sub ? 16 : 0}px;margin-top:3px;line-height:1.4"><span style="color:#64748b;flex-shrink:0">${sub ? "◦" : "•"}</span><span style="font-weight:${sub ? 400 : 600}">${t}</span></div>`;
+  }).join("");
+}
+
+// Printed acceptance form for quotes: the client fills in their invoicing details
+// and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
+const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
+  <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
+  <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
+  <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
+  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
+    <tr><td style="width:50%;padding:16px 18px 0 0;vertical-align:bottom">Name / Company<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="width:50%;padding:16px 0 0 0;vertical-align:bottom">ABN<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
+    <tr><td colspan="2" style="padding:16px 0 0 0;vertical-align:bottom">Billing address<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
+    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Email<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="padding:16px 0 0 0;vertical-align:bottom">Phone<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
+    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Purchase order&nbsp;# (if any)<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
+  </table>
+  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569;margin-top:6px">
+    <tr><td style="width:60%;padding:28px 18px 0 0;vertical-align:bottom">Signature<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td><td style="width:40%;padding:28px 0 0 0;vertical-align:bottom">Date<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td></tr>
+    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Print name<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
+  </table>
+</div>`;
+
 function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   // Escape user-controlled text once, up front. Logic fields (inv.type,
   // profile.business_id) are not in these lists, so comparisons still work.
-  inv = escFields(inv, ["number", "contact_name", "contact_company", "contact_abn", "contact_address", "contact_email", "contact_phone", "job", "notes"]);
+  inv = escFields(inv, ["number", "contact_name", "contact_company", "contact_abn", "contact_address", "contact_email", "contact_phone", "job", "notes", "terms"]);
   profile = escFields(profile, ["name", "abn", "address", "email", "phone", "bank_name", "account_name", "bsb", "account_number"]);
   items = (items || []).map((it) => escFields(it, ["description", "note"]));
   const accent = profile.business_id === "mworx" ? "#0d9488" : "#0f766e";
@@ -76,20 +109,39 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
     ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`
     : `<div style="font-size:24px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${bName}</div>`;
 
-  const itemRows = (items || []).map((item) => {
-    const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
-    return `<tr>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
-        <div style="font-weight:600">${item.description || ""}</div>
-        ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px">${item.note}</div>` : ""}
-      </td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top;font-variant-numeric:tabular-nums">${fmtAUD(item.rate || 0)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top;font-variant-numeric:tabular-nums">${fmtAUD(amount)}</td>
-    </tr>`;
-  }).join("");
+  const isLump = inv.pricing_mode === "lump_sum";
 
-  const subtotal = (items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
+  const lumpScope = (items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
+
+  const itemsTable = isLump
+    ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <thead><tr style="background:#f8fafc">
+          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
+        </tr></thead>
+        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}</td></tr></tbody>
+      </table>`
+    : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <thead><tr style="background:#f8fafc">
+          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
+          <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
+          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
+          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
+        </tr></thead>
+        <tbody>${(items || []).map((item) => {
+          const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+          return `<tr>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
+              ${bulletizeScope(item.description)}
+              ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;white-space:pre-wrap">${item.note}</div>` : ""}
+            </td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top;font-variant-numeric:tabular-nums">${fmtAUD(item.rate || 0)}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top;font-variant-numeric:tabular-nums">${fmtAUD(amount)}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>`;
+
+  const subtotal = isLump ? (Number(inv.total) || 0) : (items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
 
   const accountName = profile.account_name || profile.name || bName;
 
@@ -116,7 +168,9 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   @page { size: A4; margin: 0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #fff; color: #1e293b; -webkit-print-color-adjust: exact; }
-  .page { width: 210mm; min-height: 297mm; padding: 40px 44px 64px; position: relative; }
+  .page { width: 210mm; min-height: 297mm; padding: 40px 44px 84px; }
+  /* Fixed footer repeats at the bottom of every printed A4 page (incl. the T&Cs page). */
+  .doc-footer { position: fixed; left: 44px; right: 44px; bottom: 20px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 12px; background: #fff; }
 </style>
 </head>
 <body>
@@ -129,7 +183,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       <div style="margin-top:10px">
         ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
         <div style="font-size:10px;color:#6b7280;line-height:1.6">
-          ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+          ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
         </div>
       </div>
     </div>
@@ -163,18 +217,8 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
     </div>
   </div>
 
-  <!-- Line items table -->
-  <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-    <thead>
-      <tr style="background:#f8fafc">
-        <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
-        <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
-        <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
-        <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
-      </tr>
-    </thead>
-    <tbody>${itemRows}</tbody>
-  </table>
+  <!-- Line items / scope of works -->
+  ${itemsTable}
 
   <!-- Totals -->
   <div style="display:flex;justify-content:flex-end">
@@ -193,10 +237,17 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   ${paymentSection}
 
   <!-- Notes -->
-  ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">${inv.notes}</div>` : ""}
+  ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
+
+  <!-- Terms & Conditions + acceptance (own page for quotes) -->
+  ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
+    ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
+    <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
+    ${isQuote ? ACCEPTANCE_BLOCK : ""}
+  </div>` : ""}
 
   <!-- Footer -->
-  <div style="position:absolute;bottom:24px;left:44px;right:44px;text-align:center;border-top:1px solid #e2e8f0;padding-top:12px">
+  <div class="doc-footer">
     <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
     <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
     ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}

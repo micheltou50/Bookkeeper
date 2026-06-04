@@ -116,6 +116,23 @@ async function sendViaResend({ to, toName, subject, html, fromName }) {
   }
 }
 
+// Logos live in a PRIVATE Supabase bucket, so profile.logo_url (a /object/public/
+// URL) 403s when an email client tries to load it — the logo shows as broken. Mint
+// a long-lived signed URL the email client can actually fetch. Returns null on
+// failure so buildReminderHTML cleanly falls back to the text logo.
+async function resolveLogoUrl(logoUrl) {
+  if (!logoUrl) return null;
+  const m = String(logoUrl).match(/\/storage\/v1\/object\/(?:public\/|sign\/)?([^/?]+)\/([^?]+)/);
+  if (!m) return logoUrl; // already a plain external URL
+  const [, bucket, path] = m;
+  try {
+    const { data } = await supabase.storage.from(bucket).createSignedUrl(decodeURIComponent(path), 60 * 60 * 24 * 365);
+    return data?.signedUrl || null;
+  } catch {
+    return null;
+  }
+}
+
 function buildReminderHTML(inv, profile, daysOverdue) {
   const bName = profile.name || "Our company";
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
@@ -153,7 +170,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
 
       <div style="padding:0 36px 32px">
         <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1e293b">Payment Reminder</h1>
-        <p style="margin:0 0 24px;font-size:14px;color:#64748b">${docType} ${esc(inv.number)} is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue</p>
+        <p style="margin:0 0 24px;font-size:14px;color:#64748b">${docType} ${esc(inv.number)} ${daysOverdue > 0 ? `is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue` : "— payment reminder"}</p>
 
         <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:20px 24px;margin-bottom:24px">
           <table style="width:100%;font-size:14px">
@@ -176,7 +193,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
           Hi ${esc(inv.contact_name || "there")},
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 24px">
-          This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago). We'd appreciate prompt payment at your earliest convenience.
+          This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> ${daysOverdue > 0 ? `was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago)` : `is due on <strong>${fmtDate(inv.due_date)}</strong>`}. We'd appreciate prompt payment at your earliest convenience.
         </p>
 
         ${bankHTML}
@@ -294,7 +311,11 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
 
   const { data: profiles } = await supabase.from("bk_profiles").select("*");
   const profileMap = {};
-  for (const p of profiles || []) profileMap[`${p.user_id}|${p.business_id}`] = p;
+  for (const p of profiles || []) {
+    // Swap the (private, unfetchable) logo URL for a signed one the email can load.
+    if (!dryRun && p.logo_url) p.logo_url = await resolveLogoUrl(p.logo_url);
+    profileMap[`${p.user_id}|${p.business_id}`] = p;
+  }
 
   const canResend = !!RESEND_API_KEY;
 
@@ -369,6 +390,31 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
   }
 
   return { ok: true, status: 200, sent, skipped, failed, dryRun: !!dryRun, preview };
+}
+
+// On-demand send of a reminder for a SINGLE invoice (the "Send Reminder" button in
+// the app). Bypasses the threshold/dedup logic of the scheduled run — it always
+// sends. Scoped to the requesting user.
+async function sendOneReminder({ invoiceId, userId }) {
+  const { data: inv, error } = await supabase.from("bk_invoices").select("*").eq("id", invoiceId).eq("user_id", userId).maybeSingle();
+  if (error || !inv) return { ok: false, status: 404, message: "Invoice not found" };
+  if (inv.type === "quote") return { ok: false, status: 400, message: "Quotes don't get payment reminders" };
+  if (!inv.contact_email) return { ok: false, status: 400, message: "This invoice has no contact email" };
+  if (!RESEND_API_KEY) return { ok: false, status: 500, message: "Email sending not configured (RESEND_API_KEY missing in Netlify)." };
+
+  const { data: profile } = await supabase.from("bk_profiles").select("*").eq("user_id", inv.user_id).eq("business_id", inv.business_id).maybeSingle();
+  const prof = profile || {};
+  if (prof.logo_url) prof.logo_url = await resolveLogoUrl(prof.logo_url);
+
+  const daysOverdue = inv.due_date ? daysOverdueFor(inv.due_date) : 0;
+  const html = buildReminderHTML(inv, prof, daysOverdue);
+  const overdueLabel = daysOverdue > 0 ? ` — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue` : "";
+  const subject = `Reminder: Invoice ${inv.number} from ${prof.name || "Our company"}${overdueLabel}`;
+
+  const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: prof.name });
+  if (!res.ok) return { ok: false, status: 502, message: res.detail || "Send failed" };
+  await writeLog(inv, 0, "sent", "manual send"); // threshold 0 = manual, on-demand
+  return { ok: true, status: 200, sent_to: inv.contact_email };
 }
 
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
@@ -456,6 +502,16 @@ export default async (req) => {
     if (!dryRun && !RESEND_API_KEY) {
       console.log("Missing RESEND_API_KEY");
       return isManual ? json({ error: "Email sending not configured (RESEND_API_KEY missing in Netlify). Dry run still works." }, 500) : new Response("Not configured", { status: 200 });
+    }
+
+    // Single-invoice on-demand send: the app's "Send Reminder" button POSTs an
+    // invoice_id in the body. Always sends that one invoice, bypassing thresholds.
+    let invoiceId = null;
+    try { const body = await req.json(); invoiceId = body?.invoice_id || null; } catch { /* no body = batch run */ }
+    if (invoiceId) {
+      if (!isManual || !userId) return json({ error: "Unauthorized" }, 401);
+      const one = await sendOneReminder({ invoiceId, userId });
+      return one.ok ? json({ ok: true, sent_to: one.sent_to }) : json({ error: one.message }, one.status);
     }
 
     // Manual run: scope to this user + their active business.

@@ -87,13 +87,95 @@ function getNextDocumentNumber(invoices, profile, type) {
 
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function getDefaultDueDate(type, date) { return addDays(date || today(), type === "quote" ? 30 : 7); }
-function getDefaultTerms(type) { return type === "quote" ? "This quote is valid for 30 days from the quote date. Pricing may be subject to change after this period." : "Payment is due within 7 days from the invoice date. Please use the invoice number as the payment reference."; }
+const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid for 30 days from the date of issue. Pricing may be subject to change after this period.
+2. Acceptance: Work commences upon written acceptance of this quote.
+3. Fees & GST: Fees are as quoted above. We are not registered for GST; no GST has been charged.
+4. Payment: Fees are invoiced on agreed milestones or on completion and are due within 7 days of each invoice. Final drawings and lodgement of documents are released upon full payment of all invoices.
+5. Scope: This quote covers only the scope of works listed above.
+6. Variations: Any change to the scope of works may incur additional fees, which will be quoted separately and agreed in writing before proceeding.
+7. Exclusions: Unless expressly stated, the following are excluded — council/certifier and statutory lodgement fees; third-party consultant costs (e.g. structural engineer, surveyor, BASIX, geotechnical, certifier); printing and physical models.
+8. Approvals: We prepare and lodge documentation to a professional standard but cannot guarantee approval by council, a certifier or any authority; their decisions and processing times are outside our control.
+9. Client information & access: The client is responsible for providing accurate information (e.g. survey, existing plans) and reasonable site access. We are not liable for delays or errors arising from incomplete or inaccurate information provided to us.
+10. Timeframes: Any timeframes are estimates only and are subject to authority processing times and the client's timely provision of information and approvals.
+11. Copyright: All drawings and documents remain our intellectual property. On full payment, the client is granted a licence to use them for this project only and may not reuse them on another site or project without our consent.
+12. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss.`;
+// Notes / payment-terms default (free text). Quote T&Cs now live in the separate
+// `terms` field (printed on its own page), so a quote's notes start empty.
+function getDefaultTerms(type) { return type === "quote" ? "" : "Payment is due within 7 days from the invoice date. Please use the invoice number as the payment reference."; }
+// Default for the standalone Terms & Conditions field.
+function getDefaultDocTerms(type) { return type === "quote" ? DEFAULT_QUOTE_TERMS : ""; }
+
+// Printed acceptance form for quotes: the client fills in their invoicing details
+// and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
+const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
+  <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
+  <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
+  <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
+  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
+    <tr><td style="width:50%;padding:16px 18px 0 0;vertical-align:bottom">Name / Company<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="width:50%;padding:16px 0 0 0;vertical-align:bottom">ABN<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
+    <tr><td colspan="2" style="padding:16px 0 0 0;vertical-align:bottom">Billing address<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
+    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Email<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="padding:16px 0 0 0;vertical-align:bottom">Phone<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
+    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Purchase order&nbsp;# (if any)<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
+  </table>
+  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569;margin-top:6px">
+    <tr><td style="width:60%;padding:28px 18px 0 0;vertical-align:bottom">Signature<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td><td style="width:40%;padding:28px 0 0 0;vertical-align:bottom">Date<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td></tr>
+    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Print name<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
+  </table>
+</div>`;
+
+// Per-project money breakdown. "Remaining" = contract − paid (only paid invoices
+// reduce it); we also surface invoiced/outstanding/leftToInvoice for context.
+// Contract is the agreed amount = sum of ACCEPTED quotes. But if work is billed
+// without a quote (no accepted quotes, or invoiced beyond them), fall back so the
+// contract at least covers what's been invoiced — otherwise progress/remaining
+// would be 0% / negative for invoice-only projects.
+function docTotals(docs) {
+  const sum = (arr) => arr.reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const quoted = sum(docs.filter((i) => i.type === "quote" && i.status === "accepted"));
+  const realInvoices = docs.filter((i) => i.type === "invoice");
+  const invoiced = sum(realInvoices.filter((i) => i.status !== "draft"));
+  const paid = sum(realInvoices.filter((i) => i.status === "paid"));
+  const contract = Math.max(quoted, invoiced);
+  return { contract, quoted, invoiced, paid, remaining: contract - paid, outstanding: invoiced - paid, leftToInvoice: contract - invoiced };
+}
+
+function projectTotals(project, invoices) {
+  return docTotals((invoices || []).filter((i) => i.project_id === project.id));
+}
+
+// Display label for a project: prefer the site address, since the "name" is often
+// just a description (e.g. "Construction Certificate - Gym"). Falls back to name.
+function projectLabel(p) {
+  return (p?.address && p.address.trim()) ? p.address.trim() : (p?.name || "");
+}
+
+// Group a project's quotes/invoices by consultant (keyed on contact_name, since
+// invoices store contact_name but not contact_id). Returns one entry per consultant
+// with their own totals + their quote/invoice rows, sorted by remaining desc.
+function projectConsultants(project, invoices) {
+  const linked = (invoices || []).filter((i) => i.project_id === project.id);
+  const groups = {};
+  for (const doc of linked) {
+    const name = (doc.contact_name || doc.contact_company || "Unassigned").trim() || "Unassigned";
+    (groups[name] ||= []).push(doc);
+  }
+  return Object.entries(groups)
+    .map(([name, docs]) => ({
+      name,
+      ...docTotals(docs),
+      quotes: docs.filter((d) => d.type === "quote").sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+      invoices: docs.filter((d) => d.type === "invoice").sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+    }))
+    .sort((a, b) => b.remaining - a.remaining || a.name.localeCompare(b.name));
+}
 
 const Icons = {
   Dashboard: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
   Expenses: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Contacts: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
   Invoices: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>,
+  Projects: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><path d="M2 13h20"/></svg>,
+  Quotes: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>,
   Plus: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>,
   X: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>,
   Trash: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
@@ -152,6 +234,21 @@ function LoginScreen() {
   );
 }
 
+// A single-line description renders as plain bold text. A multi-line one becomes a
+// bulleted scope list: non-indented lines get a "•", lines that start with
+// whitespace become "◦" sub-items. Any bullet char the user typed is stripped so
+// we never double up. Used by both PDF builders.
+function bulletizeScope(text, always = false) {
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length <= 1 && !always) return `<div style="font-weight:600;white-space:pre-wrap">${raw}</div>`;
+  return lines.map((l) => {
+    const sub = /^\s/.test(l);
+    const t = l.trim().replace(/^[-*•◦·]\s*/, "");
+    return `<div style="display:flex;gap:7px;margin-left:${sub ? 16 : 0}px;margin-top:3px;line-height:1.4"><span style="color:#64748b;flex-shrink:0">${sub ? "◦" : "•"}</span><span style="font-weight:${sub ? 400 : 600}">${t}</span></div>`;
+  }).join("");
+}
+
 function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
   const isQuote = inv.type === "quote";
   const docType = isQuote ? "QUOTE" : "INVOICE";
@@ -163,20 +260,39 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
     ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`
     : `<div style="font-size:24px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${bName}</div>`;
 
-  const items = (inv.items || []).map((item) => {
-    const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
-    return `<tr>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
-        <div style="font-weight:600">${item.description || ""}</div>
-        ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px">${item.note}</div>` : ""}
-      </td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top">${fmt(item.rate || 0)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top">${fmt(amount)}</td>
-    </tr>`;
-  }).join("");
+  const isLump = inv.pricing_mode === "lump_sum";
 
-  const subtotal = (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
+  const lumpScope = (inv.items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
+
+  const itemsTable = isLump
+    ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <thead><tr style="background:#f8fafc">
+          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
+        </tr></thead>
+        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}</td></tr></tbody>
+      </table>`
+    : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <thead><tr style="background:#f8fafc">
+          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
+          <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
+          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
+          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
+        </tr></thead>
+        <tbody>${(inv.items || []).map((item) => {
+          const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
+          return `<tr>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
+              ${bulletizeScope(item.description)}
+              ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;white-space:pre-wrap">${item.note}</div>` : ""}
+            </td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top">${fmt(item.rate || 0)}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top">${fmt(amount)}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>`;
+
+  const subtotal = isLump ? (Number(inv.total) || 0) : (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
 
   const paymentSection = !isQuote ? `
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
@@ -193,7 +309,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       <div style="font-size:11px;color:#0f766e;line-height:1.6">This quote is valid for 30 days from the date of issue. Payment details will be provided upon acceptance.</div>
     </div>`;
 
-  return `<div style="width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;position:relative;box-sizing:border-box">
+  return `<div style="width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column">
 
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
       <div>
@@ -201,7 +317,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
         <div style="margin-top:10px">
           ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
           <div style="font-size:10px;color:#6b7280;line-height:1.6">
-            ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+            ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
           </div>
         </div>
       </div>
@@ -234,17 +350,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       </div>
     </div>
 
-    <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-      <thead>
-        <tr style="background:#f8fafc">
-          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
-          <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
-          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
-          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
-        </tr>
-      </thead>
-      <tbody>${items}</tbody>
-    </table>
+    ${itemsTable}
 
     <div style="display:flex;justify-content:flex-end">
       <div style="width:240px">
@@ -260,9 +366,15 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
 
     ${paymentSection}
 
-    ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">${inv.notes}</div>` : ""}
+    ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
 
-    <div style="position:absolute;bottom:24px;left:44px;right:44px;text-align:center;border-top:1px solid #e2e8f0;padding-top:12px">
+    ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
+      ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
+      <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
+      ${isQuote ? ACCEPTANCE_BLOCK : ""}
+    </div>` : ""}
+
+    <div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
       <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
       <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
       ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
@@ -276,6 +388,10 @@ export default function BookkeeperApp() {
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [editItem, setEditItem] = useState(null);
+  const [invoiceSeed, setInvoiceSeed] = useState(null);
+  // Tracked as a ref (not state) on purpose: forms are defined inline inside this
+  // component, so a parent re-render remounts them and wipes their local state.
+  const formDirtyRef = useRef(false);
   const [aiData, setAiData] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -294,7 +410,13 @@ export default function BookkeeperApp() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setSession(session));
+    // Supabase emits SIGNED_IN / TOKEN_REFRESHED when the tab regains focus or the
+    // token auto-refreshes. Replacing the session object on those events re-runs
+    // loadData and makes the whole page "refresh". Only update when the signed-in
+    // user actually changes (real sign-in/out), so focus/refresh is a no-op.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, newSession) => {
+      setSession((prev) => (prev && newSession && prev.user?.id === newSession.user?.id ? prev : newSession));
+    });
     return () => subscription.unsubscribe();
   }, []);
 
@@ -303,6 +425,17 @@ export default function BookkeeperApp() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // Close any modal, but if a form reported unsaved changes (formDirty), confirm first.
+  const requestCloseModal = (alwaysConfirm = false) => {
+    if ((alwaysConfirm || formDirtyRef.current) && !window.confirm("Are you sure you want to close? Any unsaved changes will be lost.")) return;
+    if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {});
+    formDirtyRef.current = false;
+    setModal(null);
+    setEditItem(null);
+    setInvoiceSeed(null);
+    setAiData(null);
+  };
 
   const loadData = useCallback(async (businessId) => {
     if (!session) return;
@@ -480,7 +613,7 @@ export default function BookkeeperApp() {
 
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, notes: inv.notes, status: inv.status, total: inv.total };
+    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
     const { data: inserted } = await supabase.from("bk_invoices").insert(row).select().single();
     if (inserted) {
       if (items.length) {
@@ -492,12 +625,14 @@ export default function BookkeeperApp() {
       }
       setInvoices((prev) => [inserted, ...prev]);
     }
+    formDirtyRef.current = false;
     setModal(null);
     setEditItem(null);
+    setInvoiceSeed(null);
   };
 
   const updateInvoice = async (id, updates) => {
-    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "notes", "status", "total", "paid_date"];
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode"];
     const dbUpdates = {};
     for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
     if ("date" in dbUpdates) dbUpdates.date = dbUpdates.date || null;
@@ -514,8 +649,10 @@ export default function BookkeeperApp() {
     } else {
       setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates } : i)));
     }
+    formDirtyRef.current = false;
     setModal(null);
     setEditItem(null);
+    setInvoiceSeed(null);
   };
 
   const deleteInvoice = async (id) => {
@@ -543,6 +680,58 @@ export default function BookkeeperApp() {
       const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
+  };
+
+  // --- Projects (stored in bk_jobs) ---
+
+  const createProject = async (p) => {
+    const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
+    const row = { user_id: session.user.id, business_id: biz, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active" };
+    const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
+    if (inserted) setJobs((prev) => [inserted, ...prev]);
+    return inserted;
+  };
+
+  const updateProject = async (id, p) => {
+    const row = {};
+    if ("name" in p) row.name = (p.name || "").trim();
+    if ("contact_name" in p) { const c = contacts.find((x) => (x.name || x.company) === p.contact_name); row.contact_id = c?.id || null; }
+    if ("address" in p) row.address = p.address || null;
+    if ("notes" in p) row.notes = p.notes || null;
+    if ("contract_value" in p) row.contract_value = Number(p.contract_value) || 0;
+    if ("status" in p) row.status = p.status;
+    if ("accepted_quote_id" in p) row.accepted_quote_id = p.accepted_quote_id;
+    const { data: updated } = await supabase.from("bk_jobs").update(row).eq("id", id).select().single();
+    if (updated) setJobs((prev) => prev.map((j) => (j.id === id ? updated : j)));
+    return updated;
+  };
+
+  // Accept a quote: mark it accepted and ensure it's linked to a project (creating
+  // one from the quote if needed). The project contract value is computed as the sum
+  // of all accepted quotes, so there's nothing to seed here.
+  const acceptQuote = async (quote) => {
+    let projectId = quote.project_id;
+    let project = projectId ? jobs.find((j) => j.id === projectId) : null;
+    if (!project) {
+      project = await createProject({ name: (quote.job || quote.contact_name || quote.number || "Project").trim(), contact_name: quote.contact_name, address: quote.contact_address });
+      projectId = project?.id;
+    }
+    if (!projectId) return null;
+    const invUpd = { status: "accepted", project_id: projectId, job: projectLabel(project) };
+    await supabase.from("bk_invoices").update(invUpd).eq("id", quote.id);
+    setInvoices((prev) => prev.map((i) => (i.id === quote.id ? { ...i, ...invUpd } : i)));
+    // A signed-up job is no longer a lead.
+    if ((project.status || "active") === "lead") { await updateProject(projectId, { status: "active" }); return { ...project, status: "active" }; }
+    return project;
+  };
+
+  const deleteProject = async (id) => {
+    if (!window.confirm("Delete this project? Linked quotes and invoices will be kept but unlinked. This cannot be undone.")) return;
+    await supabase.from("bk_jobs").delete().eq("id", id);
+    setJobs((prev) => prev.filter((j) => j.id !== id));
+    setInvoices((prev) => prev.map((i) => (i.project_id === id ? { ...i, project_id: null } : i)));
+    setModal(null);
+    setEditItem(null);
   };
 
   const saveProfile = async (p) => {
@@ -592,14 +781,28 @@ export default function BookkeeperApp() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Server PDF failed, falling back to client-side:", err);
+      console.error("Server PDF unavailable, using browser print (A4):", err);
+      // Print to a true A4 page via the browser (like Microsoft Word): content flows
+      // and paginates onto A4, and the footer is pinned to the bottom of every page.
       const logoDataUrl = await fetchLogoBase64();
-      const html = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
-      const el = document.createElement("div");
-      el.innerHTML = html;
-      document.body.appendChild(el);
-      await html2pdf().set({ margin: 0, filename: pdfName, html2canvas: { scale: 3 }, jsPDF: { unit: "mm", format: "a4" } }).from(el.firstChild).save();
-      document.body.removeChild(el);
+      const content = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
+      const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${inv.number || "Document"}</title><style>
+        @page { size: A4; margin: 14mm 13mm 16mm; }
+        html, body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        body > div { width: 100% !important; min-height: 0 !important; padding: 0 !important; display: block !important; box-sizing: border-box; }
+        body > div > div:last-child { position: fixed !important; bottom: 6mm; left: 13mm; right: 13mm; margin: 0 !important; }
+      </style></head><body>${content}</body></html>`;
+      const iframe = document.createElement("iframe");
+      Object.assign(iframe.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
+      document.body.appendChild(iframe);
+      const cw = iframe.contentWindow;
+      cw.document.open();
+      cw.document.write(printDoc);
+      cw.document.close();
+      await new Promise((r) => setTimeout(r, 400));
+      cw.focus();
+      cw.print();
+      setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* already gone */ } }, 1000);
     } finally {
       setPdfLoading(null);
     }
@@ -685,8 +888,37 @@ export default function BookkeeperApp() {
     if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
   };
 
+  // Send the reminder email directly via Resend (the same service the automated
+  // reminders use), rather than opening a mailto draft. Falls back to the draft if
+  // the email service isn't reachable (e.g. running locally).
+  const sendReminderViaResend = async (inv) => {
+    if (!inv.contact_email) { alert("This invoice has no contact email."); return; }
+    if (!window.confirm(`Email a payment reminder to ${inv.contact_name || inv.contact_email} now?`)) return;
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const resp = await fetch("/.netlify/functions/send-reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ invoice_id: inv.id, business_id: biz }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) throw new Error((data && data.error) || `Request failed (${resp.status})`);
+      alert(`Reminder emailed to ${data.sent_to || inv.contact_email}.`);
+      if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+    } catch (err) {
+      if (window.confirm(`Couldn't send via the email service (${err.message}).\n\nOpen an email draft instead?`)) sendReminder(inv);
+    }
+  };
+
   const markPaid = (inv) => {
     updateInvoice(inv.id, { status: "paid", paid_date: today() });
+  };
+
+  // Mark paid without closing the current modal (used inside the Project modal).
+  const markPaidQuiet = async (inv) => {
+    const upd = { status: "paid", paid_date: today() };
+    await supabase.from("bk_invoices").update(upd).eq("id", inv.id);
+    setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
   };
 
   const connectOutlook = async () => {
@@ -722,7 +954,9 @@ export default function BookkeeperApp() {
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "expenses", label: "Expenses", icon: Icons.Expenses },
     { id: "reimbursements", label: "Reimburse", icon: Icons.Reimburse },
+    { id: "quotes", label: "Quotes", icon: Icons.Quotes },
     { id: "invoices", label: "Invoices", icon: Icons.Invoices },
+    { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
 
@@ -1038,15 +1272,22 @@ export default function BookkeeperApp() {
 
   const InvoiceForm = ({ existing }) => {
     const defaultType = "invoice";
-    const init = existing || { number: getNextDocumentNumber(invoices, profile, defaultType), type: defaultType, date: today(), due_date: getDefaultDueDate(defaultType, today()), contact_name: "", contact_email: "", contact_company: "", contact_abn: "", contact_address: "", contact_phone: "", job: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(defaultType), status: "draft" };
+    const seed = invoiceSeed || {};
+    const seedType = seed.type || defaultType;
+    const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
+    const init = existing
+      ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
+      : { number: getNextDocumentNumber(invoices, profile, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: "itemised", lump_amount: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
     const [notesEdited, setNotesEdited] = useState(!!existing);
+    const [termsEdited, setTermsEdited] = useState(!!existing);
     const updateType = (newType) => {
       const autoNum = !existing && !f._numberEdited;
       const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(invoices, profile, newType) : f.number };
       if (!dueDateEdited) updates.due_date = getDefaultDueDate(newType, f.date);
       if (!notesEdited) updates.notes = getDefaultTerms(newType);
+      if (!termsEdited) updates.terms = getDefaultDocTerms(newType);
       setF(updates);
     };
     const updateDate = (newDate) => {
@@ -1056,21 +1297,25 @@ export default function BookkeeperApp() {
     };
     const [quickAdd, setQuickAdd] = useState(false);
     const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
-    const [jobDropOpen, setJobDropOpen] = useState(false);
+    const [projectAdd, setProjectAdd] = useState(false);
+    const [pa, setPa] = useState({ name: "", contract_value: "", address: "" });
     const [saving, setSaving] = useState(false);
+    const initialSnapshot = useRef(JSON.stringify(init));
+    useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f]);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
-    const total = f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
+    const isLump = f.pricing_mode === "lump_sum";
+    const total = isLump ? (Number(f.lump_amount) || 0) : f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
     const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
     const sortedJobs = [...jobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
-    const saveInv = async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } upsertJob(inv.job, inv.contact_name); };
+    const saveInv = async () => { const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); };
 
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} {f.type === "quote" ? "Quote" : "Invoice"}</h3>
-          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
@@ -1088,7 +1333,7 @@ export default function BookkeeperApp() {
               <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
             </div>
           </div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option><option value="overdue">Overdue</option></select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}>{f.type === "quote" ? (<><option value="draft">Draft</option><option value="sent">Sent</option><option value="accepted">Accepted</option><option value="declined">Declined</option></>) : (<><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option><option value="overdue">Overdue</option></>)}</select></div>
         </div>
         {quickAdd && (
           <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
@@ -1111,46 +1356,80 @@ export default function BookkeeperApp() {
             </div>
           </div>
         )}
-        <div style={{ marginBottom: 12, position: "relative" }}>
-          <label style={s.label}>Job / Project</label>
-          <div style={{ position: "relative" }}>
-            <input value={f.job || ""} onChange={(e) => { setF({ ...f, job: e.target.value }); setJobDropOpen(true); }} onFocus={() => setJobDropOpen(true)} onBlur={() => setTimeout(() => setJobDropOpen(false), 150)} placeholder="e.g. 5 Midleton Ave Bexley North" style={s.input} />
-            <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#94a3b8", fontSize: 10 }}>&#9660;</span>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Project</label>
+          <div style={{ display: "flex", gap: 4 }}>
+            <select value={f.project_id || ""} onChange={(e) => { const p = jobs.find((j) => j.id === e.target.value); setF({ ...f, project_id: e.target.value || "", job: p ? projectLabel(p) : (e.target.value ? f.job : "") }); }} style={{ ...s.select, flex: 1 }}>
+              <option value="">No project</option>
+              {sortedJobs.map((j) => <option key={j.id} value={j.id}>{projectLabel(j)}</option>)}
+            </select>
+            <button type="button" onClick={() => setProjectAdd((v) => !v)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="New project">+</button>
           </div>
-          {jobDropOpen && sortedJobs.filter(j => !f.job || j.name.toLowerCase().includes((f.job || "").toLowerCase())).length > 0 && (
-            <div style={{ position: "absolute", left: 0, right: 0, top: "100%", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 60, maxHeight: 160, overflow: "auto" }}>
-              {sortedJobs.filter(j => !f.job || j.name.toLowerCase().includes((f.job || "").toLowerCase())).map(j => (
-                <div key={j.id} onMouseDown={() => { setF({ ...f, job: j.name }); setJobDropOpen(false); }} style={{ padding: "10px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f1f5f9" }}>{j.name}</div>
-              ))}
+        </div>
+        {projectAdd && (
+          <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>New Project</div>
+            <div style={{ marginBottom: 8 }}><input value={pa.name} onChange={(e) => setPa({ ...pa, name: e.target.value })} placeholder="Project name (e.g. 5 Midleton Ave Bexley North)" style={{ ...s.input, fontSize: 12 }} /></div>
+            <div style={{ marginBottom: 8 }}><input value={pa.address} onChange={(e) => setPa({ ...pa, address: e.target.value })} placeholder="Address (optional)" style={{ ...s.input, fontSize: 12 }} /></div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>The contract value builds up automatically from accepted quotes.</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button disabled={!pa.name.trim()} onClick={async () => { const created = await createProject({ name: pa.name, contact_name: f.contact_name, address: pa.address }); if (created) setF({ ...f, project_id: created.id, job: projectLabel(created) }); setPa({ name: "", contract_value: "", address: "" }); setProjectAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !pa.name.trim() ? 0.4 : 1 }}>Add & Select</button>
+              <button onClick={() => { setProjectAdd(false); setPa({ name: "", contract_value: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
+          </div>
+        )}
+        <div style={{ marginTop: 8, marginBottom: 8 }}>
+          <label style={s.label}>Pricing</label>
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            {[["itemised", "Itemised"], ["lump_sum", "Lump sum"]].map(([val, lbl]) => (
+              <button key={val} type="button" onClick={() => setF({ ...f, pricing_mode: val })} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", background: f.pricing_mode === val ? accent + "20" : "transparent", color: f.pricing_mode === val ? accent : "#64748b", borderColor: f.pricing_mode === val ? accent : "#e2e8f0" }}>{lbl}</button>
+            ))}
+          </div>
+          <label style={s.label}>{isLump ? "Scope of Works" : "Line Items"}</label>
+          {isLump ? (
+            <>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>One deliverable per line — press Enter for each new line. Indent a line (start with spaces) to make it a sub-item. Bullets are added automatically. The price is the single lump sum below.</div>
+              <textarea value={f.items[0]?.description || ""} onChange={(e) => updateItem(0, "description", e.target.value)} placeholder={"Redrawing the plans for CC approval with:\n   RLs to the floor areas\n   Wall Schedule\n   Window Schedule"} style={{ ...s.input, fontSize: 12, minHeight: 150, resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }} />
+            </>
+          ) : (
+            <>
+              {f.items.map((item, idx) => (
+                <div key={idx} style={{ marginBottom: 8, padding: 10, background: "#f7f9f8", borderRadius: 6 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 24px", gap: 6, alignItems: "flex-start" }}>
+                    <textarea value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description (you can use multiple lines — heading + sub-items)" rows={1} style={{ ...s.input, fontSize: 12, minHeight: 36, resize: "vertical", lineHeight: 1.4 }} />
+                    <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
+                    <input type="number" step="0.01" value={item.rate} onChange={(e) => updateItem(idx, "rate", e.target.value)} placeholder="Rate" style={{ ...s.input, fontSize: 12 }} />
+                    {f.items.length > 1 && <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: "8px 0 0" }}><Icons.Trash /></button>}
+                  </div>
+                  <textarea value={item.note || ""} onChange={(e) => updateItem(idx, "note", e.target.value)} placeholder="Note (optional — shown on PDF)" rows={1} style={{ ...s.input, fontSize: 11, marginTop: 4, color: "#94a3b8", minHeight: 30, resize: "vertical", lineHeight: 1.4 }} />
+                </div>
+              ))}
+              <button onClick={addItem} style={{ ...s.btnOutline, marginTop: 4 }}>+ Add Line</button>
+            </>
           )}
         </div>
-        <div style={{ marginTop: 8, marginBottom: 8 }}>
-          <label style={s.label}>Line Items</label>
-          {f.items.map((item, idx) => (
-            <div key={idx} style={{ marginBottom: 8, padding: 10, background: "#f7f9f8", borderRadius: 6 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 24px", gap: 6, alignItems: "center" }}>
-                <input value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description" style={{ ...s.input, fontSize: 12 }} />
-                <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
-                <input type="number" step="0.01" value={item.rate} onChange={(e) => updateItem(idx, "rate", e.target.value)} placeholder="Rate" style={{ ...s.input, fontSize: 12 }} />
-                {f.items.length > 1 && <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 0 }}><Icons.Trash /></button>}
-              </div>
-              <input value={item.note || ""} onChange={(e) => updateItem(idx, "note", e.target.value)} placeholder="Note (optional — shown on PDF)" style={{ ...s.input, fontSize: 11, marginTop: 4, color: "#94a3b8" }} />
-            </div>
-          ))}
-          <button onClick={addItem} style={{ ...s.btnOutline, marginTop: 4 }}>+ Add Line</button>
-        </div>
         <div style={{ marginTop: 12, marginBottom: 16, background: "#f1f5f9", borderRadius: 8, padding: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#0f172a" }}><span>Total</span><span>{fmt(total)}</span></div>
+          {isLump ? (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Lump Sum (AUD)</span>
+              <input type="number" step="0.01" value={f.lump_amount} onChange={(e) => setF({ ...f, lump_amount: e.target.value })} placeholder="0.00" style={{ ...s.input, maxWidth: 140, textAlign: "right", fontWeight: 700 }} />
+            </div>
+          ) : (
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#0f172a" }}><span>Total</span><span>{fmt(total)}</span></div>
+          )}
         </div>
         <div style={{ marginBottom: 16 }}><label style={s.label}>Notes / Payment Terms</label><textarea value={f.notes} onChange={(e) => { setNotesEdited(true); setF({ ...f, notes: e.target.value }); }} placeholder="Payment terms, notes, etc." style={{ ...s.input, minHeight: 60, resize: "vertical" }} /></div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={s.label}>Terms &amp; Conditions {f.terms ? "(prints on its own page at the end)" : "(optional)"}</label>
+          <textarea value={f.terms || ""} onChange={(e) => { setTermsEdited(true); setF({ ...f, terms: e.target.value }); }} placeholder="Full terms & conditions — printed on a separate page at the end of the PDF. Leave blank for none." style={{ ...s.input, minHeight: 120, resize: "vertical", lineHeight: 1.5 }} />
+        </div>
         <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
         {existing && (<>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
+            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
               <Icons.Send /> Open Email + PDF
             </button>
-            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } upsertJob(inv.job, inv.contact_name); await createOutlookDraft({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
+            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); await createOutlookDraft({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
               <Icons.Outlook /> {outlookDraftLoading === existing.id ? "Creating…" : "Open in Outlook"}
             </button>
           </div>
@@ -1158,14 +1437,21 @@ export default function BookkeeperApp() {
             <button onClick={() => downloadPDF(existing)} disabled={pdfLoading === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: pdfLoading === existing.id ? "#94a3b8" : "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: pdfLoading === existing.id ? 0.5 : 1 }}>
               <Icons.Download /> {pdfLoading === existing.id ? "Generating…" : "Download PDF"}
             </button>
-            {(existing.status === "sent" || existing.status === "overdue") && (
-              <button onClick={() => sendReminder(existing)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#f59e0b", borderColor: "#f59e0b40", gap: 6 }}>
-                ! Send Reminder
+            {f.type !== "quote" && (existing.status === "sent" || existing.status === "overdue") && (
+              <button onClick={() => sendReminderViaResend(existing)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#f59e0b", borderColor: "#f59e0b40", gap: 6 }}>
+                ! Email Reminder
               </button>
             )}
           </div>
+          {f.type === "quote" && existing.status !== "accepted" && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) alert(`Quote accepted and added to project "${proj.name}".`); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
+                <Icons.Check /> Accept Quote
+              </button>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            {existing.status !== "paid" && (
+            {existing.status !== "paid" && f.type !== "quote" && (
               <button onClick={() => { markPaid(existing); setModal(null); setEditItem(null); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#34d399", borderColor: "#34d39940", gap: 6 }}>
                 <Icons.Check /> Mark Paid
               </button>
@@ -1175,6 +1461,103 @@ export default function BookkeeperApp() {
             </button>
           </div>
         </>)}
+      </div>
+    );
+  };
+
+  const ProjectForm = ({ existing }) => {
+    const init = existing
+      ? { name: existing.name || "", address: existing.address || "", notes: existing.notes || "", status: existing.status || "active" }
+      : { name: "", address: "", notes: "", status: "active" };
+    const [f, setF] = useState(init);
+    const [saving, setSaving] = useState(false);
+    const t = existing ? projectTotals(existing, invoices) : { contract: 0, invoiced: 0, paid: 0, remaining: 0, outstanding: 0, leftToInvoice: 0 };
+    const consultants = existing ? projectConsultants(existing, invoices) : [];
+    const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
+    const pct = t.contract > 0 ? Math.min(100, Math.round((t.paid / t.contract) * 100)) : 0;
+    const save = async () => { if (existing) { await updateProject(existing.id, f); } else { await createProject(f); } setModal(null); setEditItem(null); };
+    const openDoc = (inv) => { setEditItem(inv); setModal("invoice"); };
+    const newDoc = (type, contactName) => { setInvoiceSeed({ type, project_id: existing.id, projectName: projectLabel(existing), contact_name: contactName || "" }); setEditItem(null); setModal("invoice"); };
+
+    const Stat = ({ label, value, color }) => (
+      <div style={{ flex: 1, minWidth: 80 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#94a3b8" }}>{label}</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: color || "#0f172a", marginTop: 2 }}>{fmt(value)}</div>
+      </div>
+    );
+
+    const DocRow = ({ d, action }) => (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#fff", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
+        <span style={{ fontWeight: 600, fontSize: 12, cursor: "pointer" }} onClick={() => openDoc(d)}>{d.number}</span>
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>{d.date ? fmtDate(d.date) : ""}</span>
+        <span style={s.badge(statusColors[d.status] || "#64748b")}>{d.status}</span>
+        <span style={{ marginLeft: "auto", fontWeight: 600, fontSize: 12 }}>{fmt(d.total || 0)}</span>
+        {action}
+      </div>
+    );
+
+    return (
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? (projectLabel(existing) || "Project") : "New Project"}</h3>
+          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        </div>
+
+        {existing && (
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <Stat label="Contract" value={t.contract} />
+              <Stat label="Invoiced" value={t.invoiced} color="#3b82f6" />
+              <Stat label="Paid" value={t.paid} color="#10b981" />
+              <Stat label="Remaining" value={t.remaining} color={t.remaining > 0 ? "#0f172a" : "#10b981"} />
+            </div>
+            <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, marginTop: 12, overflow: "hidden" }}>
+              <div style={{ width: `${pct}%`, height: "100%", background: "#10b981" }} />
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>{pct}% paid · {fmt(t.outstanding)} invoiced but unpaid{t.quoted > 0 ? ` · ${fmt(t.quoted)} quoted` : " · no accepted quote (using invoiced)"}</div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Address (shown as the project label)</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="e.g. 10 Mcpherson Road Smeaton Grange NSW" style={s.input} /></div>
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Name / Description</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Construction Certificate - Gym" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="lead">Lead</option><option value="active">Active</option><option value="completed">Completed</option><option value="archived">Archived</option></select></div>
+        </div>
+        <div style={{ marginBottom: 16 }}><label style={s.label}>Notes</label><textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Notes (optional)" style={{ ...s.input, minHeight: 50, resize: "vertical" }} /></div>
+
+        {existing && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <label style={{ ...s.label, margin: 0 }}>Consultants/Clients ({consultants.length})</label>
+              <button onClick={() => newDoc("quote")} style={{ ...s.btn(accent, true), fontSize: 11 }}><Icons.Plus /> New Quote</button>
+            </div>
+            {consultants.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#94a3b8", padding: "8px 0" }}>No quotes or invoices yet. Add a quote per consultant/client — each accepted quote adds to the contract.</div>
+            ) : consultants.map((c) => (
+              <div key={c.name} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>quoted {fmt(c.contract)} · paid {fmt(c.paid)} · <span style={{ fontWeight: 700, color: c.remaining > 0 ? "#0f172a" : "#10b981" }}>{fmt(c.remaining)} left</span></div>
+                </div>
+                {c.quotes.map((q) => (
+                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={() => acceptQuote(q)} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
+                ))}
+                {c.invoices.map((iv) => (
+                  <DocRow key={iv.id} d={iv} action={iv.status !== "paid" ? <button onClick={() => markPaidQuiet(iv)} style={{ ...s.btnOutline, fontSize: 11, color: "#34d399", borderColor: "#34d39940" }}><Icons.Check /> Paid</button> : null} />
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <button onClick={() => newDoc("quote", c.name)} style={{ ...s.btnOutline, fontSize: 11 }}>+ Quote</button>
+                  <button onClick={() => newDoc("invoice", c.name)} style={{ ...s.btnOutline, fontSize: 11 }}>+ Invoice</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button disabled={saving || !(f.name.trim() || (f.address || "").trim())} onClick={async () => { setSaving(true); await save(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving || !(f.name.trim() || (f.address || "").trim()) ? 0.5 : 1 }}>{saving ? "Saving…" : existing ? "Update Project" : "Create Project"}</button>
+        {existing && (
+          <button onClick={() => deleteProject(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", color: "#ef4444", borderColor: "#ef444440", gap: 6, marginTop: 8 }}><Icons.Trash /> Delete Project</button>
+        )}
       </div>
     );
   };
@@ -1345,9 +1728,12 @@ export default function BookkeeperApp() {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
-    const outstanding = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const overdue = invoices.filter((i) => i.status === "overdue").length;
+    const realInvoices = invoices.filter((i) => i.type !== "quote");
+    const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const overdue = realInvoices.filter((i) => i.status === "overdue").length;
     const totalExpenses = txns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
+    const activeProjects = jobs.filter((p) => (p.status || "active") === "active");
+    const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, invoices).remaining, 0);
     const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
 
     return (
@@ -1361,12 +1747,17 @@ export default function BookkeeperApp() {
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Outstanding Invoices</div>
             <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(outstanding)}</div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{invoices.filter((i) => i.status === "sent" || i.status === "overdue").length} unpaid</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").length} unpaid</div>
           </div>
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Revenue Collected</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(invoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + Number(i.total || 0), 0))}</div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{invoices.filter((i) => i.status === "paid").length} paid invoice{invoices.filter((i) => i.status === "paid").length !== 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(realInvoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + Number(i.total || 0), 0))}</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "paid").length} paid invoice{realInvoices.filter((i) => i.status === "paid").length !== 1 ? "s" : ""}</div>
+          </div>
+          <div style={{ ...s.statCard(), cursor: "pointer" }} onClick={() => setPage("projects")}>
+            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Active Projects</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(projectsRemaining)}</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{activeProjects.length} active · remaining</div>
           </div>
         </div>
         <div style={s.card}>
@@ -1467,25 +1858,27 @@ export default function BookkeeperApp() {
     );
   };
 
-  const InvoicesPage = () => {
+  const DocList = ({ docType }) => {
+    const isQuoteList = docType === "quote";
     const [filter, setFilter] = useState("all");
     const [jobFilter, setJobFilter] = useState("");
     const [search, setSearch] = useState("");
-    const sorted = [...invoices].sort((a, b) => b.date.localeCompare(a.date));
+    const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["all", "draft", "sent", "paid", "overdue"];
+    const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((i) => {
       if (filter !== "all" && i.status !== filter) return false;
       if (jobFilter && i.job !== jobFilter) return false;
       if (search && !(i.number || "").toLowerCase().includes(search.toLowerCase()) && !(i.contact_name || "").toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-    const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444" };
+    const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
     return (
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          {["all", "draft", "sent", "paid", "overdue"].map((f) => (
+          {statusTabs.map((f) => (
             <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>
           ))}
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search invoices..." style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={isQuoteList ? "Search quotes..." : "Search invoices..."} style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
           <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180 }}>
             <option value="">All Jobs</option>
             {jobNames.map(j => <option key={j} value={j}>{j}</option>)}
@@ -1493,7 +1886,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No invoices yet</div>
+            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No {isQuoteList ? "quotes" : "invoices"} yet</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -1509,14 +1902,68 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       <button onClick={() => sendInvoice(inv)} title="Open email app + download PDF" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
                       <button onClick={() => createOutlookDraft(inv)} disabled={outlookDraftLoading === inv.id} title="Open in Outlook" style={{ background: "none", border: "none", color: outlookDraftLoading === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookDraftLoading === inv.id ? 0.5 : 1 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Outlook />}</button>
-                      {(inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminder(inv)} title="Send Reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
+                      {!isQuoteList && (inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminderViaResend(inv)} title="Email payment reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      {inv.status !== "paid" && <button onClick={() => markPaid(inv)} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>}
+                      {isQuoteList
+                        ? (inv.status !== "accepted" && inv.status !== "declined" && <button onClick={() => acceptQuote(inv)} title="Accept Quote" style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 2 }}><Icons.Check /></button>)
+                        : (inv.status !== "paid" && <button onClick={() => markPaid(inv)} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>)}
                       <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
                 ))}</tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const InvoicesPage = () => <DocList docType="invoice" />;
+  const QuotesPage = () => <DocList docType="quote" />;
+
+  const ProjectsPage = () => {
+    const [statusFilter, setStatusFilter] = useState("active");
+    const [search, setSearch] = useState("");
+    const rows = jobs
+      .filter((p) => statusFilter === "all" || (p.status || "active") === statusFilter)
+      .filter((p) => !search || (p.name || "").toLowerCase().includes(search.toLowerCase()))
+      .map((p) => ({ p, t: projectTotals(p, invoices), parties: projectConsultants(p, invoices) }))
+      .sort((a, b) => b.t.remaining - a.t.remaining);
+    const consultantsLabel = (parties) => parties.length === 0 ? "—" : parties.length === 1 ? parties[0].name : `${parties.length} consultants/clients`;
+    return (
+      <div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          {["lead", "active", "completed", "archived", "all"].map((sf) => (
+            <button key={sf} onClick={() => setStatusFilter(sf)} style={{ ...s.btnOutline, background: statusFilter === sf ? accent + "20" : "transparent", color: statusFilter === sf ? accent : "#64748b", borderColor: statusFilter === sf ? accent : "#e2e8f0" }}>{sf.charAt(0).toUpperCase() + sf.slice(1)}</button>
+          ))}
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px", marginLeft: "auto" }} />
+        </div>
+        <div style={s.card}>
+          {rows.length === 0 ? (
+            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No projects yet</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}>
+                <thead><tr><th style={s.th}>Project</th><th style={s.th}>Consultants/Clients</th><th style={{ ...s.th, textAlign: "right" }}>Contract</th><th style={{ ...s.th, textAlign: "right" }}>Invoiced</th><th style={{ ...s.th, textAlign: "right" }}>Paid</th><th style={{ ...s.th, textAlign: "right" }}>Remaining</th><th style={{ ...s.th, width: 120 }}>Progress</th></tr></thead>
+                <tbody>{rows.map(({ p, t, parties }) => {
+                  const pct = t.contract > 0 ? Math.min(100, Math.round((t.paid / t.contract) * 100)) : 0;
+                  return (
+                    <tr key={p.id} onClick={() => { setEditItem(p); setModal("project"); }} style={{ cursor: "pointer" }}>
+                      <td style={{ ...s.td, fontWeight: 600 }}>{projectLabel(p)}{p.address && p.name && p.name !== projectLabel(p) ? <div style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>{p.name}</div> : null}</td>
+                      <td style={{ ...s.td, color: "#64748b", fontSize: 12 }}>{consultantsLabel(parties)}</td>
+                      <td style={{ ...s.td, textAlign: "right" }}>{fmt(t.contract)}</td>
+                      <td style={{ ...s.td, textAlign: "right", color: "#3b82f6" }}>{fmt(t.invoiced)}</td>
+                      <td style={{ ...s.td, textAlign: "right", color: "#10b981" }}>{fmt(t.paid)}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 700 }}>{fmt(t.remaining)}</td>
+                      <td style={s.td}>
+                        <div style={{ height: 6, background: "#e2e8f0", borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: "#10b981" }} /></div>
+                        <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{pct}% paid</div>
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
               </table>
             </div>
           )}
@@ -1690,7 +2137,7 @@ export default function BookkeeperApp() {
           </button>
         )}
         {page !== "dashboard" && page !== "reimbursements" && (
-          <button onClick={() => { if (page === "expenses") setModal("expense"); else if (page === "invoices") { setEditItem(null); setModal("invoice"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+          <button onClick={() => { if (page === "expenses") setModal("expense"); else if (page === "quotes") { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Plus />
           </button>
         )}
@@ -1739,7 +2186,7 @@ export default function BookkeeperApp() {
   );
 
   const statusBadge = (status) => {
-    const map = { paid: { color: "#34d399", label: "Paid" }, sent: { color: "#3b82f6", label: "Sent" }, draft: { color: "#64748b", label: "Draft" }, overdue: { color: "#ef4444", label: "Overdue" } };
+    const map = { paid: { color: "#34d399", label: "Paid" }, sent: { color: "#3b82f6", label: "Sent" }, draft: { color: "#64748b", label: "Draft" }, overdue: { color: "#ef4444", label: "Overdue" }, accepted: { color: "#34d399", label: "Accepted" }, declined: { color: "#64748b", label: "Declined" } };
     return map[status] || map.draft;
   };
 
@@ -1747,7 +2194,8 @@ export default function BookkeeperApp() {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
-    const outstanding = invoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const realInvoices = invoices.filter((i) => i.type !== "quote");
+    const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
     const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
     return (
       <div style={{ paddingBottom: 20 }}>
@@ -1760,7 +2208,7 @@ export default function BookkeeperApp() {
           <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Outstanding</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(outstanding)}</div>
-            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{invoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices</div>
+            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices</div>
           </div>
         </div>
         <MobileSection title="Recent Expenses" onViewAll={() => setPage("expenses")}>
@@ -1769,8 +2217,8 @@ export default function BookkeeperApp() {
           ))}
         </MobileSection>
         <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
-          {invoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : invoices.slice(0, 3).map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, invoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+          {realInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : realInvoices.slice(0, 3).map((inv, i) => (
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, realInvoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
           ))}
         </MobileSection>
         {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
@@ -1814,18 +2262,42 @@ export default function BookkeeperApp() {
     );
   };
 
-  const MobileInvoices = () => {
+  const MobileDocs = ({ docType }) => {
+    const isQuoteList = docType === "quote";
     const [tab, setTab] = useState("All");
-    const sorted = [...invoices].sort((a, b) => b.date.localeCompare(a.date));
+    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["All", "Draft", "Sent", "Paid", "Overdue"];
+    const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((inv) => tab === "All" || inv.status === tab.toLowerCase());
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ paddingTop: 8, paddingBottom: 12 }}>
-          <MobileFilterTabs tabs={["All", "Draft", "Sent", "Paid", "Overdue"]} active={tab} onChange={setTab} />
+          <MobileFilterTabs tabs={tabs} active={tab} onChange={setTab} />
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices found</div> : filtered.map((inv, i) => (
+          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found</div> : filtered.map((inv, i) => (
             <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+          ))}
+        </div>
+      </div>
+    );
+  };
+  const MobileInvoices = () => <MobileDocs docType="invoice" />;
+  const MobileQuotes = () => <MobileDocs docType="quote" />;
+
+  const MobileProjects = () => {
+    const [tab, setTab] = useState("Active");
+    const rows = jobs
+      .filter((p) => tab === "All" || (p.status || "active") === tab.toLowerCase())
+      .map((p) => ({ p, t: projectTotals(p, invoices) }))
+      .sort((a, b) => b.t.remaining - a.t.remaining);
+    return (
+      <div style={{ paddingBottom: 20 }}>
+        <div style={{ paddingTop: 8, paddingBottom: 12 }}>
+          <MobileFilterTabs tabs={["Lead", "Active", "Completed", "Archived", "All"]} active={tab} onChange={setTab} />
+        </div>
+        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+          {rows.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No projects found</div> : rows.map(({ p, t }, i) => (
+            <MobileRow key={p.id} primary={projectLabel(p)} secondary={`${fmt(t.paid)} paid of ${fmt(t.contract)}`} right={fmt(t.remaining)} rightSub="remaining" isLast={i === rows.length - 1} onClick={() => { setEditItem(p); setModal("project"); }} />
           ))}
         </div>
       </div>
@@ -1895,14 +2367,16 @@ export default function BookkeeperApp() {
         {page === "dashboard" && <MobileDashboard />}
         {page === "expenses" && <MobileExpenses />}
         {page === "reimbursements" && <MobileReimbursements />}
+        {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
+        {page === "projects" && <MobileProjects />}
         {page === "contacts" && <MobileContacts />}
       </div>
       <MobileTabBar />
     </div>
   );
 
-  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reimbursements: ReimbursementsPage, invoices: InvoicesPage, contacts: ContactsPage };
+  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   const SidebarContent = () => (
@@ -1930,11 +2404,12 @@ export default function BookkeeperApp() {
       <>
         <MobileLayout />
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); } }}>
+          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
             <div style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
+              {modal === "project" && <ProjectForm existing={editItem} />}
               {modal === "receipt" && <ReceiptCapture />}
               {modal === "settings" && <BusinessSettings />}
             </div>
@@ -1959,18 +2434,21 @@ export default function BookkeeperApp() {
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button onClick={() => setModal("receipt")} style={s.btn("#8b5cf6", true)}><Icons.Camera /> Receipt</button>
               {(page === "expenses" || page === "dashboard" || page === "reimbursements") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
-              {page === "invoices" && <button onClick={() => { setEditItem(null); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
+              {page === "quotes" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
+              {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
+              {page === "projects" && <button onClick={() => { setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
             </div>
           </div>
           <div style={s.content}><PageComponent /></div>
         </div>
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) { if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); } }}>
+          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
             <div style={s.modalContent}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
+              {modal === "project" && <ProjectForm existing={editItem} />}
               {modal === "receipt" && <ReceiptCapture />}
               {modal === "settings" && <BusinessSettings />}
             </div>
