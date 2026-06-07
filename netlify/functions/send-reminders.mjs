@@ -59,6 +59,11 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// First word of a name, for friendly greetings ("Hi John,").
+function firstName(n) {
+  return String(n ?? "").trim().split(/\s+/)[0] || "";
+}
+
 // --- Business-local date logic (item 4) ---------------------------------------
 // Use the business timezone, not UTC, so reminders fire on the right calendar
 // day around midnight. en-CA formats as YYYY-MM-DD.
@@ -190,7 +195,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
         </div>
 
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 4px">
-          Hi ${esc(inv.contact_name || "there")},
+          Hi ${esc(firstName(inv.contact_name) || "there")},
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 24px">
           This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> ${daysOverdue > 0 ? `was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago)` : `is due on <strong>${fmtDate(inv.due_date)}</strong>`}. We'd appreciate prompt payment at your earliest convenience.
