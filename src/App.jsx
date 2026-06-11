@@ -473,10 +473,14 @@ export default function BookkeeperApp() {
     setEmailConn(eRes.data || null);
     setLoading(false);
 
-    // Mark overdue invoices server-side
+    // Mark overdue invoices server-side. Scope to type "invoice" only — quotes share
+    // this table with status "sent" and a 30-day "valid until" due_date, so without
+    // this filter every quote flips to "overdue" (a status absent from the quote tabs)
+    // 30 days after it's sent and disappears from the UI.
     await supabase.from("bk_invoices")
       .update({ status: "overdue" })
       .eq("business_id", businessId)
+      .eq("type", "invoice")
       .eq("status", "sent")
       .lt("due_date", today());
     // Refresh invoices if any were updated
@@ -532,6 +536,22 @@ export default function BookkeeperApp() {
 
   // --- Mutation functions: each writes directly to its table ---
 
+  // Centralized write helper. supabase-js NEVER throws on a query error — it
+  // resolves to { data, error } — so a mutation whose `error` is left unchecked
+  // looks like a success even when the row was rejected (RLS, constraint, network)
+  // and the user's record silently vanishes. Route inserts/updates/deletes through
+  // this: it surfaces the failure to the user and returns { ok } so callers can
+  // bail before closing the modal or optimistically mutating local state.
+  const sbWrite = async (query, action = "save") => {
+    const { data, error } = await query;
+    if (error) {
+      console.error(`Supabase ${action} failed:`, error);
+      alert(`Failed to ${action}: ${error.message || "unknown error"}`);
+      return { ok: false, data: null, error };
+    }
+    return { ok: true, data, error: null };
+  };
+
   const openReceipt = async (t) => {
     if (!t?.receipt_path) { alert("No receipt attached to this expense."); return; }
     const { data, error } = await supabase.storage.from("receipts").createSignedUrl(t.receipt_path, 600);
@@ -545,7 +565,8 @@ export default function BookkeeperApp() {
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
     const row = { user_id: session.user.id, business_id: biz, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure", ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
-    const { data: inserted } = await supabase.from("bk_transactions").insert(row).select().single();
+    const { ok, data: inserted } = await sbWrite(supabase.from("bk_transactions").insert(row).select().single(), "save expense");
+    if (!ok) return;
     if (inserted) {
       if (inserted.receipt_path) {
         const ext = (inserted.receipt_path.split(".").pop() || "jpg").toLowerCase();
@@ -569,7 +590,8 @@ export default function BookkeeperApp() {
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
     const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status || "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure" };
-    const { data: updated } = await supabase.from("bk_transactions").update(row).eq("id", id).select().single();
+    const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update expense");
+    if (!ok) return;
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
     setModal(null);
     setEditItem(null);
@@ -577,7 +599,8 @@ export default function BookkeeperApp() {
 
   const deleteTransaction = async (id) => {
     if (!window.confirm("Delete this expense? This cannot be undone.")) return;
-    await supabase.from("bk_transactions").delete().eq("id", id);
+    const { ok } = await sbWrite(supabase.from("bk_transactions").delete().eq("id", id), "delete expense");
+    if (!ok) return;
     setTxns((prev) => prev.filter((t) => t.id !== id));
     setModal(null);
     setEditItem(null);
@@ -585,13 +608,15 @@ export default function BookkeeperApp() {
 
   const markReimbursed = async (id, { status, date, amount, reference }) => {
     const row = { reimbursement_status: status, reimbursement_date: date || null, reimbursement_amount: amount != null ? Number(amount) : null, reimbursement_reference: reference || null };
-    const { data: updated } = await supabase.from("bk_transactions").update(row).eq("id", id).select().single();
+    const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update reimbursement");
+    if (!ok) return;
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
   };
 
   const addContact = async (c, keepModal) => {
     const row = { user_id: session.user.id, business_id: biz, name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
-    const { data: inserted } = await supabase.from("bk_contacts").insert(row).select().single();
+    const { ok, data: inserted } = await sbWrite(supabase.from("bk_contacts").insert(row).select().single(), "save contact");
+    if (!ok) return null;
     if (inserted) setContacts((prev) => [...prev, inserted].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
     if (!keepModal) setModal(null);
     return inserted;
@@ -599,7 +624,8 @@ export default function BookkeeperApp() {
 
   const updateContact = async (id, c) => {
     const row = { name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
-    const { data: updated } = await supabase.from("bk_contacts").update(row).eq("id", id).select().single();
+    const { ok, data: updated } = await sbWrite(supabase.from("bk_contacts").update(row).eq("id", id).select().single(), "update contact");
+    if (!ok) return;
     if (updated) setContacts((prev) => prev.map((x) => (x.id === id ? updated : x)).sort((a, b) => (a.name || "").localeCompare(b.name || "")));
     setModal(null);
     setEditItem(null);
@@ -607,7 +633,8 @@ export default function BookkeeperApp() {
 
   const deleteContact = async (id) => {
     if (!window.confirm("Delete this contact? This cannot be undone.")) return;
-    await supabase.from("bk_contacts").delete().eq("id", id);
+    const { ok } = await sbWrite(supabase.from("bk_contacts").delete().eq("id", id), "delete contact");
+    if (!ok) return;
     setContacts((prev) => prev.filter((c) => c.id !== id));
     setModal(null);
     setEditItem(null);
@@ -616,12 +643,14 @@ export default function BookkeeperApp() {
   const addInvoice = async (inv) => {
     const items = inv.items || [];
     const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
-    const { data: inserted } = await supabase.from("bk_invoices").insert(row).select().single();
+    const { ok, data: inserted } = await sbWrite(supabase.from("bk_invoices").insert(row).select().single(), "save invoice");
+    if (!ok) return;
     if (inserted) {
       if (items.length) {
         const itemRows = items.map((it, idx) => ({ invoice_id: inserted.id, description: it.description, note: it.note, qty: Number(it.qty) || 1, rate: Number(it.rate) || 0, sort_order: idx }));
-        const { data: insertedItems } = await supabase.from("bk_invoice_items").insert(itemRows).select();
-        inserted.items = insertedItems || [];
+        const itemsRes = await sbWrite(supabase.from("bk_invoice_items").insert(itemRows).select(), "save invoice items");
+        if (!itemsRes.ok) return;
+        inserted.items = itemsRes.data || [];
       } else {
         inserted.items = [];
       }
@@ -640,14 +669,28 @@ export default function BookkeeperApp() {
     if ("date" in dbUpdates) dbUpdates.date = dbUpdates.date || null;
     if ("due_date" in dbUpdates) dbUpdates.due_date = dbUpdates.due_date || null;
     if ("paid_date" in dbUpdates) dbUpdates.paid_date = dbUpdates.paid_date || null;
+    // project_id is a uuid column; the form sends "" for "No project". Postgres
+    // rejects "" as a uuid, so coalesce to null (matches addInvoice).
+    if ("project_id" in dbUpdates) dbUpdates.project_id = dbUpdates.project_id || null;
     const items = updates.items;
-    const { error: updErr } = await supabase.from("bk_invoices").update(dbUpdates).eq("id", id);
-    if (updErr) { alert("Failed to save invoice: " + updErr.message); return; }
+    const { ok: updOk } = await sbWrite(supabase.from("bk_invoices").update(dbUpdates).eq("id", id), "save invoice");
+    if (!updOk) return;
     if (items) {
-      await supabase.from("bk_invoice_items").delete().eq("invoice_id", id);
+      // Insert the replacement items FIRST, then delete the rows that aren't part of
+      // the new set. The old delete-then-insert lost every line item permanently if
+      // the insert failed (no transaction, neither error checked). Insert-first means
+      // a failed insert aborts before anything is destroyed.
       const itemRows = items.map((it, idx) => ({ invoice_id: id, description: it.description, note: it.note, qty: Number(it.qty) || 1, rate: Number(it.rate) || 0, sort_order: idx }));
-      const { data: newItems } = await supabase.from("bk_invoice_items").insert(itemRows).select();
-      setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates, items: newItems || [] } : i)));
+      const insRes = await sbWrite(supabase.from("bk_invoice_items").insert(itemRows).select(), "save invoice items");
+      if (!insRes.ok) return;
+      const newItems = insRes.data || [];
+      const newIds = newItems.map((it) => it.id);
+      const delQuery = newIds.length
+        ? supabase.from("bk_invoice_items").delete().eq("invoice_id", id).not("id", "in", `(${newIds.join(",")})`)
+        : supabase.from("bk_invoice_items").delete().eq("invoice_id", id);
+      const delRes = await sbWrite(delQuery, "update invoice items");
+      if (!delRes.ok) return;
+      setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates, items: newItems } : i)));
     } else {
       setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates } : i)));
     }
@@ -659,7 +702,8 @@ export default function BookkeeperApp() {
 
   const deleteInvoice = async (id) => {
     if (!window.confirm("Delete this invoice? This cannot be undone.")) return;
-    await supabase.from("bk_invoices").delete().eq("id", id);
+    const { ok } = await sbWrite(supabase.from("bk_invoices").delete().eq("id", id), "delete invoice");
+    if (!ok) return;
     setInvoices((prev) => prev.filter((i) => i.id !== id));
     setModal(null);
     setEditItem(null);
@@ -689,7 +733,8 @@ export default function BookkeeperApp() {
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
     const row = { user_id: session.user.id, business_id: biz, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active" };
-    const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
+    const { ok, data: inserted } = await sbWrite(supabase.from("bk_jobs").insert(row).select().single(), "create project");
+    if (!ok) return null;
     if (inserted) setJobs((prev) => [inserted, ...prev]);
     return inserted;
   };
@@ -703,7 +748,8 @@ export default function BookkeeperApp() {
     if ("contract_value" in p) row.contract_value = Number(p.contract_value) || 0;
     if ("status" in p) row.status = p.status;
     if ("accepted_quote_id" in p) row.accepted_quote_id = p.accepted_quote_id;
-    const { data: updated } = await supabase.from("bk_jobs").update(row).eq("id", id).select().single();
+    const { ok, data: updated } = await sbWrite(supabase.from("bk_jobs").update(row).eq("id", id).select().single(), "update project");
+    if (!ok) return null;
     if (updated) setJobs((prev) => prev.map((j) => (j.id === id ? updated : j)));
     return updated;
   };
@@ -720,7 +766,8 @@ export default function BookkeeperApp() {
     }
     if (!projectId) return null;
     const invUpd = { status: "accepted", project_id: projectId, job: projectLabel(project) };
-    await supabase.from("bk_invoices").update(invUpd).eq("id", quote.id);
+    const { ok } = await sbWrite(supabase.from("bk_invoices").update(invUpd).eq("id", quote.id), "accept quote");
+    if (!ok) return null;
     setInvoices((prev) => prev.map((i) => (i.id === quote.id ? { ...i, ...invUpd } : i)));
     // A signed-up job is no longer a lead.
     if ((project.status || "active") === "lead") { await updateProject(projectId, { status: "active" }); return { ...project, status: "active" }; }
@@ -729,7 +776,8 @@ export default function BookkeeperApp() {
 
   const deleteProject = async (id) => {
     if (!window.confirm("Delete this project? Linked quotes and invoices will be kept but unlinked. This cannot be undone.")) return;
-    await supabase.from("bk_jobs").delete().eq("id", id);
+    const { ok } = await sbWrite(supabase.from("bk_jobs").delete().eq("id", id), "delete project");
+    if (!ok) return;
     setJobs((prev) => prev.filter((j) => j.id !== id));
     setInvoices((prev) => prev.map((i) => (i.project_id === id ? { ...i, project_id: null } : i)));
     setModal(null);
@@ -738,7 +786,8 @@ export default function BookkeeperApp() {
 
   const saveProfile = async (p) => {
     const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "" };
-    const { data: saved } = await supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single();
+    const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
+    if (!ok) return;
     if (saved) setProfile(saved);
     setModal(null);
   };
@@ -923,7 +972,8 @@ export default function BookkeeperApp() {
   // Mark paid without closing the current modal (used inside the Project modal).
   const markPaidQuiet = async (inv) => {
     const upd = { status: "paid", paid_date: today() };
-    await supabase.from("bk_invoices").update(upd).eq("id", inv.id);
+    const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark paid");
+    if (!ok) return;
     setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
   };
 
@@ -947,7 +997,8 @@ export default function BookkeeperApp() {
 
   const disconnectOutlook = async () => {
     if (!emailConn?.id) return;
-    await supabase.from("bk_email_connections").delete().eq("id", emailConn.id);
+    const { ok } = await sbWrite(supabase.from("bk_email_connections").delete().eq("id", emailConn.id), "disconnect Outlook");
+    if (!ok) return;
     setEmailConn(null);
   };
 

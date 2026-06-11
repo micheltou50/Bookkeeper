@@ -38,7 +38,37 @@ create policy bk_profiles_owner on public.bk_profiles
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
--- Contacts / transactions / jobs follow the same pattern; uncomment if needed.
--- alter table public.bk_contacts     enable row level security;
--- alter table public.bk_transactions enable row level security;
--- alter table public.bk_jobs         enable row level security;
+-- Contacts / transactions / jobs follow the same owner pattern.
+--
+-- These mirror the per-user policies already live on the BookKeeper Supabase
+-- project (each row carries a `user_id` equal to auth.uid()). They are written
+-- idempotently (drop-if-exists then create) so applying this file against the
+-- live DB is a safe no-op and a clean re-deploy reproduces the live state instead
+-- of leaving these tables without RLS.
+
+-- Contacts ------------------------------------------------------------------
+alter table public.bk_contacts enable row level security;
+
+drop policy if exists bk_contacts_owner on public.bk_contacts;
+create policy bk_contacts_owner on public.bk_contacts
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- Transactions --------------------------------------------------------------
+alter table public.bk_transactions enable row level security;
+
+drop policy if exists bk_transactions_owner on public.bk_transactions;
+create policy bk_transactions_owner on public.bk_transactions
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- Jobs ----------------------------------------------------------------------
+alter table public.bk_jobs enable row level security;
+
+drop policy if exists bk_jobs_owner on public.bk_jobs;
+create policy bk_jobs_owner on public.bk_jobs
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
