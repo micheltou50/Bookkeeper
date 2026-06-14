@@ -1,2 +1,71 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { overflow: hidden; background: #f7f9f8; }
+
+:root {
+  --bk-accent: #10b981;
+  --bk-accent-dark: #059669;
+  --bk-ring: rgba(16, 185, 129, 0.18);
+  --bk-bg: #f7f9f8;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body { overflow: hidden; background: var(--bk-bg); }
+
+/* Currency/number alignment: tabular figures so digits line up in columns. */
+table, input, .bk-num { font-variant-numeric: tabular-nums; }
+
+/* Consistent micro-interactions. `transition` is never set inline, so these
+   apply everywhere without fighting React inline styles. */
+button, input, select, textarea, a, [role="button"] {
+  transition: background-color .15s ease, border-color .15s ease,
+              box-shadow .15s ease, transform .12s ease,
+              filter .15s ease, opacity .15s ease, color .15s ease;
+}
+
+/* Buttons feel alive: brighten on hover, press down on click.
+   filter/transform aren't set inline, so CSS wins cleanly. */
+button:not(:disabled) { cursor: pointer; }
+button:not(:disabled):hover { filter: brightness(1.06) saturate(1.02); }
+button:not(:disabled):active { transform: translateY(1px); }
+
+/* Keyboard focus rings — accessibility + polish. box-shadow/outline are not
+   set inline on inputs or buttons, so these land cleanly. */
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  border-color: var(--bk-accent) !important;
+  box-shadow: 0 0 0 3px var(--bk-ring);
+}
+button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--bk-ring); }
+
+/* Quiet row hover for scannable tables. */
+tbody tr { transition: background-color .12s ease; }
+tbody tr:hover { background: #f8fafc; }
+
+/* Refined, unobtrusive scrollbars (Chromium/WebKit). */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d2dad7; border-radius: 10px; border: 2px solid var(--bk-bg); }
+::-webkit-scrollbar-thumb:hover { background: #aebab5; }
+
+/* Modal motion: overlay fades, panel rises (classes added in JSX). */
+.bk-overlay { animation: bk-fade .16s ease both; }
+.bk-modal { animation: bk-rise .22s cubic-bezier(.16, .84, .44, 1) both; }
+@keyframes bk-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes bk-rise {
+  from { opacity: 0; transform: translateY(10px) scale(.985) }
+  to   { opacity: 1; transform: none }
+}
+
+/* Cards that opt into a hover lift (clickable cards). */
+.bk-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px -10px rgba(16, 24, 40, .18) !important;
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}

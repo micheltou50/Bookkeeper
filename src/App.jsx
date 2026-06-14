@@ -53,6 +53,20 @@ const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit",
 const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
 const today = () => new Date().toISOString().split("T")[0];
 
+// Big KPI money, MYOB-style: dollars bold, the cents de-emphasised so the eye
+// lands on the figure that matters. Falls back gracefully if there's no ".dd".
+function MoneyBig({ value, color = "#0f172a", size = 30 }) {
+  const str = fmt(Number(value) || 0);
+  const m = str.match(/^(.*?)(\.\d{2})$/);
+  const main = m ? m[1] : str;
+  const cents = m ? m[2] : "";
+  return (
+    <span className="bk-num" style={{ fontSize: size, fontWeight: 700, color, letterSpacing: "-0.02em", lineHeight: 1.05, whiteSpace: "nowrap" }}>
+      {main}{cents && <span style={{ fontSize: Math.round(size * 0.58), fontWeight: 600, color: "#94a3b8" }}>{cents}</span>}
+    </span>
+  );
+}
+
 const PAYMENT_SOURCES = [
   { value: "business", label: "Business account" },
   { value: "personal_reimburse", label: "Personal account — reimburse owner" },
@@ -215,17 +229,17 @@ function LoginScreen() {
     }
   };
 
-  const inputStyle = { width: "100%", padding: "12px 16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, color: "#0f172a", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
+  const inputStyle = { width: "100%", padding: "12px 16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, color: "#0f172a", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif", padding: 20 }}>
-      <div style={{ background: "#ffffff", borderRadius: 16, border: "1px solid #e2e8f0", padding: 40, width: "100%", maxWidth: 400, textAlign: "center", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.06)" }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "radial-gradient(120% 120% at 50% 0%, #ecfdf5 0%, #f7f9f8 46%)", fontFamily: "'DM Sans', system-ui, sans-serif", padding: 20 }}>
+      <div style={{ background: "#ffffff", borderRadius: 20, border: "1px solid #eef1f0", padding: 40, width: "100%", maxWidth: 400, textAlign: "center", boxShadow: "0 24px 50px -16px rgba(16,24,40,0.18), 0 2px 6px rgba(16,24,40,0.05)" }}>
         <div style={{ fontSize: 28, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
         <div style={{ fontSize: 12, color: "#10b981", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && email && password && handleSubmit()} style={inputStyle} />
         {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{error}</div>}
-        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "12px", background: "#10b981", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 12 }}>
+        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "13px", background: "linear-gradient(180deg, #10b981 0%, #059669 100%)", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 12, boxShadow: "0 6px 16px -6px rgba(16,185,129,0.6)" }}>
           {loading ? "..." : isSignUp ? "Sign Up" : "Sign In"}
         </button>
         <button onClick={() => { setIsSignUp(!isSignUp); setError(""); }} style={{ background: "none", border: "none", color: "#64748b", fontSize: 12, cursor: "pointer" }}>
@@ -924,9 +938,11 @@ export default function BookkeeperApp() {
       if (!resp.ok) throw new Error(result.error || "Draft creation failed");
       if (result.webLink && !isMobile) window.open(result.webLink, "_blank");
       alert("Draft created in Outlook with PDF attached. Open Outlook to review and send.");
+      return true;
     } catch (err) {
       console.error("Outlook draft error:", err);
       alert("Failed to create Outlook draft: " + err.message);
+      return false;
     } finally {
       setOutlookDraftLoading(null);
     }
@@ -967,6 +983,20 @@ export default function BookkeeperApp() {
 
   const markPaid = (inv) => {
     updateInvoice(inv.id, { status: "paid", paid_date: today() });
+  };
+
+  // Close the draft→sent loop after a document is emailed: offer to flip a still
+  // "draft" doc to "sent" so overdue tracking + automatic reminders kick in. We ask
+  // (rather than auto-set) because an email send can't be confirmed programmatically.
+  const offerMarkSent = async (inv) => {
+    if (!inv || inv.status !== "draft") return false;
+    const isInvoice = inv.type !== "quote";
+    const msg = isInvoice
+      ? `Mark invoice ${inv.number} as Sent?\n\nThis starts due-date tracking and enables the automatic payment reminders.`
+      : `Mark quote ${inv.number} as Sent?`;
+    if (!window.confirm(msg)) return false;
+    await updateInvoice(inv.id, { status: "sent" });
+    return true;
   };
 
   // Mark paid without closing the current modal (used inside the Project modal).
@@ -1031,18 +1061,18 @@ export default function BookkeeperApp() {
     main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 },
     header: { padding: "12px 16px", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#ffffff", gap: 8, flexWrap: "wrap" },
     content: { flex: 1, padding: "16px", overflowY: "auto" },
-    card: { background: "#ffffff", borderRadius: 10, border: "1px solid #e2e8f0", padding: "16px", marginBottom: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" },
-    statCard: () => ({ background: "#ffffff", borderRadius: 10, border: "1px solid #e2e8f0", padding: "20px 24px", minWidth: 0, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }),
-    btn: (bg, small) => ({ padding: small ? "6px 12px" : "8px 16px", background: bg || accent, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: small ? 11 : 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }),
-    btnOutline: { padding: "6px 12px", background: "transparent", color: "#64748b", border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 500 },
+    card: { background: "#ffffff", borderRadius: 14, border: "1px solid #eef1f0", padding: "16px", marginBottom: 12, boxShadow: "0 1px 2px rgba(16,24,40,0.04), 0 6px 16px -8px rgba(16,24,40,0.08)" },
+    statCard: () => ({ background: "#ffffff", borderRadius: 14, border: "1px solid #eef1f0", padding: "20px 24px", minWidth: 0, boxShadow: "0 1px 2px rgba(16,24,40,0.04), 0 6px 16px -8px rgba(16,24,40,0.08)" }),
+    btn: (bg, small) => ({ padding: small ? "7px 14px" : "9px 18px", background: bg || accent, color: "#fff", border: "none", borderRadius: 9, cursor: "pointer", fontSize: small ? 11 : 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", boxShadow: "0 1px 2px rgba(16,24,40,0.10)" }),
+    btnOutline: { padding: "7px 14px", background: "#ffffff", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 9, cursor: "pointer", fontSize: 11, fontWeight: 600 },
     table: { width: "100%", borderCollapse: "collapse" },
     th: { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#94a3b8", borderBottom: "1px solid #e2e8f0" },
     td: { padding: "8px 10px", borderBottom: "1px solid #f1f5f9", fontSize: 13 },
-    input: { width: "100%", padding: "8px 12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 6, color: "#0f172a", fontSize: 13, outline: "none", boxSizing: "border-box" },
-    select: { width: "100%", padding: "8px 12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 6, color: "#0f172a", fontSize: 13, outline: "none", boxSizing: "border-box" },
+    input: { width: "100%", padding: "9px 12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 9, color: "#0f172a", fontSize: 13, outline: "none", boxSizing: "border-box" },
+    select: { width: "100%", padding: "9px 12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 9, color: "#0f172a", fontSize: 13, outline: "none", boxSizing: "border-box" },
     label: { display: "block", fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" },
-    modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
-    modalContent: { background: "#ffffff", borderRadius: 12, border: "1px solid #e2e8f0", width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "auto", padding: "20px" },
+    modalOverlay: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.38)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
+    modalContent: { background: "#ffffff", borderRadius: 16, border: "1px solid #eef1f0", width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "auto", padding: "20px", boxShadow: "0 24px 50px -12px rgba(16,24,40,0.32)" },
     badge: (color) => ({ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, background: badgeBg[color] || color + "15", color: badgeTx[color] || color }),
     grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   };
@@ -1334,7 +1364,7 @@ export default function BookkeeperApp() {
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(invoices, profile, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: "itemised", lump_amount: "", items: [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
+      : { number: getNextDocumentNumber(invoices, profile, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
     const [notesEdited, setNotesEdited] = useState(!!existing);
@@ -1367,6 +1397,28 @@ export default function BookkeeperApp() {
     const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
     const sortedJobs = [...jobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
     const saveInv = async () => { const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); };
+
+    // One-click quote → invoice (MYOB's headline action). Persists any quote edits,
+    // marks the quote Accepted + linked to a project (keeping contract tracking
+    // coherent), then opens a fresh draft invoice pre-filled with the same line
+    // items, contact and project. The quote is preserved.
+    const convertToInvoice = async () => {
+      if (!window.confirm(`Convert quote ${f.number} to an invoice?\n\nThe quote is marked Accepted, and a new draft invoice opens — pre-filled with these line items and linked to the same project.`)) return;
+      const itemsForLump = [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }];
+      await updateInvoice(existing.id, { ...f, total, items: isLump ? itemsForLump : f.items });
+      const proj = await acceptQuote({ ...existing, ...f, total });
+      setInvoiceSeed({
+        type: "invoice",
+        contact_name: f.contact_name,
+        project_id: proj?.id || f.project_id || "",
+        projectName: proj ? projectLabel(proj) : f.job,
+        pricing_mode: f.pricing_mode || "itemised",
+        lump_amount: isLump ? String(total) : "",
+        items: isLump ? itemsForLump : f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
+      });
+      setEditItem(null);
+      setModal("invoice");
+    };
 
     return (
       <div>
@@ -1483,10 +1535,10 @@ export default function BookkeeperApp() {
         <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
         {existing && (<>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
+            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); await offerMarkSent({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
               <Icons.Send /> Open Email + PDF
             </button>
-            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); await createOutlookDraft({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
+            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); const ok = await createOutlookDraft({ ...existing, ...inv }); if (ok) await offerMarkSent({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
               <Icons.Outlook /> {outlookDraftLoading === existing.id ? "Creating…" : "Open in Outlook"}
             </button>
           </div>
@@ -1500,10 +1552,15 @@ export default function BookkeeperApp() {
               </button>
             )}
           </div>
-          {f.type === "quote" && existing.status !== "accepted" && (
+          {f.type === "quote" && (
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) alert(`Quote accepted and added to project "${proj.name}".`); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
-                <Icons.Check /> Accept Quote
+              {existing.status !== "accepted" && (
+                <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) alert(`Quote accepted and added to project "${proj.name}".`); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
+                  <Icons.Check /> Accept Quote
+                </button>
+              )}
+              <button onClick={convertToInvoice} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", gap: 6 }}>
+                <Icons.Invoices /> Convert to Invoice
               </button>
             </div>
           )}
@@ -1798,22 +1855,22 @@ export default function BookkeeperApp() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expenses This Month</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(expense)}</div>
+            <div style={{ marginTop: 8 }}><MoneyBig value={expense} /></div>
             <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense").length} transactions</div>
           </div>
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Outstanding Invoices</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(outstanding)}</div>
+            <div style={{ marginTop: 8 }}><MoneyBig value={outstanding} /></div>
             <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").length} unpaid</div>
           </div>
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Revenue Collected</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(realInvoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + Number(i.total || 0), 0))}</div>
+            <div style={{ marginTop: 8 }}><MoneyBig value={realInvoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + Number(i.total || 0), 0)} /></div>
             <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "paid").length} paid invoice{realInvoices.filter((i) => i.status === "paid").length !== 1 ? "s" : ""}</div>
           </div>
-          <div style={{ ...s.statCard(), cursor: "pointer" }} onClick={() => setPage("projects")}>
+          <div className="bk-card-hover" style={{ ...s.statCard(), cursor: "pointer" }} onClick={() => setPage("projects")}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Active Projects</div>
-            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(projectsRemaining)}</div>
+            <div style={{ marginTop: 8 }}><MoneyBig value={projectsRemaining} /></div>
             <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{activeProjects.length} active · remaining</div>
           </div>
         </div>
@@ -1840,7 +1897,7 @@ export default function BookkeeperApp() {
           )}
         </div>
         {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
-          <div style={{ ...s.card, cursor: "pointer", borderColor: "#fde68a", background: "#fffef5" }} onClick={() => setPage("reimbursements")}>
+          <div className="bk-card-hover" style={{ ...s.card, cursor: "pointer", borderColor: "#fde68a", background: "#fffef5" }} onClick={() => setPage("reimbursements")}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#92400e" }}>Owner Reimbursements</h4>
@@ -1958,7 +2015,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       <button onClick={() => sendInvoice(inv)} title="Open email app + download PDF" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
-                      <button onClick={() => createOutlookDraft(inv)} disabled={outlookDraftLoading === inv.id} title="Open in Outlook" style={{ background: "none", border: "none", color: outlookDraftLoading === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookDraftLoading === inv.id ? 0.5 : 1 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Outlook />}</button>
+                      <button onClick={async () => { const ok = await createOutlookDraft(inv); if (ok) await offerMarkSent(inv); }} disabled={outlookDraftLoading === inv.id} title="Open in Outlook" style={{ background: "none", border: "none", color: outlookDraftLoading === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookDraftLoading === inv.id ? 0.5 : 1 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Outlook />}</button>
                       {!isQuoteList && (inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminderViaResend(inv)} title="Email payment reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
                       <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
                       <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
@@ -2259,12 +2316,12 @@ export default function BookkeeperApp() {
         <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
           <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>This Month</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(expense)}</div>
+            <div style={{ marginTop: 4 }}><MoneyBig value={expense} size={22} /></div>
             <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense").length} expenses</div>
           </div>
           <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Outstanding</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(outstanding)}</div>
+            <div style={{ marginTop: 4 }}><MoneyBig value={outstanding} size={22} /></div>
             <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices</div>
           </div>
         </div>
@@ -2461,8 +2518,8 @@ export default function BookkeeperApp() {
       <>
         <MobileLayout />
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
-            <div style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
+          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
+            <div className="bk-modal" style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
@@ -2500,8 +2557,8 @@ export default function BookkeeperApp() {
           <div style={s.content}><PageComponent /></div>
         </div>
         {modal && (
-          <div style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
-            <div style={s.modalContent}>
+          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
+            <div className="bk-modal" style={s.modalContent}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
