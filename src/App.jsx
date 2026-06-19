@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
-import html2pdf from "html2pdf.js";
+import { processBankFile, summarise, EXPENSE_CATEGORIES } from "./bankImport";
 
 const DEFAULT_ACCOUNTS = [
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
@@ -48,7 +48,7 @@ const BUSINESSES = [
 ];
 
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
-const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+const fmtDate = (d) => { if (!d) return ""; const dt = new Date(d); return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }); };
 // First word of a name, for friendly email greetings ("Hi John,").
 const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
 const today = () => new Date().toISOString().split("T")[0];
@@ -203,8 +203,11 @@ const Icons = {
   Logout: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
   Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
   Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
+  Import: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M3 17v2a2 2 0 002 2h14a2 2 0 002-2v-2"/></svg>,
   Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
+  ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
+  ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>,
 };
 
 function LoginScreen() {
@@ -409,16 +412,26 @@ export default function BookkeeperApp() {
   // component, so a parent re-render remounts them and wipes their local state.
   const formDirtyRef = useRef(false);
   const [aiData, setAiData] = useState(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("bk_navCollapsed") === "1");
+  const toggleNav = () => setNavCollapsed((v) => { const nv = !v; localStorage.setItem("bk_navCollapsed", nv ? "1" : "0"); return nv; });
 
-  const [biz, setBiz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mworx");
+  const [biz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mworx");
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [txns, setTxns] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
+
+  // Bank-import flow state lives at App level on purpose: the page components are
+  // defined inline and remount on every App render (see formDirtyRef note above),
+  // which would otherwise wipe a half-finished import.
+  const [importPhase, setImportPhase] = useState("upload"); // upload | review | done
+  const [importItems, setImportItems] = useState([]);
+  const [importMeta, setImportMeta] = useState(null);
+  const [importResult, setImportResult] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   const bizInfo = BUSINESSES.find((b) => b.id === biz);
   const accent = bizInfo?.accent || "#10b981";
@@ -483,7 +496,7 @@ export default function BookkeeperApp() {
     setInvoices(loadedInvoices);
     setTxns(tRes.data || []);
     setJobs(jRes.data || []);
-    setProfile(pRes.data || { ...DEFAULT_PROFILE, name: bizInfo?.name || "" });
+    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: BUSINESSES.find((b) => b.id === businessId)?.name || "" });
     setEmailConn(eRes.data || null);
     setLoading(false);
 
@@ -516,11 +529,6 @@ export default function BookkeeperApp() {
   useEffect(() => {
     if (session) loadData(biz);
   }, [session, biz, loadData]);
-
-  const switchBiz = (id) => {
-    setBiz(id);
-    localStorage.setItem("bk_activeBusiness", id);
-  };
 
   const logout = async () => {
     await supabase.auth.signOut();
@@ -625,6 +633,50 @@ export default function BookkeeperApp() {
     const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update reimbursement");
     if (!ok) return;
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
+  };
+
+  // Commit a reviewed bank import: insert the ticked money-out rows as expenses
+  // (tagged source:'bank' with a dedupe_key so a re-import can spot them), and
+  // mark each ticked invoice-matched deposit as paid. Returns a summary or null.
+  const importTransactions = async (items) => {
+    const chosen = items.filter((it) => it.include);
+    const expenseItems = chosen.filter((it) => it.direction === "out" && it.status !== "invoice");
+    const invoiceItems = chosen.filter((it) => it.status === "invoice" && it.invoice?.id);
+    const batchId = (crypto?.randomUUID?.() || `imp_${today()}_${Math.round(performance.now())}`);
+    const stamp = new Date().toISOString();
+
+    const rows = expenseItems.map((it) => ({
+      user_id: session.user.id, business_id: biz,
+      date: it.date, type: "expense", description: it.description,
+      amount: Math.abs(Number(it.amount)) || 0,
+      account: it.account || "Other", contact: null, reference: it.bank_ref || null,
+      job: null, payment_source: "business", paid_by: null,
+      reimbursement_required: false, reimbursement_status: "not_required",
+      gst_treatment: "Unsure",
+      source: "bank", bank_ref: it.bank_ref || null,
+      import_batch_id: batchId, dedupe_key: it.dedupe_key, imported_at: stamp,
+    }));
+
+    let inserted = [];
+    if (rows.length) {
+      const { ok, data } = await sbWrite(supabase.from("bk_transactions").insert(rows).select(), "import transactions");
+      if (!ok) return null;
+      inserted = data || [];
+    }
+
+    let paid = 0;
+    const paidIds = [];
+    for (const it of invoiceItems) {
+      const { ok } = await sbWrite(supabase.from("bk_invoices").update({ status: "paid", paid_date: it.date || today() }).eq("id", it.invoice.id), "mark invoice paid");
+      if (ok) { paid++; paidIds.push(it.invoice.id); }
+    }
+
+    if (inserted.length) setTxns((prev) => [...inserted, ...prev]);
+    if (paidIds.length) {
+      const set = new Set(paidIds);
+      setInvoices((prev) => prev.map((i) => set.has(i.id) ? { ...i, status: "paid", paid_date: i.paid_date || today() } : i));
+    }
+    return { expenses: inserted.length, invoicesPaid: paid };
   };
 
   const addContact = async (c, keepModal) => {
@@ -792,6 +844,8 @@ export default function BookkeeperApp() {
     if (!window.confirm("Delete this project? Linked quotes and invoices will be kept but unlinked. This cannot be undone.")) return;
     const { ok } = await sbWrite(supabase.from("bk_jobs").delete().eq("id", id), "delete project");
     if (!ok) return;
+    // The DB FK on bk_invoices.project_id is ON DELETE SET NULL, so linked docs are
+    // unlinked automatically; just mirror that in local state.
     setJobs((prev) => prev.filter((j) => j.id !== id));
     setInvoices((prev) => prev.map((i) => (i.project_id === id ? { ...i, project_id: null } : i)));
     setModal(null);
@@ -1040,6 +1094,7 @@ export default function BookkeeperApp() {
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "expenses", label: "Expenses", icon: Icons.Expenses },
+    { id: "import", label: "Import", icon: Icons.Import },
     { id: "reimbursements", label: "Reimburse", icon: Icons.Reimburse },
     { id: "quotes", label: "Quotes", icon: Icons.Quotes },
     { id: "invoices", label: "Invoices", icon: Icons.Invoices },
@@ -1075,7 +1130,37 @@ export default function BookkeeperApp() {
     modalContent: { background: "#ffffff", borderRadius: 16, border: "1px solid #eef1f0", width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "auto", padding: "20px", boxShadow: "0 24px 50px -12px rgba(16,24,40,0.32)" },
     badge: (color) => ({ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, background: badgeBg[color] || color + "15", color: badgeTx[color] || color }),
     grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
+    pill: (active) => ({ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 13px", fontSize: 12, fontWeight: 600, borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap", border: active ? "1px solid transparent" : "1px solid #e2e8f0", background: active ? accent : "#ffffff", color: active ? "#ffffff" : "#64748b" }),
+    pillCount: (active) => ({ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 17, height: 16, padding: "0 5px", borderRadius: 8, fontSize: 10, fontWeight: 700, background: active ? "rgba(255,255,255,0.22)" : "#f1f5f9", color: active ? "#ffffff" : "#94a3b8" }),
+    miniStat: { flex: "1 1 120px", minWidth: 0, background: "#ffffff", borderRadius: 12, border: "1px solid #eef1f0", padding: "11px 14px", boxShadow: "0 1px 2px rgba(16,24,40,0.04)" },
   };
+
+  // Shared list-screen UX bits (pills with counts, summary tiles, friendly empty
+  // states) so every table screen looks and behaves consistently.
+  const FilterPills = ({ tabs, active, onChange }) => (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {tabs.map((t) => (
+        <button key={t.key} onClick={() => onChange(t.key)} style={s.pill(active === t.key)}>
+          {t.label}{t.count != null && <span style={s.pillCount(active === t.key)}>{t.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+
+  const ListStat = ({ label, value, color }) => (
+    <div style={s.miniStat}>
+      <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8" }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: color || "#0f172a", marginTop: 3, letterSpacing: "-0.01em" }}>{value}</div>
+    </div>
+  );
+
+  const EmptyState = ({ icon: Icon, title, hint }) => (
+    <div style={{ padding: "44px 20px", textAlign: "center" }}>
+      <div style={{ width: 48, height: 48, borderRadius: 14, background: "#ecfdf5", display: "inline-flex", alignItems: "center", justifyContent: "center", color: accent, marginBottom: 12 }}>{Icon ? <Icon /> : null}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{title}</div>
+      {hint && <div style={{ fontSize: 12, color: "#94a3b8", margin: "4px auto 0", maxWidth: 300, lineHeight: 1.5 }}>{hint}</div>}
+    </div>
+  );
 
   const ReceiptCapture = () => {
     const [phase, setPhase] = useState("capture");
@@ -1844,8 +1929,6 @@ export default function BookkeeperApp() {
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
     const realInvoices = invoices.filter((i) => i.type !== "quote");
     const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const overdue = realInvoices.filter((i) => i.status === "overdue").length;
-    const totalExpenses = txns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
     const activeProjects = jobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, invoices).remaining, 0);
     const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
@@ -1945,7 +2028,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No expenses found</div>
+            <EmptyState icon={Icons.Expenses} title="No expenses found" hint={search || jobFilter ? "Try clearing your search or job filter." : "Snap a receipt or add an expense to get started."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -1986,12 +2069,18 @@ export default function BookkeeperApp() {
       return true;
     });
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
+    const sumTotals = (arr) => arr.reduce((acc, i) => acc + Number(i.total || 0), 0);
+    const tabs = statusTabs.map((st) => ({ key: st, label: st.charAt(0).toUpperCase() + st.slice(1), count: st === "all" ? sorted.length : sorted.filter((i) => i.status === st).length }));
+    const tiles = isQuoteList
+      ? [{ label: "Total quoted", value: fmt(sumTotals(sorted)) }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981" }, { label: "Awaiting", value: fmt(sumTotals(sorted.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6" }]
+      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))) }, { label: "Outstanding", value: fmt(sumTotals(sorted.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6" }, { label: "Overdue", value: fmt(sumTotals(sorted.filter((i) => i.status === "overdue"))), color: "#ef4444" }];
     return (
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          {statusTabs.map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>
-          ))}
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          {tiles.map((t) => <ListStat key={t.label} label={t.label} value={t.value} color={t.color} />)}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <FilterPills tabs={tabs} active={filter} onChange={setFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={isQuoteList ? "Search quotes..." : "Search invoices..."} style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
           <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180 }}>
             <option value="">All Jobs</option>
@@ -2000,7 +2089,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No {isQuoteList ? "quotes" : "invoices"} yet</div>
+            <EmptyState icon={isQuoteList ? Icons.Quotes : Icons.Invoices} title={`No ${isQuoteList ? "quotes" : "invoices"} ${filter === "all" && !search && !jobFilter ? "yet" : "found"}`} hint={filter === "all" && !search && !jobFilter ? `New ${isQuoteList ? "quotes" : "invoices"} you create will appear here.` : "Try a different filter or search term."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -2048,15 +2137,13 @@ export default function BookkeeperApp() {
     const consultantsLabel = (parties) => parties.length === 0 ? "—" : parties.length === 1 ? parties[0].name : `${parties.length} consultants/clients`;
     return (
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          {["lead", "active", "completed", "archived", "all"].map((sf) => (
-            <button key={sf} onClick={() => setStatusFilter(sf)} style={{ ...s.btnOutline, background: statusFilter === sf ? accent + "20" : "transparent", color: statusFilter === sf ? accent : "#64748b", borderColor: statusFilter === sf ? accent : "#e2e8f0" }}>{sf.charAt(0).toUpperCase() + sf.slice(1)}</button>
-          ))}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <FilterPills tabs={["lead", "active", "completed", "archived", "all"].map((sf) => ({ key: sf, label: sf.charAt(0).toUpperCase() + sf.slice(1), count: sf === "all" ? jobs.length : jobs.filter((p) => (p.status || "active") === sf).length }))} active={statusFilter} onChange={setStatusFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px", marginLeft: "auto" }} />
         </div>
         <div style={s.card}>
           {rows.length === 0 ? (
-            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No projects yet</div>
+            <EmptyState icon={Icons.Projects} title={statusFilter === "all" && !search ? "No projects yet" : "No projects found"} hint={statusFilter === "all" && !search ? "Projects build up automatically when you accept quotes." : "Try a different status or search term."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -2091,13 +2178,11 @@ export default function BookkeeperApp() {
     const filtered = contacts.filter((c) => filter === "all" || c.type === filter);
     return (
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          {["all", "client", "supplier"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f.charAt(0).toUpperCase() + f.slice(1)}s</button>
-          ))}
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          <FilterPills tabs={[{ key: "all", label: "All", count: contacts.length }, { key: "client", label: "Clients", count: contacts.filter((c) => c.type === "client").length }, { key: "supplier", label: "Suppliers", count: contacts.filter((c) => c.type === "supplier").length }]} active={filter} onChange={setFilter} />
         </div>
         <div style={s.card}>
-          {filtered.length === 0 ? <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No contacts yet</div> : (
+          {filtered.length === 0 ? <EmptyState icon={Icons.Contacts} title="No contacts yet" hint="Add clients and suppliers to reuse them on quotes and invoices." /> : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
                 <thead><tr><th style={s.th}>Name</th><th style={s.th}>Company</th><th style={s.th}>Email</th><th style={s.th}>Type</th><th style={{ ...s.th, width: 70 }}></th></tr></thead>
@@ -2165,16 +2250,14 @@ export default function BookkeeperApp() {
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Missing Receipts</div><div style={{ fontSize: 28, fontWeight: 700, color: missingReceipts.length > 0 ? "#ef4444" : "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{missingReceipts.length}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>pending without receipt</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Oldest Pending</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{oldestPending ? `${oldestDays}d` : "—"}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>{oldestPending ? oldestPending.description : "None pending"}</div></div>
         </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          {["all", "pending", "reimbursed", "no_receipt", "do_not_reimburse"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ ...s.btnOutline, background: filter === f ? accent + "20" : "transparent", color: filter === f ? accent : "#64748b", borderColor: filter === f ? accent : "#e2e8f0" }}>{f === "no_receipt" ? "Missing Receipt" : f === "do_not_reimburse" ? "Do Not Reimburse" : f.charAt(0).toUpperCase() + f.slice(1)}</button>
-          ))}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <FilterPills tabs={[{ key: "all", label: "All", count: allPersonal.length }, { key: "pending", label: "Pending", count: pending.length }, { key: "reimbursed", label: "Reimbursed", count: reimbursed.length }, { key: "no_receipt", label: "Missing Receipt", count: missingReceipts.length }, { key: "do_not_reimburse", label: "Do Not Reimburse", count: allPersonal.filter((t) => t.reimbursement_status === "do_not_reimburse").length }]} active={filter} onChange={setFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
           <button onClick={copyAccountantSummary} style={s.btn("#6366f1", true)}><Icons.Download /> Copy for Accountant</button>
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <div style={{ color: "#94a3b8", padding: "30px 0", textAlign: "center" }}>No reimbursements found</div>
+            <EmptyState icon={Icons.Reimburse} title="No reimbursements found" hint={filter === "all" ? "Personal-paid expenses you flag for reimbursement show up here." : "Try a different filter."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -2224,10 +2307,10 @@ export default function BookkeeperApp() {
 
   const MobileTabBar = () => (
     <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 28px", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
-      {navItems.filter(n => n.id !== "reimbursements").map(({ id, label, icon: Icon }) => (
-        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px" }}>
-          <Icon style={{ color: page === id ? accent : "#94a3b8" }} />
-          <span style={{ fontSize: 10, fontWeight: 500, color: page === id ? accent : "#94a3b8" }}>{label}</span>
+      {navItems.filter(n => n.id !== "reimbursements" && n.id !== "import").map(({ id, label, icon: Icon }) => (
+        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px", color: page === id ? accent : "#94a3b8" }}>
+          <Icon />
+          <span style={{ fontSize: 10, fontWeight: 500 }}>{label}</span>
         </button>
       ))}
     </div>
@@ -2480,6 +2563,7 @@ export default function BookkeeperApp() {
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
         {page === "expenses" && <MobileExpenses />}
+        {page === "import" && <div style={{ padding: "40px 24px", textAlign: "center", color: "#64748b", fontSize: 13 }}>Bank statement import is available on the desktop version.</div>}
         {page === "reimbursements" && <MobileReimbursements />}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
@@ -2490,25 +2574,195 @@ export default function BookkeeperApp() {
     </div>
   );
 
-  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
+  const ImportPage = () => {
+    const [filter, setFilter] = useState("all");
+    const [dragOver, setDragOver] = useState(false);
+    const fileRef = useRef(null);
+    const openInvoices = invoices.filter((i) => i.type === "invoice" && (i.status === "sent" || i.status === "overdue"));
+
+    const handleText = (text, name) => {
+      const res = processBankFile(text, name, { invoices, existingTxns: txns });
+      if (res.error) { setImportMeta({ fileName: name, error: res.error }); setImportItems([]); setImportPhase("review"); return; }
+      setImportMeta({ fileName: name, columnMap: res.columnMap, format: res.format, warnings: res.warnings || [] });
+      setImportItems(res.items);
+      setImportPhase("review");
+    };
+    const readFile = (file) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => handleText(String(reader.result || ""), file.name);
+      reader.onerror = () => { setImportMeta({ fileName: file.name, error: "Couldn't read that file." }); setImportItems([]); setImportPhase("review"); };
+      reader.readAsText(file);
+    };
+    const updateItem = (k, patch) => setImportItems((prev) => prev.map((it) => (it._k === k ? { ...it, ...patch } : it)));
+    const resetImport = () => { setImportItems([]); setImportMeta(null); setImportResult(null); setImportPhase("upload"); };
+    const doImport = async () => {
+      setImportBusy(true);
+      const result = await importTransactions(importItems);
+      setImportBusy(false);
+      if (result) { setImportResult(result); setImportPhase("done"); }
+    };
+
+    if (importPhase === "upload") {
+      return (
+        <div style={s.card}>
+          <div onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); readFile(e.dataTransfer.files?.[0]); }}
+            style={{ border: `2px dashed ${dragOver ? accent : "#cbd5e1"}`, borderRadius: 12, padding: "40px 20px", textAlign: "center", background: dragOver ? "#ecfdf5" : "#fbfdfc", transition: "all .12s ease" }}>
+            <div style={{ width: 52, height: 52, borderRadius: 14, background: "#ecfdf5", color: accent, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}><Icons.Import /></div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Drop your bank statement here</div>
+            <div style={{ fontSize: 12, color: "#94a3b8", margin: "6px auto 0", maxWidth: 360, lineHeight: 1.5 }}>CSV or OFX export from any Australian bank. Columns are detected automatically; you review every row before anything is saved.</div>
+            <input ref={fileRef} type="file" accept=".csv,.ofx,.qfx,text/csv" style={{ display: "none" }} onChange={(e) => readFile(e.target.files?.[0])} />
+            <button onClick={() => fileRef.current?.click()} style={{ ...s.btn(accent), marginTop: 16 }}><Icons.Download /> Choose file</button>
+          </div>
+          <div style={{ textAlign: "center", marginTop: 14, fontSize: 11, color: "#94a3b8" }}>Parsed in your browser — nothing is saved until you confirm the matches.</div>
+        </div>
+      );
+    }
+
+    if (importPhase === "done") {
+      const r = importResult || { expenses: 0, invoicesPaid: 0 };
+      return (
+        <div style={{ ...s.card, textAlign: "center", padding: "40px 20px" }}>
+          <div style={{ width: 54, height: 54, borderRadius: 27, background: "#ecfdf5", color: "#059669", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icons.Check /></div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 12 }}>Import complete</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>{r.expenses} expense{r.expenses === 1 ? "" : "s"} added{r.invoicesPaid ? ` · ${r.invoicesPaid} invoice${r.invoicesPaid === 1 ? "" : "s"} marked paid` : ""}.</div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 18 }}>
+            <button onClick={resetImport} style={s.btnOutline}>Import another file</button>
+            <button onClick={() => setPage("expenses")} style={s.btn(accent)}>View expenses</button>
+          </div>
+        </div>
+      );
+    }
+
+    if (importMeta?.error) {
+      return (
+        <div style={s.card}>
+          <EmptyState icon={Icons.Import} title="Couldn't read that file" hint={importMeta.error} />
+          <div style={{ textAlign: "center" }}><button onClick={resetImport} style={s.btnOutline}>Try another file</button></div>
+        </div>
+      );
+    }
+
+    const counts = summarise(importItems);
+    const cm = importMeta?.columnMap;
+    const colNames = importMeta?.format === "ofx" ? "OFX fields" : cm?.headerless ? "auto-detected (no header row)" : "from header row";
+    const tabs = [
+      { key: "all", label: "All", count: counts.total },
+      { key: "invoice", label: "Invoices", count: counts.invoice },
+      { key: "expense", label: "Expenses", count: counts.expense },
+      { key: "review", label: "Needs review", count: counts.review },
+      { key: "duplicate", label: "Duplicates", count: counts.duplicate },
+    ];
+    const visible = importItems.filter((it) => filter === "all" || it.status === filter);
+    const includedCount = importItems.filter((it) => it.include).length;
+    const toAdd = importItems.filter((it) => it.include && it.direction === "out" && it.status !== "invoice").length;
+    const willPay = importItems.filter((it) => it.include && it.status === "invoice").length;
+    const importLabel = toAdd && willPay ? `Import ${toAdd} ${toAdd === 1 ? "expense" : "expenses"} · mark ${willPay} paid`
+      : toAdd ? `Import ${toAdd} ${toAdd === 1 ? "expense" : "expenses"}`
+      : willPay ? `Mark ${willPay} invoice${willPay === 1 ? "" : "s"} paid`
+      : "Import";
+
+    const suggestionCell = (it) => {
+      if (it.status === "invoice") return (
+        <div><span style={s.badge("#34d399")}>{it.invoice?.confidence === "manual" ? "Matched" : "Auto-matched"}</span>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>Invoice {it.invoice.number}{it.invoice.contact ? ` · ${it.invoice.contact}` : ""}</div></div>
+      );
+      if (it.status === "duplicate") return (
+        <div><span style={s.badge("#64748b")}>Duplicate</span><div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Already in your expenses</div></div>
+      );
+      if (it.direction === "in") return (
+        <div>
+          <select value="" onChange={(e) => { const inv = openInvoices.find((x) => x.id === e.target.value); if (inv) updateItem(it._k, { status: "invoice", invoice: { id: inv.id, number: inv.number, contact: inv.contact_name || inv.contact_company || "", confidence: "manual" }, include: true }); }} style={{ ...s.select, maxWidth: 230 }}>
+            <option value="">Match to invoice…</option>
+            {openInvoices.map((inv) => <option key={inv.id} value={inv.id}>{inv.number} · {fmt(inv.total || 0)} · {inv.contact_name || inv.contact_company || ""}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>{it.reviewReason}</div>
+        </div>
+      );
+      return (
+        <div>
+          <select value={it.account || "Other"} onChange={(e) => updateItem(it._k, { account: e.target.value })} style={{ ...s.select, maxWidth: 230 }}>
+            {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: it.status === "review" ? "#b45309" : "#94a3b8", marginTop: 3 }}>{it.status === "review" ? it.reviewReason : "New expense · auto-categorised"}</div>
+        </div>
+      );
+    };
+
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#64748b" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", fontWeight: 600, color: "#0f172a" }}><Icons.Download /> {importMeta?.fileName}</span>
+          <span>{importItems.length} rows · columns {colNames}</span>
+          <button onClick={resetImport} style={{ ...s.btnOutline, marginLeft: "auto" }}>Change file</button>
+        </div>
+        {(importMeta?.warnings || []).map((w, i) => (
+          <div key={i} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 8 }}>{w}</div>
+        ))}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <ListStat label="Matched to invoices" value={counts.invoice} color="#059669" />
+          <ListStat label="New expenses" value={counts.expense} />
+          <ListStat label="Needs review" value={counts.review} color="#b45309" />
+          <ListStat label="Duplicate" value={counts.duplicate} color="#64748b" />
+        </div>
+        <div style={{ marginBottom: 12 }}><FilterPills tabs={tabs} active={filter} onChange={setFilter} /></div>
+        <div style={s.card}>
+          {visible.length === 0 ? (
+            <EmptyState icon={Icons.Import} title="Nothing here" hint="No rows match this filter." />
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}>
+                <thead><tr><th style={{ ...s.th, width: 36 }}></th><th style={s.th}>Bank transaction</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={s.th}>Suggested match</th></tr></thead>
+                <tbody>
+                  {visible.map((it) => (
+                    <tr key={it._k} style={{ opacity: it.status === "duplicate" && !it.include ? 0.6 : 1 }}>
+                      <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={!!it.include} onChange={(e) => updateItem(it._k, { include: e.target.checked })} style={{ width: 16, height: 16, accentColor: accent, cursor: "pointer" }} /></td>
+                      <td style={s.td}><div style={{ fontWeight: 500 }}>{it.description}</div><div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{fmtDate(it.date)}</div></td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: it.direction === "in" ? "#059669" : "#0f172a" }}>{it.direction === "in" ? "+" : "-"}{fmt(Math.abs(it.amount))}</td>
+                      <td style={s.td}>{suggestionCell(it)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12, ...s.card, marginBottom: 0 }}>
+          <div style={{ fontSize: 12, color: "#64748b" }}>{includedCount} of {importItems.length} selected</div>
+          <button disabled={!includedCount || importBusy} onClick={doImport} style={{ ...s.btn(accent), opacity: !includedCount || importBusy ? 0.5 : 1 }}>{importBusy ? "Importing…" : importLabel}</button>
+        </div>
+      </div>
+    );
+  };
+
+  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, import: ImportPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   const SidebarContent = () => (
     <>
-      <div style={s.logo}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
-        <div style={{ fontSize: 10, color: "#10b981", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>{bizInfo?.name}</div>
+      <div style={{ ...s.logo, padding: navCollapsed ? "20px 8px 12px" : "20px 16px 12px", textAlign: navCollapsed ? "center" : "left" }}>
+        {navCollapsed ? (
+          <div style={{ width: 34, height: 34, margin: "0 auto", borderRadius: 9, background: accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>B</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
+            <div style={{ fontSize: 10, color: "#10b981", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>{bizInfo?.name}</div>
+          </>
+        )}
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
-          <button key={item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} style={s.navBtn(page === item.id)}>
-            <item.icon /> {item.label}
+          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(page === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
+            <item.icon />{!navCollapsed && <span>{item.label}</span>}
           </button>
         ))}
       </div>
-      <div style={{ padding: 12, borderTop: "1px solid #e2e8f0", display: "flex", gap: 6 }}>
-        <button onClick={() => setModal("settings")} style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Settings /> Settings</button>
-        <button onClick={logout} style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Logout /> Sign Out</button>
+      <div style={{ padding: 12, borderTop: "1px solid #e2e8f0", display: "flex", flexDirection: "column", gap: 6 }}>
+        <button onClick={toggleNav} title={navCollapsed ? "Expand sidebar" : "Collapse sidebar"} style={{ ...s.btnOutline, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}>{navCollapsed ? <Icons.ChevronRight /> : <><Icons.ChevronLeft /> Collapse</>}</button>
+        <div style={{ display: "flex", flexDirection: navCollapsed ? "column" : "row", gap: 6 }}>
+          <button onClick={() => setModal("settings")} title="Settings" style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Settings />{!navCollapsed && <span>Settings</span>}</button>
+          <button onClick={logout} title="Sign Out" style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Logout />{!navCollapsed && <span>Sign Out</span>}</button>
+        </div>
       </div>
     </>
   );
@@ -2536,7 +2790,7 @@ export default function BookkeeperApp() {
   return (
     <>
       <div style={s.app}>
-        <div style={s.sidebar}><SidebarContent /></div>
+        <div style={{ ...s.sidebar, width: navCollapsed ? 72 : 220, transition: "width .15s ease" }}><SidebarContent /></div>
         <div style={s.main}>
           <div style={s.header}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
