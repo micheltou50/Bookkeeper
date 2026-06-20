@@ -65,6 +65,9 @@ tbody tr:hover { background: #f8fafc; }
   box-shadow: 0 10px 24px -10px rgba(16, 24, 40, .18) !important;
 }
 
+/* Row-action overflow ("⋯") menu items: subtle hover (inline bg wins without this). */
+.bk-menuitem:hover { background: #f1f5f9 !important; }
+
 /* Respect reduced-motion preferences. */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }

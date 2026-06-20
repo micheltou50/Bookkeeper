@@ -43,11 +43,17 @@ Kind regards,
 
 const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "" };
 
+// Header titles per page. Sub-pages (reimbursements/import live under Expenses,
+// quotes under Sales) keep their own title even though they share a nav item.
+const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", import: "Import", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
+
 const BUSINESSES = [
   { id: "mworx", name: "Mworx Group", accent: "#10b981" },
 ];
 
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
+// Amount without the currency symbol — for columns whose header already carries "($)".
+const fmtNum = (n) => new Intl.NumberFormat("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
 const fmtDate = (d) => { if (!d) return ""; const dt = new Date(d); return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }); };
 // First word of a name, for friendly email greetings ("Hi John,").
 const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
@@ -204,6 +210,9 @@ const Icons = {
   Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
   Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
   Import: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M3 17v2a2 2 0 002 2h14a2 2 0 002-2v-2"/></svg>,
+  More: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>,
+  Bell: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>,
+  Eye: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
   Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
   ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
@@ -775,6 +784,27 @@ export default function BookkeeperApp() {
     setEditItem(null);
   };
 
+  // Bulk actions for the invoices list (one DB round-trip, one state update each).
+  const bulkMarkInvoicesPaid = async (ids) => {
+    const pids = invoices.filter((i) => ids.includes(i.id) && i.type === "invoice" && i.status !== "paid").map((i) => i.id);
+    if (!pids.length) return true;
+    const { ok } = await sbWrite(supabase.from("bk_invoices").update({ status: "paid", paid_date: today() }).in("id", pids), "mark invoices paid");
+    if (!ok) return false;
+    const set = new Set(pids);
+    setInvoices((prev) => prev.map((i) => set.has(i.id) ? { ...i, status: "paid", paid_date: i.paid_date || today() } : i));
+    return true;
+  };
+
+  const bulkDeleteInvoices = async (ids) => {
+    if (!ids.length) return false;
+    if (!window.confirm(`Delete ${ids.length} invoice${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) return false;
+    const { ok } = await sbWrite(supabase.from("bk_invoices").delete().in("id", ids), "delete invoices");
+    if (!ok) return false;
+    const set = new Set(ids);
+    setInvoices((prev) => prev.filter((i) => !set.has(i.id)));
+    return true;
+  };
+
   const upsertJob = async (jobName, contactName) => {
     const trimmed = (jobName || "").trim();
     if (!trimmed) return;
@@ -925,6 +955,27 @@ export default function BookkeeperApp() {
     } finally {
       setPdfLoading(null);
     }
+  };
+
+  // Open a read-only view of a document in a new tab (no editing). Reuses the same
+  // HTML the PDF is built from. The window is opened synchronously so the tap
+  // gesture isn't lost to the async logo fetch (mobile pop-up blockers).
+  const viewInvoice = async (inv) => {
+    const w = window.open("", "_blank");
+    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    if (!w) { alert("Allow pop-ups to view the document."); return; }
+    try { w.document.write(`<!doctype html><meta charset="utf-8"><title>${docType} ${inv.number || ""}</title><body style="margin:0;font-family:system-ui,sans-serif;color:#64748b;padding:24px">Loading ${docType.toLowerCase()}…</body>`); } catch { /* ignore */ }
+    const logoDataUrl = await fetchLogoBase64();
+    const content = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${docType} ${inv.number || ""}</title><style>
+      html,body{margin:0;background:#eef2f5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .bk-sheet{max-width:820px;margin:16px auto;background:#fff;box-shadow:0 2px 14px rgba(16,24,40,.14)}
+      .bk-sheet>div{width:100%!important;box-sizing:border-box}
+      @media print{body{background:#fff}.bk-sheet{box-shadow:none;margin:0;max-width:none}}
+    </style></head><body><div class="bk-sheet">${content}</div></body></html>`;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
   };
 
   const buildEmailBody = (inv) => {
@@ -1094,13 +1145,13 @@ export default function BookkeeperApp() {
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "expenses", label: "Expenses", icon: Icons.Expenses },
-    { id: "import", label: "Import", icon: Icons.Import },
-    { id: "reimbursements", label: "Reimburse", icon: Icons.Reimburse },
-    { id: "quotes", label: "Quotes", icon: Icons.Quotes },
-    { id: "invoices", label: "Invoices", icon: Icons.Invoices },
+    { id: "invoices", label: "Sales", icon: Icons.Invoices },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
+  // Sub-pages reached via in-page toggles map to their parent nav item for the
+  // active highlight: reimburse/import sit under Expenses, quotes under Sales.
+  const activeNav = ({ reimbursements: "expenses", import: "expenses", quotes: "invoices" })[page] || page;
 
   const badgeBg = { "#34d399": "#ecfdf5", "#3b82f6": "#eff6ff", "#64748b": "#f1f5f9", "#ef4444": "#fef2f2", "#f59e0b": "#fffbeb" };
   const badgeTx = { "#34d399": "#065f46", "#3b82f6": "#1e40af", "#64748b": "#475569", "#ef4444": "#991b1b", "#f59e0b": "#92400e" };
@@ -1923,6 +1974,23 @@ export default function BookkeeperApp() {
     );
   };
 
+  // Sub-navigation toggles. Expenses/Reimbursements/Import share the Expenses
+  // section; Invoices/Quotes share the Sales section. They drive App-level `page`
+  // state so switching survives re-renders.
+  const ExpensesNav = () => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+      <button onClick={() => setPage("expenses")} style={s.pill(page === "expenses")}>Expenses</button>
+      <button onClick={() => setPage("reimbursements")} style={s.pill(page === "reimbursements")}>Reimbursements</button>
+      <button onClick={() => setPage("import")} title="Import a bank statement" style={{ ...s.btnOutline, marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, ...(page === "import" ? { color: accent, borderColor: accent } : {}) }}><Icons.Import /> Import</button>
+    </div>
+  );
+  const SalesNav = () => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <button onClick={() => setPage("invoices")} style={s.pill(page === "invoices")}>Invoices</button>
+      <button onClick={() => setPage("quotes")} style={s.pill(page === "quotes")}>Quotes</button>
+    </div>
+  );
+
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
@@ -2019,6 +2087,7 @@ export default function BookkeeperApp() {
 
     return (
       <div>
+        <ExpensesNav />
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 220, flex: "1 1 160px" }} />
           <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180, flex: "0 1 160px" }}>
@@ -2060,6 +2129,10 @@ export default function BookkeeperApp() {
     const [filter, setFilter] = useState("all");
     const [jobFilter, setJobFilter] = useState("");
     const [search, setSearch] = useState("");
+    const [sortKey, setSortKey] = useState("due_date");
+    const [sortDir, setSortDir] = useState("desc");
+    const [selected, setSelected] = useState(() => new Set());
+    const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
     const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["all", "draft", "sent", "paid", "overdue"];
     const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((i) => {
@@ -2074,6 +2147,42 @@ export default function BookkeeperApp() {
     const tiles = isQuoteList
       ? [{ label: "Total quoted", value: fmt(sumTotals(sorted)) }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981" }, { label: "Awaiting", value: fmt(sumTotals(sorted.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6" }]
       : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))) }, { label: "Outstanding", value: fmt(sumTotals(sorted.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6" }, { label: "Overdue", value: fmt(sumTotals(sorted.filter((i) => i.status === "overdue"))), color: "#ef4444" }];
+
+    // Invoices: MYOB-style sortable columns + bulk selection. Quotes keep the
+    // original date-sorted list untouched.
+    const balanceOf = (i) => i.status === "paid" ? 0 : Number(i.total || 0);
+    const sortVal = (i) => ({ date: i.date || "", number: i.number || "", customer: (i.contact_name || i.contact_company || "").toLowerCase(), total: Number(i.total || 0), balance: balanceOf(i), due_date: i.due_date || "" })[sortKey] ?? "";
+    const rows = isQuoteList ? filtered : [...filtered].sort((a, b) => {
+      const va = sortVal(a), vb = sortVal(b);
+      const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    const allSelected = rows.length > 0 && rows.every((i) => selected.has(i.id));
+    const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map((i) => i.id)));
+    const toggleOne = (id) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+    const SortTh = ({ label, k, align }) => (
+      <th onClick={() => { if (sortKey === k) setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir("asc"); } }} style={{ ...s.th, textAlign: align || "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{label}<span style={{ fontSize: 9, color: sortKey === k ? "#0f172a" : "#cbd5e1" }}>{sortKey === k ? (sortDir === "asc" ? "▲" : "▼") : "↕"}</span></span>
+      </th>
+    );
+
+    // Two primary actions inline (Send, Mark paid / Accept); everything else lives
+    // in the "⋯" overflow menu (rendered once at list level, below).
+    const actionsCell = (inv) => {
+      const primaryDone = isQuoteList ? (inv.status === "accepted" || inv.status === "declined") : (inv.status === "paid");
+      return (
+        <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
+          <div style={{ display: "inline-flex", gap: 2, alignItems: "center", justifyContent: "flex-end" }}>
+            <button onClick={() => viewInvoice(inv)} title="View" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4 }}><Icons.Eye /></button>
+            <button onClick={async () => { if (emailConn) { const ok = await createOutlookDraft(inv); if (ok) await offerMarkSent(inv); } else sendInvoice(inv); }} disabled={outlookDraftLoading === inv.id} title={emailConn ? "Send via Outlook" : "Send via email app"} style={{ background: "none", border: "none", color: "#3b82f6", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 4 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Send />}</button>
+            {!primaryDone && <button onClick={() => isQuoteList ? acceptQuote(inv) : markPaid(inv)} title={isQuoteList ? "Accept quote" : "Mark paid"} style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 4 }}><Icons.Check /></button>}
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu((m) => m?.id === inv.id ? null : { id: inv.id, x: r.right, y: r.bottom }); }} title="More actions" style={{ background: menu?.id === inv.id ? "#eef2f6" : "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
+          </div>
+        </td>
+      );
+    };
+
     return (
       <div>
         <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
@@ -2088,13 +2197,21 @@ export default function BookkeeperApp() {
           </select>
         </div>
         <div style={s.card}>
-          {filtered.length === 0 ? (
+          {!isQuoteList && selected.size > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", marginBottom: 10, background: "#ecfdf5", border: `1px solid ${accent}30`, borderRadius: 9 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#065f46" }}>{selected.size} selected</span>
+              <button onClick={async () => { const ok = await bulkMarkInvoicesPaid([...selected]); if (ok) setSelected(new Set()); }} style={{ ...s.btnOutline, color: "#059669", borderColor: `${accent}40`, display: "inline-flex", alignItems: "center", gap: 5 }}><Icons.Check /> Mark paid</button>
+              <button onClick={async () => { const done = await bulkDeleteInvoices([...selected]); if (done) setSelected(new Set()); }} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", display: "inline-flex", alignItems: "center", gap: 5 }}><Icons.Trash /> Delete</button>
+              <button onClick={() => setSelected(new Set())} style={{ ...s.btnOutline, marginLeft: "auto" }}>Clear</button>
+            </div>
+          )}
+          {rows.length === 0 ? (
             <EmptyState icon={isQuoteList ? Icons.Quotes : Icons.Invoices} title={`No ${isQuoteList ? "quotes" : "invoices"} ${filter === "all" && !search && !jobFilter ? "yet" : "found"}`} hint={filter === "all" && !search && !jobFilter ? `New ${isQuoteList ? "quotes" : "invoices"} you create will appear here.` : "Try a different filter or search term."} />
-          ) : (
+          ) : isQuoteList ? (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
                 <thead><tr><th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Job</th><th style={s.th}>Status</th><th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 100 }}></th></tr></thead>
-                <tbody>{filtered.map((inv) => (
+                <tbody>{rows.map((inv) => (
                   <tr key={inv.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
@@ -2102,29 +2219,70 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{inv.job || ""}</td>
                     <td style={s.td}><span style={s.badge(statusColors[inv.status] || "#64748b")}>{inv.status}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
-                    <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      <button onClick={() => sendInvoice(inv)} title="Open email app + download PDF" style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", padding: 2 }}><Icons.Send /></button>
-                      <button onClick={async () => { const ok = await createOutlookDraft(inv); if (ok) await offerMarkSent(inv); }} disabled={outlookDraftLoading === inv.id} title="Open in Outlook" style={{ background: "none", border: "none", color: outlookDraftLoading === inv.id ? "#94a3b8" : "#0078d4", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: outlookDraftLoading === inv.id ? 0.5 : 1 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Outlook />}</button>
-                      {!isQuoteList && (inv.status === "sent" || inv.status === "overdue") && <button onClick={() => sendReminderViaResend(inv)} title="Email payment reminder" style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", padding: 2, fontSize: 13 }}>!</button>}
-                      <button onClick={() => downloadPDF(inv)} title="Download PDF" disabled={pdfLoading === inv.id} style={{ background: "none", border: "none", color: pdfLoading === inv.id ? "#94a3b8" : "#8b5cf6", cursor: pdfLoading === inv.id ? "wait" : "pointer", padding: 2, opacity: pdfLoading === inv.id ? 0.5 : 1 }}>{pdfLoading === inv.id ? "…" : <Icons.Download />}</button>
-                      <button onClick={() => { setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      {isQuoteList
-                        ? (inv.status !== "accepted" && inv.status !== "declined" && <button onClick={() => acceptQuote(inv)} title="Accept Quote" style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 2 }}><Icons.Check /></button>)
-                        : (inv.status !== "paid" && <button onClick={() => markPaid(inv)} title="Mark Paid" style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", padding: 2 }}><Icons.Check /></button>)}
-                      <button onClick={() => deleteInvoice(inv.id)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
-                    </td>
+                    {actionsCell(inv)}
                   </tr>
                 ))}</tbody>
               </table>
             </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}>
+                <thead><tr>
+                  <th style={{ ...s.th, width: 34, textAlign: "center" }}><input type="checkbox" checked={allSelected} onChange={toggleAll} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></th>
+                  <SortTh label="Issue date" k="date" />
+                  <SortTh label="Invoice no" k="number" />
+                  <SortTh label="Customer" k="customer" />
+                  <SortTh label="Amount ($)" k="total" align="right" />
+                  <SortTh label="Balance due ($)" k="balance" align="right" />
+                  <SortTh label="Due date" k="due_date" />
+                  <th style={{ ...s.th, width: 100 }}></th>
+                </tr></thead>
+                <tbody>{rows.map((inv) => {
+                  const balance = balanceOf(inv);
+                  return (
+                    <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
+                      <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
+                      <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.date)}</td>
+                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
+                      <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(inv.total || 0)}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
+                      <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.due_date)}</td>
+                      {actionsCell(inv)}
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            </div>
           )}
         </div>
+        {menu && (() => {
+          const mi = rows.find((i) => i.id === menu.id);
+          if (!mi) return null;
+          const item = (label, icon, onClick, danger) => (
+            <button key={label} className="bk-menuitem" onClick={() => { setMenu(null); onClick(); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 11px", background: "none", border: "none", cursor: "pointer", fontSize: 13, color: danger ? "#ef4444" : "#334155", textAlign: "left", borderRadius: 7 }}>
+              <span style={{ display: "inline-flex", width: 16, justifyContent: "center", color: danger ? "#ef4444" : "#64748b" }}>{icon}</span>{label}
+            </button>
+          );
+          return (
+            <>
+              <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
+              <div style={{ position: "fixed", top: menu.y + 4, left: Math.max(8, menu.x - 212), width: 212, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
+                {item(emailConn ? "Email via default app" : "Open in Outlook", emailConn ? <Icons.Send /> : <Icons.Outlook />, () => emailConn ? sendInvoice(mi) : createOutlookDraft(mi))}
+                {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
+                {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
+                {!isQuoteList && (mi.status === "sent" || mi.status === "overdue") && item("Send payment reminder", <Icons.Bell />, () => sendReminderViaResend(mi))}
+                {item(isQuoteList ? "Delete quote" : "Delete invoice", <Icons.Trash />, () => deleteInvoice(mi.id), true)}
+              </div>
+            </>
+          );
+        })()}
       </div>
     );
   };
 
-  const InvoicesPage = () => <DocList docType="invoice" />;
-  const QuotesPage = () => <DocList docType="quote" />;
+  const InvoicesPage = () => <><SalesNav /><DocList docType="invoice" /></>;
+  const QuotesPage = () => <><SalesNav /><DocList docType="quote" /></>;
 
   const ProjectsPage = () => {
     const [statusFilter, setStatusFilter] = useState("active");
@@ -2244,6 +2402,7 @@ export default function BookkeeperApp() {
 
     return (
       <div>
+        <ExpensesNav />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pending Reimbursement</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}</div><div style={{ fontSize: 12, color: "#92400e", marginTop: 6, fontWeight: 500 }}>{pending.length} expense{pending.length !== 1 ? "s" : ""}</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Reimbursed This Month</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(reimbursedThisMonth)}</div><div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).length} this month</div></div>
@@ -2307,8 +2466,8 @@ export default function BookkeeperApp() {
 
   const MobileTabBar = () => (
     <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 28px", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
-      {navItems.filter(n => n.id !== "reimbursements" && n.id !== "import").map(({ id, label, icon: Icon }) => (
-        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px", color: page === id ? accent : "#94a3b8" }}>
+      {navItems.map(({ id, label, icon: Icon }) => (
+        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px", color: activeNav === id ? accent : "#94a3b8" }}>
           <Icon />
           <span style={{ fontSize: 10, fontWeight: 500 }}>{label}</span>
         </button>
@@ -2320,7 +2479,7 @@ export default function BookkeeperApp() {
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", padding: "52px 20px 12px", background: "#ffffff" }}>
       <div>
         <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: accent, textTransform: "uppercase" }}>{bizInfo?.name}</div>
-        <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{navItems.find((n) => n.id === page)?.label}</div>
+        <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
         {page === "expenses" && (
@@ -2348,7 +2507,7 @@ export default function BookkeeperApp() {
     </div>
   );
 
-  const MobileRow = ({ primary, secondary, right, rightSub, badge, isLast, onClick }) => (
+  const MobileRow = ({ primary, secondary, right, rightSub, badge, isLast, onClick, action }) => (
     <div onClick={onClick} style={{ display: "flex", alignItems: "center", padding: "12px 16px", borderBottom: isLast ? "none" : "0.5px solid #f1f5f9", gap: 10, cursor: onClick ? "pointer" : "default" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 15, fontWeight: 500, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{primary}</div>
@@ -2359,6 +2518,7 @@ export default function BookkeeperApp() {
         {right && <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{right}</div>}
         {rightSub && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 1 }}>{rightSub}</div>}
       </div>
+      {action && <div style={{ flexShrink: 0, marginLeft: 4 }}>{action}</div>}
     </div>
   );
 
@@ -2386,6 +2546,19 @@ export default function BookkeeperApp() {
     const map = { paid: { color: "#34d399", label: "Paid" }, sent: { color: "#3b82f6", label: "Sent" }, draft: { color: "#64748b", label: "Draft" }, overdue: { color: "#ef4444", label: "Overdue" }, accepted: { color: "#34d399", label: "Accepted" }, declined: { color: "#64748b", label: "Declined" } };
     return map[status] || map.draft;
   };
+
+  const MobileExpensesNav = () => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px 0" }}>
+      <button onClick={() => setPage("expenses")} style={s.pill(page === "expenses")}>Expenses</button>
+      <button onClick={() => setPage("reimbursements")} style={s.pill(page === "reimbursements")}>Reimburse</button>
+    </div>
+  );
+  const MobileSalesNav = () => (
+    <div style={{ display: "flex", gap: 8, padding: "8px 16px 0" }}>
+      <button onClick={() => setPage("invoices")} style={s.pill(page === "invoices")}>Invoices</button>
+      <button onClick={() => setPage("quotes")} style={s.pill(page === "quotes")}>Quotes</button>
+    </div>
+  );
 
   const MobileDashboard = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
@@ -2444,6 +2617,7 @@ export default function BookkeeperApp() {
     const filtered = sorted.filter((t) => !search || t.description.toLowerCase().includes(search.toLowerCase()));
     return (
       <div style={{ paddingBottom: 20 }}>
+        <MobileExpensesNav />
         <div style={{ padding: "8px 16px 12px" }}>
           <div style={{ position: "relative" }}>
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ width: "100%", padding: "10px 12px 10px 36px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 12, background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box" }} />
@@ -2472,14 +2646,14 @@ export default function BookkeeperApp() {
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found</div> : filtered.map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => viewInvoice(inv)} action={<button onClick={(e) => { e.stopPropagation(); setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 6 }}><Icons.Edit /></button>} />
           ))}
         </div>
       </div>
     );
   };
-  const MobileInvoices = () => <MobileDocs docType="invoice" />;
-  const MobileQuotes = () => <MobileDocs docType="quote" />;
+  const MobileInvoices = () => <><MobileSalesNav /><MobileDocs docType="invoice" /></>;
+  const MobileQuotes = () => <><MobileSalesNav /><MobileDocs docType="quote" /></>;
 
   const MobileProjects = () => {
     const [tab, setTab] = useState("Active");
@@ -2528,6 +2702,7 @@ export default function BookkeeperApp() {
     const reimbBadge = (status) => ({ color: status === "reimbursed" ? "#34d399" : status === "pending" ? "#f59e0b" : "#64748b", label: status === "reimbursed" ? "Reimbursed" : status === "pending" ? "Pending" : status === "do_not_reimburse" ? "Skipped" : "N/A" });
     return (
       <div style={{ paddingBottom: 20 }}>
+        <MobileExpensesNav />
         <div style={{ padding: "8px 16px 0" }}>
           <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Pending Reimbursement</div>
@@ -2752,7 +2927,7 @@ export default function BookkeeperApp() {
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
-          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(page === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
+          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
             <item.icon />{!navCollapsed && <span>{item.label}</span>}
           </button>
         ))}
@@ -2795,7 +2970,7 @@ export default function BookkeeperApp() {
           <div style={s.header}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{navItems.find((n) => n.id === page)?.label}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{PAGE_TITLES[page] || ""}</div>
                 <div style={{ fontSize: 10, color: "#10b981", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{bizInfo?.name}</div>
               </div>
             </div>
