@@ -95,8 +95,15 @@ const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
 
 const DIVISION_META = {
   mworx: { tagline: "Design · Consultancy · Project Management", accent: "#0d9488" },
+  mt_management: { tagline: "Short-Term Rental Property Management", accent: "#2563eb" },
   mtmgmt: { tagline: "Short-Term Rental Property Management", accent: "#2563eb" },
 };
+
+function normalizeDivision(div) {
+  if (!div || div === "mworx") return "mworx";
+  if (div === "mtmgmt" || div === "mt_management") return "mt_management";
+  return "mworx";
+}
 
 function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   // Escape user-controlled text once, up front. Logic fields (inv.type,
@@ -104,7 +111,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   inv = escFields(inv, ["number", "contact_name", "contact_company", "contact_abn", "contact_address", "contact_email", "contact_phone", "job", "notes", "terms"]);
   profile = escFields(profile, ["name", "abn", "address", "email", "phone", "bank_name", "account_name", "bsb", "account_number"]);
   items = (items || []).map((it) => escFields(it, ["description", "note"]));
-  const divMeta = DIVISION_META[inv.division || "mworx"] || DIVISION_META.mworx;
+  const divMeta = DIVISION_META[normalizeDivision(inv.division)] || DIVISION_META.mworx;
   const accent = divMeta.accent;
   const docType = inv.type === "quote" ? "QUOTE" : "INVOICE";
   const isQuote = inv.type === "quote";
@@ -229,13 +236,10 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   <!-- Totals -->
   <div style="display:flex;justify-content:flex-end">
     <div style="width:240px">
-      <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11px;color:#6b7280;font-variant-numeric:tabular-nums"><span>Subtotal</span><span>${fmtAUD(subtotal)}</span></div>
-      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px;color:#94a3b8;font-variant-numeric:tabular-nums"><span>GST</span><span>$0.00</span></div>
       <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:4px;border-top:2px solid #1e293b">
         <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
         <span style="font-size:16px;font-weight:800;color:${accent};font-variant-numeric:tabular-nums">${fmtAUD(subtotal)}</span>
       </div>
-      <div style="font-size:10px;color:#6b7280;text-align:right;margin-top:2px">Not registered for GST. No GST has been charged.</div>
     </div>
   </div>
 

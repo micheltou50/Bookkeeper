@@ -63,17 +63,8 @@ TAX CATEGORIES — use ONLY one of these exact strings:
 - Tax & Government Fees (ASIC, business name renewals, ATO payments)
 - Other (use when uncertain and add a warning)
 
-GST TREATMENT — use ONLY one of these exact strings:
-- GST included (Australian tax invoice clearly shows GST amount or states "includes GST")
-- No GST (receipt shows no GST, supplier appears non-GST-registered)
-- GST free (receipt explicitly says GST-free items)
-- BAS excluded (overseas/foreign supplier, not subject to Australian GST)
-- Input taxed (financial supplies, residential rent)
-- Unsure (unclear from receipt)
-
 RULES:
-- Use null for missing date, total, vendor, or gstAmount — do NOT guess.
-- Do NOT invent or calculate GST amount if not explicitly shown on the receipt.
+- Use null for missing date, total, or vendor — do NOT guess.
 - If total is uncertain, return null and add a warning.
 - If category is uncertain, use "Other" and add a warning.
 - Clean vendor names (e.g. "ADOBE SYSTEMS SOFTWARE IRELAND" → "Adobe").
@@ -88,10 +79,8 @@ Return this exact JSON structure:
   "vendor": "string or null",
   "date": "YYYY-MM-DD or null",
   "total": 0.00,
-  "gstAmount": 0.00,
   "description": "brief description of purchase",
   "category": "one of the listed categories",
-  "gstTreatment": "one of the listed treatments",
   "businessPurpose": "brief business purpose suggestion",
   "confidence": 0.92,
   "categoryConfidence": 0.95,

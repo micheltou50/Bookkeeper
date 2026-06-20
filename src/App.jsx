@@ -45,16 +45,23 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 
 // Header titles per page. Sub-pages (reimbursements/import live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", import: "Import", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
+const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", import: "Import", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts", pnl: "Profit & Loss" };
 
 // One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
 // invoices, expenses, and projects live there today. Division is an extra tag
 // on those same rows — not a second business or database setup.
 const COMPANY = { id: "mworx", name: "MT Management Pty Ltd" };
 
+const ALL_DIVISIONS = "all";
+
 const DIVISIONS = [
   { id: "mworx", name: "Mworx Group", short: "Mworx", subtitle: "Drafting & planning", accent: "#10b981", invoicePrefix: "MWX", quotePrefix: "QMWX", tagline: "Design · Consultancy · Project Management" },
-  { id: "mtmgmt", name: "MT Management", short: "MT Mgmt", subtitle: "STR property management", accent: "#3b82f6", invoicePrefix: "MTM", quotePrefix: "QMTM", tagline: "Short-Term Rental Property Management" },
+  { id: "mt_management", name: "MT Management", short: "MT Mgmt", subtitle: "STR property management", accent: "#3b82f6", invoicePrefix: "MTM", quotePrefix: "QMTM", tagline: "Short-Term Rental Property Management" },
+];
+
+const DIVISION_MENU_OPTIONS = [
+  { id: ALL_DIVISIONS, name: "All", subtitle: "Combined view", accent: "#6366f1" },
+  ...DIVISIONS,
 ];
 
 function DivisionMenu({ division, onSwitch, onClose, style }) {
@@ -62,7 +69,7 @@ function DivisionMenu({ division, onSwitch, onClose, style }) {
     <>
       <div style={{ position: "fixed", inset: 0, zIndex: 58 }} onClick={onClose} aria-hidden="true" />
       <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, minWidth: 200, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 12px 28px -8px rgba(16,24,40,0.25)", padding: 4, zIndex: 59, ...style }}>
-        {DIVISIONS.map((d) => {
+        {DIVISION_MENU_OPTIONS.map((d) => {
           const active = division === d.id;
           return (
             <button
@@ -113,16 +120,36 @@ function MoneyBig({ value, color = "#0f172a", size = 30 }) {
   );
 }
 
-const GST_TREATMENTS = ["GST included", "No GST", "GST free", "BAS excluded", "Input taxed", "Unsure"];
-
 const recordDivision = (r) => {
   const d = r?.division;
   if (!d || d === "mworx") return "mworx";
-  if (d === "mtmgmt" || d === "mt_management" || d === "MT Management") return "mtmgmt";
+  if (d === "mtmgmt" || d === "mt_management" || d === "MT Management") return "mt_management";
   return "mworx"; // unknown values → treat as Mworx (existing data)
 };
-const divisionInfo = (id) => DIVISIONS.find((d) => d.id === id) || DIVISIONS[0];
-const isValidDivision = (id) => DIVISIONS.some((d) => d.id === id);
+const divisionInfo = (id) => {
+  if (id === ALL_DIVISIONS) return { id: ALL_DIVISIONS, name: "All Divisions", short: "All", subtitle: "Combined view", accent: "#6366f1", invoicePrefix: "MWX", quotePrefix: "QMWX", tagline: "" };
+  return DIVISIONS.find((d) => d.id === id) || DIVISIONS[0];
+};
+const isValidDivision = (id) => id === ALL_DIVISIONS || DIVISIONS.some((d) => d.id === id);
+
+function periodBounds(type, value) {
+  if (type === "month") {
+    const [y, m] = value.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    return { start: `${value}-01`, end: `${value}-${String(lastDay).padStart(2, "0")}`, label: new Date(y, m - 1).toLocaleDateString("en-AU", { month: "long", year: "numeric" }) };
+  }
+  if (type === "quarter") {
+    const y = Number(value.slice(0, 4));
+    const q = Number(value.slice(-1));
+    const startMonth = (q - 1) * 3 + 1;
+    const endMonth = startMonth + 2;
+    const endDay = new Date(y, endMonth, 0).getDate();
+    return { start: `${y}-${String(startMonth).padStart(2, "0")}-01`, end: `${y}-${String(endMonth).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`, label: `Q${q} ${y}` };
+  }
+  const y = Number(value);
+  return { start: `${y}-01-01`, end: `${y}-12-31`, label: String(y) };
+}
+const inPeriod = (dateStr, start, end) => !!dateStr && dateStr >= start && dateStr <= end;
 
 const sanitizeFilePart = (s) => (s || "").replace(/[/\\:*?"<>|&#%]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 const safeFileName = (parts, ext) => parts.map(p => sanitizeFilePart(String(p))).filter(Boolean).join("_") + "." + ext;
@@ -162,7 +189,7 @@ function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDa
 function getDefaultDueDate(type, date) { return addDays(date || today(), type === "quote" ? 30 : 7); }
 const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid for 30 days from the date of issue. Pricing may be subject to change after this period.
 2. Acceptance: Work commences upon written acceptance of this quote.
-3. Fees & GST: Fees are as quoted above. We are not registered for GST; no GST has been charged.
+3. Fees: Fees are as quoted above.
 4. Payment: Fees are invoiced on agreed milestones or on completion and are due within 7 days of each invoice. Final drawings and lodgement of documents are released upon full payment of all invoices.
 5. Scope: This quote covers only the scope of works listed above.
 6. Variations: Any change to the scope of works may incur additional fees, which will be quoted separately and agreed in writing before proceeding.
@@ -267,6 +294,7 @@ const Icons = {
   Cloud: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>,
   Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
+  Reports: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>,
   ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
   ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>,
 };
@@ -434,13 +462,10 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
 
     <div style="display:flex;justify-content:flex-end">
       <div style="width:240px">
-        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11px;color:#6b7280"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px;color:#94a3b8"><span>GST</span><span>$0.00</span></div>
         <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:4px;border-top:2px solid #1e293b">
           <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
           <span style="font-size:16px;font-weight:800;color:${accent}">${fmt(subtotal)}</span>
         </div>
-        <div style="font-size:10px;color:#6b7280;text-align:right;margin-top:2px">Not registered for GST. No GST has been charged.</div>
       </div>
     </div>
 
@@ -480,12 +505,15 @@ export default function BookkeeperApp() {
   const [biz] = useState(() => localStorage.getItem("bk_activeBusiness") || COMPANY.id);
   const [division, setDivision] = useState(() => {
     const saved = localStorage.getItem("bk_activeDivision");
+    if (saved === "mtmgmt") return "mt_management";
     return isValidDivision(saved) ? saved : "mworx";
   });
   const switchDivision = (id) => {
-    if (!isValidDivision(id) || id === division) return;
-    localStorage.setItem("bk_activeDivision", id);
-    setDivision(id);
+    const norm = id === "mtmgmt" ? "mt_management" : id;
+    if (!isValidDivision(norm) || norm === division) return;
+    localStorage.setItem("bk_activeDivision", norm);
+    if (norm !== ALL_DIVISIONS) localStorage.setItem("bk_lastSpecificDivision", norm);
+    setDivision(norm);
   };
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -513,7 +541,8 @@ export default function BookkeeperApp() {
 
   const divInfo = divisionInfo(division);
   const accent = divInfo.accent;
-  const inActiveDiv = (r) => recordDivision(r) === division;
+  const insertDivision = division === ALL_DIVISIONS ? (localStorage.getItem("bk_lastSpecificDivision") || "mworx") : division;
+  const inActiveDiv = (r) => division === ALL_DIVISIONS || recordDivision(r) === division;
   const divTxns = txns.filter(inActiveDiv);
   const divInvoices = invoices.filter(inActiveDiv);
   const divJobs = jobs.filter(inActiveDiv);
@@ -690,7 +719,7 @@ export default function BookkeeperApp() {
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { user_id: session.user.id, business_id: biz, division, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure", ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
+    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
     const { ok, data: inserted } = await sbInsert("bk_transactions", row, "save expense");
     if (!ok) return;
     if (inserted) {
@@ -716,7 +745,7 @@ export default function BookkeeperApp() {
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status || "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure" };
+    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status || "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: isPersonal ? (t.business_purpose || null) : null };
     const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update expense");
     if (!ok) return;
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
@@ -751,13 +780,12 @@ export default function BookkeeperApp() {
     const stamp = new Date().toISOString();
 
     const rows = expenseItems.map((it) => ({
-      user_id: session.user.id, business_id: biz, division,
+      user_id: session.user.id, business_id: biz, division: insertDivision,
       date: it.date, type: "expense", description: it.description,
       amount: Math.abs(Number(it.amount)) || 0,
       account: it.account || "Other", contact: null, reference: it.bank_ref || null,
       job: null, payment_source: "business", paid_by: null,
       reimbursement_required: false, reimbursement_status: "not_required",
-      gst_treatment: "Unsure",
       source: "bank", bank_ref: it.bank_ref || null,
       import_batch_id: batchId, dedupe_key: it.dedupe_key, imported_at: stamp,
     }));
@@ -813,7 +841,7 @@ export default function BookkeeperApp() {
 
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, division, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
+    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
     const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice");
     if (!ok) return;
     if (inserted) {
@@ -915,7 +943,7 @@ export default function BookkeeperApp() {
       setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
     } else {
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
-      const row = { user_id: session.user.id, business_id: biz, division, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, division) };
+      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, insertDivision) };
       const { data: inserted } = await sbInsert("bk_jobs", row, "save job");
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
@@ -925,7 +953,7 @@ export default function BookkeeperApp() {
 
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
-    const row = { user_id: session.user.id, business_id: biz, division, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, division) };
+    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, insertDivision) };
     const { ok, data: inserted } = await sbInsert("bk_jobs", row, "create project");
     if (!ok) return null;
     if (inserted) setJobs((prev) => [inserted, ...prev]);
@@ -1264,6 +1292,7 @@ export default function BookkeeperApp() {
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "expenses", label: "Expenses", icon: Icons.Expenses, submenu: [{ id: "expenses", label: "Expenses", icon: Icons.Expenses }, { id: "reimbursements", label: "Reimbursements", icon: Icons.Reimburse }, { id: "import", label: "Import", icon: Icons.Import }] },
     { id: "invoices", label: "Sales", icon: Icons.Invoices, submenu: [{ id: "invoices", label: "Invoices", icon: Icons.Invoices }, { id: "quotes", label: "Quotes", icon: Icons.Quotes }] },
+    { id: "pnl", label: "P&L", icon: Icons.Reports },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
@@ -1510,7 +1539,7 @@ export default function BookkeeperApp() {
     const ai = !existing ? aiData : null;
     const fromReimbursements = ai?.fromReimbursements;
     const initPersonalCard = existing ? derivePersonalCard(existing) : (fromReimbursements || false);
-    const init = existing ? { ...existing, personal_card: initPersonalCard, paid_by: existing.paid_by || "Michel", business_purpose: existing.business_purpose || "", gst_amount: existing.gst_amount != null ? String(existing.gst_amount) : "", gst_treatment: existing.gst_treatment || "Unsure", reimbursement_status: existing.reimbursement_status || "not_required" } : ai ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: accounts.find(a => a.name === ai.category && a.type === "Expense")?.name || ai.category || "", contact: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, paid_by: initPersonalCard ? "Michel" : "", business_purpose: ai.businessPurpose || "", gst_amount: ai.gstAmount != null ? String(ai.gstAmount) : "", gst_treatment: ai.gstTreatment || "Unsure", reimbursement_status: "not_required", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null } : { date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "", personal_card: false, paid_by: "", business_purpose: "", gst_amount: "", gst_treatment: "Unsure", reimbursement_status: "not_required" };
+    const init = existing ? { ...existing, personal_card: initPersonalCard, paid_by: existing.paid_by || "Michel", business_purpose: existing.business_purpose || "", reimbursement_status: existing.reimbursement_status || "not_required" } : ai ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: accounts.find(a => a.name === ai.category && a.type === "Expense")?.name || ai.category || "", contact: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, paid_by: initPersonalCard ? "Michel" : "", business_purpose: ai.businessPurpose || "", reimbursement_status: "not_required", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null } : { date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "", personal_card: false, paid_by: "", business_purpose: "", reimbursement_status: "not_required" };
     const [f, setF] = useState({ ...init, amount: String(init.amount || "") });
     const [saving, setSaving] = useState(false);
     const expenseAccounts = accounts.filter((a) => a.type === "Expense");
@@ -1547,10 +1576,6 @@ export default function BookkeeperApp() {
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><select value={f.job} onChange={(e) => setF({ ...f, job: e.target.value })} style={s.select}><option value="">Select job...</option>{jobNames.map(j => <option key={j} value={j}>{j}</option>)}</select></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>GST Amount</label><input type="number" step="0.01" value={f.gst_amount} onChange={(e) => setF({ ...f, gst_amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>GST Treatment</label><select value={f.gst_treatment} onChange={(e) => setF({ ...f, gst_treatment: e.target.value })} style={s.select}>{GST_TREATMENTS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
         </div>
         <div style={{ marginBottom: 12, padding: "12px 14px", background: f.personal_card ? "#fffbeb" : "#f8fafc", border: `1px solid ${f.personal_card ? "#fde68a" : "#e2e8f0"}`, borderRadius: 9 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", margin: 0 }}>
@@ -1625,14 +1650,14 @@ export default function BookkeeperApp() {
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(divInvoices, division, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
+      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
     const [notesEdited, setNotesEdited] = useState(!!existing);
     const [termsEdited, setTermsEdited] = useState(!!existing);
     const updateType = (newType) => {
       const autoNum = !existing && !f._numberEdited;
-      const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(divInvoices, division, newType) : f.number };
+      const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(divInvoices, insertDivision, newType) : f.number };
       if (!dueDateEdited) updates.due_date = getDefaultDueDate(newType, f.date);
       if (!notesEdited) updates.notes = getDefaultTerms(newType);
       if (!termsEdited) updates.terms = getDefaultDocTerms(newType);
@@ -2104,6 +2129,89 @@ export default function BookkeeperApp() {
     );
   };
 
+  const PnlPage = () => {
+    const now = new Date();
+    const defaultMonth = now.toISOString().slice(0, 7);
+    const defaultQuarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
+    const defaultYear = String(now.getFullYear());
+    const [periodType, setPeriodType] = useState("month");
+    const [periodValue, setPeriodValue] = useState(defaultMonth);
+    const bounds = periodBounds(periodType, periodValue);
+    const realInvoices = divInvoices.filter((i) => i.type !== "quote");
+    const incomeInvoices = realInvoices.filter((i) => i.status === "paid" && inPeriod(i.paid_date || i.date, bounds.start, bounds.end));
+    const expenseTxns = divTxns.filter((t) => t.type === "expense" && inPeriod(t.date, bounds.start, bounds.end));
+    const totalIncome = incomeInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const totalExpenses = expenseTxns.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const net = totalIncome - totalExpenses;
+    const onTypeChange = (type) => {
+      setPeriodType(type);
+      if (type === "month") setPeriodValue(defaultMonth);
+      else if (type === "quarter") setPeriodValue(defaultQuarter);
+      else setPeriodValue(defaultYear);
+    };
+    const periodInput = periodType === "month" ? (
+      <input type="month" value={periodValue} onChange={(e) => setPeriodValue(e.target.value)} style={{ ...s.input, maxWidth: 180 }} />
+    ) : periodType === "quarter" ? (
+      <select value={periodValue} onChange={(e) => setPeriodValue(e.target.value)} style={{ ...s.select, maxWidth: 140 }}>
+        {[0, 1, 2, 3].map((i) => {
+          const y = now.getFullYear();
+          const q = Math.floor(now.getMonth() / 3) + 1 - i;
+          const adjY = q <= 0 ? y - 1 : y;
+          const adjQ = q <= 0 ? q + 4 : q;
+          const val = `${adjY}-Q${adjQ}`;
+          return <option key={val} value={val}>Q{adjQ} {adjY}</option>;
+        })}
+      </select>
+    ) : (
+      <select value={periodValue} onChange={(e) => setPeriodValue(e.target.value)} style={{ ...s.select, maxWidth: 120 }}>
+        {[0, 1, 2, 3, 4].map((i) => {
+          const y = now.getFullYear() - i;
+          return <option key={y} value={String(y)}>{y}</option>;
+        })}
+      </select>
+    );
+    return (
+      <div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <FilterPills tabs={[{ key: "month", label: "Month" }, { key: "quarter", label: "Quarter" }, { key: "year", label: "Year" }]} active={periodType} onChange={onTypeChange} />
+          {periodInput}
+          <span style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>{divInfo.name} · {bounds.label}</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Income</div><div style={{ marginTop: 8 }}><MoneyBig value={totalIncome} color="#059669" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{incomeInvoices.length} paid invoice{incomeInvoices.length !== 1 ? "s" : ""}</div></div>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Expenses</div><div style={{ marginTop: 8 }}><MoneyBig value={totalExpenses} color="#ef4444" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{expenseTxns.length} expense{expenseTxns.length !== 1 ? "s" : ""}</div></div>
+          <div style={{ ...s.statCard(), borderColor: net >= 0 ? "#86efac" : "#fecaca" }}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Net {net >= 0 ? "Profit" : "Loss"}</div><div style={{ marginTop: 8 }}><MoneyBig value={Math.abs(net)} color={net >= 0 ? "#059669" : "#ef4444"} /></div></div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={s.card}>
+            <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Income</h4>
+            {incomeInvoices.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12, padding: "12px 0" }}>No paid invoices in this period</div> : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={s.table}><tbody>
+                  {incomeInvoices.sort((a, b) => (b.paid_date || b.date).localeCompare(a.paid_date || a.date)).map((i) => (
+                    <tr key={i.id}><td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(i.paid_date || i.date)}</td><td style={s.td}>{i.number} — {i.contact_name || i.contact_company || ""}</td><td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(i.total)}</td></tr>
+                  ))}
+                </tbody></table>
+              </div>
+            )}
+          </div>
+          <div style={s.card}>
+            <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Expenses</h4>
+            {expenseTxns.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12, padding: "12px 0" }}>No expenses in this period</div> : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={s.table}><tbody>
+                  {[...expenseTxns].sort((a, b) => b.date.localeCompare(a.date)).map((t) => (
+                    <tr key={t.id}><td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td><td style={s.td}>{t.description}<div style={{ fontSize: 10, color: "#94a3b8" }}>{t.account || ""}</div></td><td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td></tr>
+                  ))}
+                </tbody></table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
@@ -2544,7 +2652,7 @@ export default function BookkeeperApp() {
     }).sort((a, b) => b.date.localeCompare(a.date));
 
     const copyAccountantSummary = () => {
-      const lines = pending.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)}${t.gst_amount ? ` (GST: ${fmt(t.gst_amount)})` : ""} | ${t.gst_treatment || "Unsure"} | Paid by ${t.paid_by || "Owner"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""} | ${t.reimbursement_status} | Ref: ${t.reference || "-"}`);
+      const lines = pending.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)} | Paid by ${t.paid_by || "Owner"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""} | ${t.reimbursement_status} | Ref: ${t.reference || "-"}`);
       const text = `Owner Reimbursement Summary\nPending total: ${fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}\nReimbursed this month: ${fmt(reimbursedThisMonth)}\nMissing receipts: ${missingReceipts.length}\nItems:\n${lines.join("\n")}`;
       navigator.clipboard.writeText(text);
       alert("Copied to clipboard!");
@@ -2582,7 +2690,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, fontWeight: 500 }}>{t.description}<div style={{ fontSize: 10, color: "#94a3b8" }}>{t.account || ""}</div></td>
                     <td style={{ ...s.td, fontSize: 12 }}>{t.paid_by || "Owner"}</td>
                     <td style={{ ...s.td, fontSize: 12, color: "#64748b", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.business_purpose || "--"}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}{t.gst_amount ? <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400 }}>GST: {fmt(t.gst_amount)}</div> : null}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                     <td style={s.td}>{t.receipt_path ? <button onClick={() => openReceipt(t)} style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button> : <span style={{ fontSize: 10, color: "#ef4444" }}>Missing</span>}</td>
                     <td style={s.td}><span style={s.badge(t.reimbursement_status === "reimbursed" ? "#34d399" : t.reimbursement_status === "pending" ? "#f59e0b" : "#64748b")}>{t.reimbursement_status === "reimbursed" ? "Reimbursed" : t.reimbursement_status === "pending" ? "Reimbursement pending" : t.reimbursement_status === "missing_receipt" ? "No Receipt" : "Skipped"}</span>{t.reimbursement_status === "reimbursed" && t.reimbursement_date ? <div style={{ fontSize: 10, color: "#94a3b8" }}>{fmtDate(t.reimbursement_date)}</div> : null}{t.reimbursement_reference ? <div style={{ fontSize: 10, color: "#94a3b8" }}>Ref: {t.reimbursement_reference}</div> : null}</td>
                     <td style={{ ...s.td, whiteSpace: "nowrap" }}>
@@ -2651,7 +2759,7 @@ export default function BookkeeperApp() {
           </button>
         )}
         {page === "reimbursements" && (
-          <button onClick={() => { const lines = pendingReimbursements.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)}${t.gst_amount ? ` (GST: ${fmt(t.gst_amount)})` : ""} | ${t.gst_treatment || "Unsure"} | Paid by ${t.paid_by || "Michel"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""}`); navigator.clipboard.writeText(`Pending Reimbursements (${pendingReimbursements.length})\nOwed to Michel: ${fmt(pendingReimbTotal)}\n${lines.join("\n")}`); alert("Copied!"); }} style={{ width: 34, height: 34, borderRadius: 17, background: "#6366f1", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+          <button onClick={() => { const lines = pendingReimbursements.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)} | Paid by ${t.paid_by || "Michel"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""}`); navigator.clipboard.writeText(`Pending Reimbursements (${pendingReimbursements.length})\nOwed to Michel: ${fmt(pendingReimbTotal)}\n${lines.join("\n")}`); alert("Copied!"); }} style={{ width: 34, height: 34, borderRadius: 17, background: "#6366f1", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Download />
           </button>
         )}
@@ -2880,7 +2988,7 @@ export default function BookkeeperApp() {
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No reimbursements found</div> : filtered.map((e, i) => (
             <div key={e.id}>
-              <MobileRow primary={e.description} secondary={`${fmtDate(e.date)} · ${e.paid_by || "Owner"} · ${e.business_purpose || ""}`} badge={reimbBadge(e.reimbursement_status)} right={fmt(e.amount)} rightSub={e.gst_amount ? `GST: ${fmt(e.gst_amount)}` : ""} isLast={actionId !== e.id && i === filtered.length - 1} onClick={() => setActionId(actionId === e.id ? null : e.id)} />
+              <MobileRow primary={e.description} secondary={`${fmtDate(e.date)} · ${e.paid_by || "Owner"} · ${e.business_purpose || ""}`} badge={reimbBadge(e.reimbursement_status)} right={fmt(e.amount)} isLast={actionId !== e.id && i === filtered.length - 1} onClick={() => setActionId(actionId === e.id ? null : e.id)} />
               {actionId === e.id && (
                 <div style={{ display: "flex", gap: 6, padding: "8px 16px 12px", borderBottom: i === filtered.length - 1 ? "none" : "0.5px solid #f1f5f9", flexWrap: "wrap" }}>
                   {e.reimbursement_status === "pending" && <button onClick={async () => { await markReimbursed(e.id, { status: "reimbursed", date: today(), amount: String(e.amount), reference: "" }); setActionId(null); }} style={{ ...s.btn("#34d399", true), borderRadius: 12, fontSize: 12 }}><Icons.Check /> Reimburse</button>}
@@ -2908,6 +3016,7 @@ export default function BookkeeperApp() {
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
         {page === "contacts" && <MobileContacts />}
+        {page === "pnl" && <PnlPage />}
       </div>
       <MobileTabBar />
     </div>
@@ -3074,7 +3183,7 @@ export default function BookkeeperApp() {
     );
   };
 
-  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, import: ImportPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
+  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, import: ImportPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, pnl: PnlPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   const SidebarContent = () => (

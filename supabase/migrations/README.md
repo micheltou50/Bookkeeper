@@ -10,8 +10,17 @@ These SQL files document the schema/constraints/RLS the app relies on.
   against existing live policies before applying — duplicates will error.
 - `0007_divisions.sql` — Adds a `division` column on top of the existing
   `business_id = 'mworx'` setup. All current Mworx data is backfilled to
-  `division = 'mworx'`. Required before saving MT Management records; Mworx
+  `division = 'mworx'`. **Required before saving MT Management records**; Mworx
   Group keeps working without it (the app omits division on insert until applied).
+- `0008_standardise_division_slug.sql` — Renames legacy `mtmgmt` rows to
+  `mt_management`. Apply after 0007.
+
+## Urgent: apply 0007 to live project
+
+Project `yzndkdlzgegrcotfeqlp` — paste `0007_divisions.sql` (then `0008`) into
+the [Supabase SQL editor](https://supabase.com/dashboard/project/yzndkdlzgegrcotfeqlp/sql/new),
+or run `node scripts/apply-supabase-migrations.mjs` with `SUPABASE_SERVICE_KEY`
+(and optionally `SUPABASE_DB_URL`) in `.env`.
 
 ## Applying
 
