@@ -93,17 +93,23 @@ const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
   </table>
 </div>`;
 
+const DIVISION_META = {
+  mworx: { tagline: "Design · Consultancy · Project Management", accent: "#0d9488" },
+  mtmgmt: { tagline: "Short-Term Rental Property Management", accent: "#2563eb" },
+};
+
 function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   // Escape user-controlled text once, up front. Logic fields (inv.type,
   // profile.business_id) are not in these lists, so comparisons still work.
   inv = escFields(inv, ["number", "contact_name", "contact_company", "contact_abn", "contact_address", "contact_email", "contact_phone", "job", "notes", "terms"]);
   profile = escFields(profile, ["name", "abn", "address", "email", "phone", "bank_name", "account_name", "bsb", "account_number"]);
   items = (items || []).map((it) => escFields(it, ["description", "note"]));
-  const accent = profile.business_id === "mworx" ? "#0d9488" : "#0f766e";
+  const divMeta = DIVISION_META[inv.division || "mworx"] || DIVISION_META.mworx;
+  const accent = divMeta.accent;
   const docType = inv.type === "quote" ? "QUOTE" : "INVOICE";
   const isQuote = inv.type === "quote";
   const bName = profile.name || "Company";
-  const tagline = profile.business_id === "mworx" ? "Design · Consultancy · Project Management" : "";
+  const tagline = divMeta.tagline;
 
   const logoHTML = logoDataUrl
     ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`

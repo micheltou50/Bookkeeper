@@ -47,8 +47,12 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 // quotes under Sales) keep their own title even though they share a nav item.
 const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", import: "Import", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
 
-const BUSINESSES = [
-  { id: "mworx", name: "Mworx Group", accent: "#10b981" },
+// One legal entity (ABN); two operating divisions toggled in the UI.
+const COMPANY = { id: "mworx", name: "MT Management Pty Ltd" };
+
+const DIVISIONS = [
+  { id: "mworx", name: "Mworx Group", subtitle: "Drafting & planning", accent: "#10b981", invoicePrefix: "MWX", quotePrefix: "QMWX", tagline: "Design · Consultancy · Project Management" },
+  { id: "mtmgmt", name: "MT Management", subtitle: "STR property management", accent: "#3b82f6", invoicePrefix: "MTM", quotePrefix: "QMTM", tagline: "Short-Term Rental Property Management" },
 ];
 
 const fmt = (n) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
@@ -73,47 +77,39 @@ function MoneyBig({ value, color = "#0f172a", size = 30 }) {
   );
 }
 
-const PAYMENT_SOURCES = [
-  { value: "business", label: "Business account" },
-  { value: "personal_reimburse", label: "Personal account — reimburse owner" },
-  { value: "personal_no_reimburse", label: "Personal account — do not reimburse" },
-  { value: "cash", label: "Cash" },
-  { value: "other", label: "Other" },
-];
-
 const GST_TREATMENTS = ["GST included", "No GST", "GST free", "BAS excluded", "Input taxed", "Unsure"];
+
+const recordDivision = (r) => r?.division || "mworx";
+const divisionInfo = (id) => DIVISIONS.find((d) => d.id === id) || DIVISIONS[0];
 
 const sanitizeFilePart = (s) => (s || "").replace(/[/\\:*?"<>|&#%]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 const safeFileName = (parts, ext) => parts.map(p => sanitizeFilePart(String(p))).filter(Boolean).join("_") + "." + ext;
 const fmtAmtFile = (n) => Number(n).toFixed(2).replace(".", "-");
 
-function getDocumentPrefix(profile, type) {
-  const bid = (profile?.business_id || "").toLowerCase();
-  const bname = (profile?.name || "").toLowerCase();
-  const isMworx = bid.includes("mworx") || bname.includes("mworx");
-  if (isMworx) return type === "quote" ? "QMWX" : "MWX";
-  return type === "quote" ? "QUO" : "INV";
+function getDocumentPrefix(divisionId, type) {
+  const div = divisionInfo(divisionId);
+  return type === "quote" ? div.quotePrefix : div.invoicePrefix;
 }
 
-function getNextDocumentNumber(invoices, profile, type) {
-  const prefix = getDocumentPrefix(profile, type);
+function getNextDocumentNumber(invoices, divisionId, type) {
+  const prefix = getDocumentPrefix(divisionId, type);
   const yy = String(new Date().getFullYear()).slice(-2);
   const tag = `${prefix}${yy}`;
   const seqs = (invoices || [])
-    .filter((i) => i.business_id === profile?.business_id && i.type === type)
+    .filter((i) => recordDivision(i) === divisionId && i.type === type)
     .map((i) => { const n = i.number; if (!n || !n.startsWith(tag)) return 0; const s = Number(n.slice(tag.length)); return Number.isFinite(s) ? s : 0; })
     .filter((s) => s > 0);
   const next = seqs.length ? Math.max(...seqs) + 1 : 1;
   return `${tag}${String(next).padStart(3, "0")}`;
 }
 
-// Per-business job/project number in the YY### scheme (e.g. 26106 = 6th job of
+// Per-division job/project number in the YY### scheme (e.g. 26106 = 6th job of
 // 2026). Continues from the highest existing number for the current year; if
 // there are none yet, starts the year at YY101.
-function getNextJobNumber(jobs, businessId) {
+function getNextJobNumber(jobs, divisionId) {
   const yy = String(new Date().getFullYear()).slice(-2);
   const nums = (jobs || [])
-    .filter((j) => j.business_id === businessId)
+    .filter((j) => recordDivision(j) === divisionId)
     .map((j) => { const m = String(j.job_number || "").match(/^(\d{4,})$/); return m ? Number(m[1]) : 0; })
     .filter((n) => n > 0 && String(n).startsWith(yy));
   const next = nums.length ? Math.max(...nums) + 1 : Number(`${yy}101`);
@@ -261,7 +257,7 @@ function LoginScreen() {
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "radial-gradient(120% 120% at 50% 0%, #ecfdf5 0%, #f7f9f8 46%)", fontFamily: "'DM Sans', system-ui, sans-serif", padding: 20 }}>
       <div style={{ background: "#ffffff", borderRadius: 20, border: "1px solid #eef1f0", padding: 40, width: "100%", maxWidth: 400, textAlign: "center", boxShadow: "0 24px 50px -16px rgba(16,24,40,0.18), 0 2px 6px rgba(16,24,40,0.05)" }}>
         <div style={{ fontSize: 28, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
-        <div style={{ fontSize: 12, color: "#10b981", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>Mworx Group</div>
+        <div style={{ fontSize: 12, color: "#10b981", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>{COMPANY.name}</div>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && email && password && handleSubmit()} style={inputStyle} />
         {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{error}</div>}
@@ -295,7 +291,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
   const isQuote = inv.type === "quote";
   const docType = isQuote ? "QUOTE" : "INVOICE";
   const bName = profile.name || "Company";
-  const tagline = profile.business_id === "mworx" ? "Design · Consultancy · Project Management" : "";
+  const tagline = divisionInfo(recordDivision(inv)).tagline;
   const accountName = profile.account_name || profile.name || bName;
 
   const logoHTML = logoDataUrl
@@ -439,7 +435,9 @@ export default function BookkeeperApp() {
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("bk_navCollapsed") === "1");
   const toggleNav = () => setNavCollapsed((v) => { const nv = !v; localStorage.setItem("bk_navCollapsed", nv ? "1" : "0"); return nv; });
 
-  const [biz] = useState(() => localStorage.getItem("bk_activeBusiness") || "mworx");
+  const [biz] = useState(() => localStorage.getItem("bk_activeBusiness") || COMPANY.id);
+  const [division, setDivision] = useState(() => localStorage.getItem("bk_activeDivision") || "mworx");
+  const switchDivision = (id) => { localStorage.setItem("bk_activeDivision", id); setDivision(id); };
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [txns, setTxns] = useState([]);
@@ -463,8 +461,12 @@ export default function BookkeeperApp() {
   const holdNavMenu = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; };
   const closeNavMenuSoon = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = setTimeout(() => setNavMenu(null), 220); };
 
-  const bizInfo = BUSINESSES.find((b) => b.id === biz);
-  const accent = bizInfo?.accent || "#10b981";
+  const divInfo = divisionInfo(division);
+  const accent = divInfo.accent;
+  const inActiveDiv = (r) => recordDivision(r) === division;
+  const divTxns = txns.filter(inActiveDiv);
+  const divInvoices = invoices.filter(inActiveDiv);
+  const divJobs = jobs.filter(inActiveDiv);
   const accounts = DEFAULT_ACCOUNTS;
 
   useEffect(() => {
@@ -526,7 +528,7 @@ export default function BookkeeperApp() {
     setInvoices(loadedInvoices);
     setTxns(tRes.data || []);
     setJobs(jRes.data || []);
-    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: BUSINESSES.find((b) => b.id === businessId)?.name || "" });
+    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: COMPANY.name });
     setEmailConn(eRes.data || null);
     setLoading(false);
 
@@ -584,7 +586,9 @@ export default function BookkeeperApp() {
     }
   }, []);
 
-  const jobNames = [...new Set([...invoices.map((i) => i.job), ...txns.map((t) => t.job)].filter(Boolean))].sort();
+  const jobNames = [...new Set([...divInvoices.map((i) => i.job), ...divTxns.map((t) => t.job)].filter(Boolean))].sort();
+  const pendingReimbursements = txns.filter((t) => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending");
+  const pendingReimbTotal = pendingReimbursements.reduce((sum, t) => sum + Number(t.amount), 0);
 
   // --- Mutation functions: each writes directly to its table ---
 
@@ -616,7 +620,7 @@ export default function BookkeeperApp() {
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { user_id: session.user.id, business_id: biz, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure", ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
+    const row = { user_id: session.user.id, business_id: biz, division, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure", ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
     const { ok, data: inserted } = await sbWrite(supabase.from("bk_transactions").insert(row).select().single(), "save expense");
     if (!ok) return;
     if (inserted) {
@@ -677,7 +681,7 @@ export default function BookkeeperApp() {
     const stamp = new Date().toISOString();
 
     const rows = expenseItems.map((it) => ({
-      user_id: session.user.id, business_id: biz,
+      user_id: session.user.id, business_id: biz, division,
       date: it.date, type: "expense", description: it.description,
       amount: Math.abs(Number(it.amount)) || 0,
       account: it.account || "Other", contact: null, reference: it.bank_ref || null,
@@ -739,7 +743,7 @@ export default function BookkeeperApp() {
 
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
+    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, division, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
     const { ok, data: inserted } = await sbWrite(supabase.from("bk_invoices").insert(row).select().single(), "save invoice");
     if (!ok) return;
     if (inserted) {
@@ -832,7 +836,7 @@ export default function BookkeeperApp() {
     const trimmed = (jobName || "").trim();
     if (!trimmed) return;
     const norm = trimmed.toLowerCase();
-    const existing = jobs.find((j) => j.name.trim().toLowerCase() === norm);
+    const existing = divJobs.find((j) => j.name.trim().toLowerCase() === norm);
     if (existing) {
       const upd = { last_used_at: new Date().toISOString() };
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
@@ -841,7 +845,7 @@ export default function BookkeeperApp() {
       setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
     } else {
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
-      const row = { user_id: session.user.id, business_id: biz, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, biz) };
+      const row = { user_id: session.user.id, business_id: biz, division, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, division) };
       const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
@@ -851,7 +855,7 @@ export default function BookkeeperApp() {
 
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
-    const row = { user_id: session.user.id, business_id: biz, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, biz) };
+    const row = { user_id: session.user.id, business_id: biz, division, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, division) };
     const { ok, data: inserted } = await sbWrite(supabase.from("bk_jobs").insert(row).select().single(), "create project");
     if (!ok) return null;
     if (inserted) setJobs((prev) => [inserted, ...prev]);
@@ -1206,6 +1210,7 @@ export default function BookkeeperApp() {
     logo: { padding: "20px 16px 12px", borderBottom: "1px solid #e2e8f0" },
     bizSwitcher: { padding: "12px", borderBottom: "1px solid #e2e8f0" },
     bizBtn: (active, color) => ({ width: "100%", padding: "8px 10px", border: "none", borderRadius: 6, cursor: "pointer", textAlign: "left", fontSize: 12, fontWeight: 600, background: active ? color + "18" : "transparent", color: active ? color : "#64748b", borderLeft: active ? `3px solid ${color}` : "3px solid transparent", marginBottom: 2 }),
+    divBtn: (active, color) => ({ width: "100%", padding: "8px 10px", border: "none", borderRadius: 6, cursor: "pointer", textAlign: "left", fontSize: 12, fontWeight: 600, background: active ? color + "18" : "transparent", color: active ? color : "#64748b", borderLeft: active ? `3px solid ${color}` : "3px solid transparent", marginBottom: 2 }),
     nav: { flex: 1, padding: "8px", overflowY: "auto" },
     navBtn: (active) => ({ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", border: "none", borderRadius: 6, cursor: "pointer", background: active ? "#ecfdf5" : "transparent", color: active ? "#059669" : "#64748b", fontSize: 13, fontWeight: active ? 600 : 400, marginBottom: 1, textAlign: "left", borderLeft: active ? `3px solid ${accent}` : "3px solid transparent" }),
     main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 },
@@ -1428,18 +1433,19 @@ export default function BookkeeperApp() {
   };
 
   const ExpenseForm = ({ existing }) => {
-    const derivePaymentSource = (e) => {
-      if (!e) return "business";
-      if (e.payment_source === "personal") return e.reimbursement_required ? "personal_reimburse" : "personal_no_reimburse";
-      return e.payment_source || "business";
+    const derivePersonalCard = (e) => {
+      if (!e) return false;
+      return e.payment_source === "personal" && e.reimbursement_required;
     };
     const ai = !existing ? aiData : null;
     const fromReimbursements = ai?.fromReimbursements;
-    const init = existing ? { ...existing, payment_source: derivePaymentSource(existing), paid_by: existing.paid_by || "", business_purpose: existing.business_purpose || "", gst_amount: existing.gst_amount != null ? String(existing.gst_amount) : "", gst_treatment: existing.gst_treatment || "Unsure", reimbursement_status: existing.reimbursement_status || "not_required" } : ai ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: accounts.find(a => a.name === ai.category && a.type === "Expense")?.name || ai.category || "", contact: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", payment_source: fromReimbursements ? "personal_reimburse" : "business", paid_by: fromReimbursements ? "Michel" : "", business_purpose: ai.businessPurpose || "", gst_amount: ai.gstAmount != null ? String(ai.gstAmount) : "", gst_treatment: ai.gstTreatment || "Unsure", reimbursement_status: "not_required", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null } : { date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "", payment_source: "business", paid_by: "", business_purpose: "", gst_amount: "", gst_treatment: "Unsure", reimbursement_status: "not_required" };
+    const initPersonalCard = existing ? derivePersonalCard(existing) : (fromReimbursements || false);
+    const init = existing ? { ...existing, personal_card: initPersonalCard, paid_by: existing.paid_by || "Michel", business_purpose: existing.business_purpose || "", gst_amount: existing.gst_amount != null ? String(existing.gst_amount) : "", gst_treatment: existing.gst_treatment || "Unsure", reimbursement_status: existing.reimbursement_status || "not_required" } : ai ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: accounts.find(a => a.name === ai.category && a.type === "Expense")?.name || ai.category || "", contact: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, paid_by: initPersonalCard ? "Michel" : "", business_purpose: ai.businessPurpose || "", gst_amount: ai.gstAmount != null ? String(ai.gstAmount) : "", gst_treatment: ai.gstTreatment || "Unsure", reimbursement_status: "not_required", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null } : { date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "", personal_card: false, paid_by: "", business_purpose: "", gst_amount: "", gst_treatment: "Unsure", reimbursement_status: "not_required" };
     const [f, setF] = useState({ ...init, amount: String(init.amount || "") });
     const [saving, setSaving] = useState(false);
     const expenseAccounts = accounts.filter((a) => a.type === "Expense");
     const hasWarnings = ai && (ai.confidence < 0.7 || ai.warnings?.length > 0);
+    const toSave = () => ({ ...f, payment_source: f.personal_card ? "personal_reimburse" : "business", paid_by: f.personal_card ? (f.paid_by || "Michel") : "" });
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -1476,15 +1482,20 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>GST Amount</label><input type="number" step="0.01" value={f.gst_amount} onChange={(e) => setF({ ...f, gst_amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>GST Treatment</label><select value={f.gst_treatment} onChange={(e) => setF({ ...f, gst_treatment: e.target.value })} style={s.select}>{GST_TREATMENTS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
         </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Payment Source</label><select value={f.payment_source} onChange={(e) => { const v = e.target.value; const clear = v !== "personal_reimburse" && v !== "personal_no_reimburse"; setF({ ...f, payment_source: v, ...(clear ? { paid_by: "", business_purpose: "" } : {}) }); }} style={s.select}>{PAYMENT_SOURCES.map(ps => <option key={ps.value} value={ps.value}>{ps.label}</option>)}</select></div>
-        {(f.payment_source === "personal_reimburse" || f.payment_source === "personal_no_reimburse") && (
-          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Personal Payment Details</div>
-            <div style={{ marginBottom: 12 }}><label style={s.label}>Paid By</label><input value={f.paid_by} onChange={(e) => setF({ ...f, paid_by: e.target.value })} placeholder="Michel" style={s.input} /></div>
-            <div style={{ marginBottom: 12 }}><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased?" style={s.input} /></div>
-          </div>
-        )}
-        <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); existing ? await updateTransaction(existing.id, f) : await addTransaction(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
+        <div style={{ marginBottom: 12, padding: "12px 14px", background: f.personal_card ? "#fffbeb" : "#f8fafc", border: `1px solid ${f.personal_card ? "#fde68a" : "#e2e8f0"}`, borderRadius: 9 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", margin: 0 }}>
+            <input type="checkbox" checked={!!f.personal_card} onChange={(e) => { const on = e.target.checked; setF({ ...f, personal_card: on, paid_by: on ? (f.paid_by || "Michel") : "", business_purpose: on ? f.business_purpose : "" }); }} style={{ width: 16, height: 16, accentColor: accent }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>Paid on personal card</span>
+          </label>
+          {f.personal_card && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 11, color: "#92400e", marginBottom: 8, fontWeight: 500 }}>Flagged as reimbursement pending — owed to Michel</div>
+              <div style={{ marginBottom: 10 }}><label style={s.label}>Paid By</label><input value={f.paid_by} onChange={(e) => setF({ ...f, paid_by: e.target.value })} placeholder="Michel" style={s.input} /></div>
+              <div><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased?" style={s.input} /></div>
+            </div>
+          )}
+        </div>
+        <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); const payload = toSave(); existing ? await updateTransaction(existing.id, payload) : await addTransaction(payload); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
         {existing && existing.receipt_path && (
           <button onClick={() => openReceipt(existing)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6 }}>
             <Icons.Camera /> View Receipt
@@ -1544,14 +1555,14 @@ export default function BookkeeperApp() {
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(invoices, profile, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
+      : { number: getNextDocumentNumber(divInvoices, division, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
     const [notesEdited, setNotesEdited] = useState(!!existing);
     const [termsEdited, setTermsEdited] = useState(!!existing);
     const updateType = (newType) => {
       const autoNum = !existing && !f._numberEdited;
-      const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(invoices, profile, newType) : f.number };
+      const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(divInvoices, division, newType) : f.number };
       if (!dueDateEdited) updates.due_date = getDefaultDueDate(newType, f.date);
       if (!notesEdited) updates.notes = getDefaultTerms(newType);
       if (!termsEdited) updates.terms = getDefaultDocTerms(newType);
@@ -1575,7 +1586,7 @@ export default function BookkeeperApp() {
     const isLump = f.pricing_mode === "lump_sum";
     const total = isLump ? (Number(f.lump_amount) || 0) : f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
     const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
-    const sortedJobs = [...jobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
+    const sortedJobs = [...divJobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
     const saveInv = async () => { const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); };
 
     // One-click quote → invoice (MYOB's headline action). Persists any quote edits,
@@ -1940,7 +1951,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Bank Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Commonwealth Bank" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="Mworx Group Pty Ltd" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="MT Management Pty Ltd" style={s.input} /></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
@@ -2025,14 +2036,14 @@ export default function BookkeeperApp() {
 
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
+    const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
-    const realInvoices = invoices.filter((i) => i.type !== "quote");
+    const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const activeProjects = jobs.filter((p) => (p.status || "active") === "active");
-    const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, invoices).remaining, 0);
-    const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
-    const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, invoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
+    const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
+    const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
+    const recentExpenses = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
 
     return (
       <div>
@@ -2101,12 +2112,12 @@ export default function BookkeeperApp() {
             </div>
           )}
         </div>
-        {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
+        {pendingReimbursements.length > 0 && (
           <div className="bk-card-hover" style={{ ...s.card, cursor: "pointer", borderColor: "#fde68a", background: "#fffef5" }} onClick={() => setPage("reimbursements")}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
-                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#92400e" }}>Owner Reimbursements</h4>
-                <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>{txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").length} pending — {fmt(txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").reduce((sum, t) => sum + Number(t.amount), 0))}</div>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#92400e" }}>Owed to Michel</h4>
+                <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>{pendingReimbursements.length} pending reimbursement{pendingReimbursements.length !== 1 ? "s" : ""} — {fmt(pendingReimbTotal)}</div>
               </div>
               <span style={{ fontSize: 20, color: "#f59e0b" }}>→</span>
             </div>
@@ -2124,7 +2135,7 @@ export default function BookkeeperApp() {
   const ExpensesPage = () => {
     const [search, setSearch] = useState("");
     const [jobFilter, setJobFilter] = useState("");
-    const sorted = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
+    const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => {
       if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase())) return false;
       if (jobFilter && t.job !== jobFilter) return false;
@@ -2134,7 +2145,7 @@ export default function BookkeeperApp() {
     const paymentBadge = (t) => {
       if (t.payment_source !== "personal") return null;
       if (t.reimbursement_status === "reimbursed") return <span style={s.badge("#34d399")}>Reimbursed</span>;
-      if (t.reimbursement_status === "pending") return <span style={s.badge("#f59e0b")}>Pending</span>;
+      if (t.reimbursement_status === "pending") return <span style={s.badge("#f59e0b")}>Reimbursement pending</span>;
       if (t.reimbursement_status === "do_not_reimburse") return <span style={s.badge("#64748b")}>Personal</span>;
       return <span style={s.badge("#64748b")}>Personal</span>;
     };
@@ -2188,7 +2199,7 @@ export default function BookkeeperApp() {
     const [selected, setSelected] = useState(() => new Set());
     const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
     const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["outstanding", "paid", "overdue", "draft"];
-    const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const sorted = [...divInvoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((i) => {
       if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; } else if (filter !== "all" && i.status !== filter) return false;
       if (jobFilter && i.job !== jobFilter) return false;
@@ -2357,10 +2368,10 @@ export default function BookkeeperApp() {
         default: return r.p.job_number || "";
       }
     };
-    const rows = jobs
+    const rows = divJobs
       .filter((p) => statusFilter === "all" || (p.status || "active") === statusFilter)
       .filter((p) => !search || (p.name || "").toLowerCase().includes(search.toLowerCase()))
-      .map((p) => ({ p, t: projectTotals(p, invoices), parties: projectConsultants(p, invoices) }))
+      .map((p) => ({ p, t: projectTotals(p, divInvoices), parties: projectConsultants(p, divInvoices) }))
       .sort((a, b) => { const va = sortVal(a), vb = sortVal(b); const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb)); return sortDir === "asc" ? cmp : -cmp; });
     const SortTh = ({ label, k, align, width }) => (
       <th onClick={() => { if (sortKey === k) setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir(["contract", "invoiced", "paid", "remaining", "progress"].includes(k) ? "desc" : "asc"); } }} style={{ ...s.th, textAlign: align || "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", ...(width ? { width } : {}) }}>
@@ -2370,7 +2381,7 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? jobs.length : jobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
+          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? divJobs.length : divJobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px", marginLeft: "auto" }} />
         </div>
         <div style={s.card}>
@@ -2478,7 +2489,7 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pending Reimbursement</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}</div><div style={{ fontSize: 12, color: "#92400e", marginTop: 6, fontWeight: 500 }}>{pending.length} expense{pending.length !== 1 ? "s" : ""}</div></div>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Owed to Michel</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}</div><div style={{ fontSize: 12, color: "#92400e", marginTop: 6, fontWeight: 500 }}>{pending.length} reimbursement pending</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Reimbursed This Month</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(reimbursedThisMonth)}</div><div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).length} this month</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Missing Receipts</div><div style={{ fontSize: 28, fontWeight: 700, color: missingReceipts.length > 0 ? "#ef4444" : "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{missingReceipts.length}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>pending without receipt</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Oldest Pending</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{oldestPending ? `${oldestDays}d` : "—"}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>{oldestPending ? oldestPending.description : "None pending"}</div></div>
@@ -2503,7 +2514,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, fontSize: 12, color: "#64748b", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.business_purpose || "--"}</td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}{t.gst_amount ? <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400 }}>GST: {fmt(t.gst_amount)}</div> : null}</td>
                     <td style={s.td}>{t.receipt_path ? <button onClick={() => openReceipt(t)} style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button> : <span style={{ fontSize: 10, color: "#ef4444" }}>Missing</span>}</td>
-                    <td style={s.td}><span style={s.badge(t.reimbursement_status === "reimbursed" ? "#34d399" : t.reimbursement_status === "pending" ? "#f59e0b" : "#64748b")}>{t.reimbursement_status === "reimbursed" ? "Reimbursed" : t.reimbursement_status === "pending" ? "Pending" : t.reimbursement_status === "missing_receipt" ? "No Receipt" : "Skipped"}</span>{t.reimbursement_status === "reimbursed" && t.reimbursement_date ? <div style={{ fontSize: 10, color: "#94a3b8" }}>{fmtDate(t.reimbursement_date)}</div> : null}{t.reimbursement_reference ? <div style={{ fontSize: 10, color: "#94a3b8" }}>Ref: {t.reimbursement_reference}</div> : null}</td>
+                    <td style={s.td}><span style={s.badge(t.reimbursement_status === "reimbursed" ? "#34d399" : t.reimbursement_status === "pending" ? "#f59e0b" : "#64748b")}>{t.reimbursement_status === "reimbursed" ? "Reimbursed" : t.reimbursement_status === "pending" ? "Reimbursement pending" : t.reimbursement_status === "missing_receipt" ? "No Receipt" : "Skipped"}</span>{t.reimbursement_status === "reimbursed" && t.reimbursement_date ? <div style={{ fontSize: 10, color: "#94a3b8" }}>{fmtDate(t.reimbursement_date)}</div> : null}{t.reimbursement_reference ? <div style={{ fontSize: 10, color: "#94a3b8" }}>Ref: {t.reimbursement_reference}</div> : null}</td>
                     <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         {t.reimbursement_status === "pending" && <button onClick={() => handleMark(t.id, "reimbursed")} style={{ ...s.btn("#34d399", true), fontSize: 10 }}><Icons.Check /> Reimburse</button>}
@@ -2550,19 +2561,20 @@ export default function BookkeeperApp() {
   );
 
   const MobileHeader = () => (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", padding: "52px 20px 12px", background: "#ffffff" }}>
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: accent, textTransform: "uppercase" }}>{bizInfo?.name}</div>
-        <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+    <div style={{ padding: "52px 20px 12px", background: "#ffffff" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: accent, textTransform: "uppercase" }}>{divInfo.name}</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
         {page === "expenses" && (
           <button onClick={() => setModal("receipt")} style={{ width: 34, height: 34, borderRadius: 17, background: "#8b5cf6", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Camera />
           </button>
         )}
         {page === "reimbursements" && (
-          <button onClick={() => { const pend = txns.filter((t) => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending"); const lines = pend.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)}${t.gst_amount ? ` (GST: ${fmt(t.gst_amount)})` : ""} | ${t.gst_treatment || "Unsure"} | Paid by ${t.paid_by || "Owner"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""}`); navigator.clipboard.writeText(`Pending Reimbursements (${pend.length})\n${lines.join("\n")}`); alert("Copied!"); }} style={{ width: 34, height: 34, borderRadius: 17, background: "#6366f1", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+          <button onClick={() => { const lines = pendingReimbursements.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)}${t.gst_amount ? ` (GST: ${fmt(t.gst_amount)})` : ""} | ${t.gst_treatment || "Unsure"} | Paid by ${t.paid_by || "Michel"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""}`); navigator.clipboard.writeText(`Pending Reimbursements (${pendingReimbursements.length})\nOwed to Michel: ${fmt(pendingReimbTotal)}\n${lines.join("\n")}`); alert("Copied!"); }} style={{ width: 34, height: 34, borderRadius: 17, background: "#6366f1", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Download />
           </button>
         )}
@@ -2577,7 +2589,9 @@ export default function BookkeeperApp() {
         <button onClick={logout} style={{ width: 34, height: 34, borderRadius: 17, background: "#f1f5f9", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b" }}>
           <Icons.Logout />
         </button>
+        </div>
       </div>
+      <DivisionSwitcher horizontal />
     </div>
   );
 
@@ -2636,11 +2650,11 @@ export default function BookkeeperApp() {
 
   const MobileDashboard = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
+    const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
     const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
-    const realInvoices = invoices.filter((i) => i.type !== "quote");
+    const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    const recentExpenses = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
@@ -2665,14 +2679,14 @@ export default function BookkeeperApp() {
             <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, realInvoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
           ))}
         </MobileSection>
-        {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
+        {pendingReimbursements.length > 0 && (
           <div style={{ margin: "12px 16px 0", background: "#fffef5", border: "1px solid #fde68a", borderRadius: 14, padding: "14px 16px", cursor: "pointer" }} onClick={() => setPage("reimbursements")}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>Owner Reimbursements</div>
-                <div style={{ fontSize: 12, color: "#b45309", marginTop: 2 }}>{txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").length} pending</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>Owed to Michel</div>
+                <div style={{ fontSize: 12, color: "#b45309", marginTop: 2 }}>{pendingReimbursements.length} pending</div>
               </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "#92400e" }}>{fmt(txns.filter(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending").reduce((sum, t) => sum + Number(t.amount), 0))}</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#92400e" }}>{fmt(pendingReimbTotal)}</div>
             </div>
           </div>
         )}
@@ -2687,7 +2701,7 @@ export default function BookkeeperApp() {
 
   const MobileExpenses = () => {
     const [search, setSearch] = useState("");
-    const sorted = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
+    const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => !search || t.description.toLowerCase().includes(search.toLowerCase()));
     return (
       <div style={{ paddingBottom: 20 }}>
@@ -2711,7 +2725,7 @@ export default function BookkeeperApp() {
     const isQuoteList = docType === "quote";
     const [tab, setTab] = useState(isQuoteList ? "All" : "Outstanding");
     const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["Outstanding", "Paid", "Overdue", "Draft"];
-    const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const sorted = [...divInvoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((inv) => tab === "All" || (tab === "Outstanding" ? (inv.status === "sent" || inv.status === "overdue") : inv.status === tab.toLowerCase()));
     return (
       <div style={{ paddingBottom: 20 }}>
@@ -2731,9 +2745,9 @@ export default function BookkeeperApp() {
 
   const MobileProjects = () => {
     const [tab, setTab] = useState("All");
-    const rows = jobs
+    const rows = divJobs
       .filter((p) => tab === "All" || (p.status || "active") === ({ "Active": "active", "Job Lost": "job_lost", "Lead": "lead", "Finalised": "finalised" })[tab])
-      .map((p) => ({ p, t: projectTotals(p, invoices) }))
+      .map((p) => ({ p, t: projectTotals(p, divInvoices) }))
       .sort((a, b) => b.t.remaining - a.t.remaining);
     return (
       <div style={{ paddingBottom: 20 }}>
@@ -2827,10 +2841,10 @@ export default function BookkeeperApp() {
     const [filter, setFilter] = useState("all");
     const [dragOver, setDragOver] = useState(false);
     const fileRef = useRef(null);
-    const openInvoices = invoices.filter((i) => i.type === "invoice" && (i.status === "sent" || i.status === "overdue"));
+    const openInvoices = divInvoices.filter((i) => i.type === "invoice" && (i.status === "sent" || i.status === "overdue"));
 
     const handleText = (text, name) => {
-      const res = processBankFile(text, name, { invoices, existingTxns: txns });
+      const res = processBankFile(text, name, { invoices: divInvoices, existingTxns: divTxns });
       if (res.error) { setImportMeta({ fileName: name, error: res.error }); setImportItems([]); setImportPhase("review"); return; }
       setImportMeta({ fileName: name, columnMap: res.columnMap, format: res.format, warnings: res.warnings || [] });
       setImportItems(res.items);
@@ -2987,6 +3001,34 @@ export default function BookkeeperApp() {
   const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, import: ImportPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
+  const DivisionSwitcher = ({ compact, horizontal }) => {
+    if (horizontal) {
+      return (
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {DIVISIONS.map((d) => (
+            <button key={d.id} onClick={() => switchDivision(d.id)} title={d.subtitle} style={{ padding: "5px 11px", fontSize: 11, fontWeight: 600, borderRadius: 7, border: division === d.id ? "none" : "1px solid #e2e8f0", background: division === d.id ? d.accent : "#fff", color: division === d.id ? "#fff" : "#64748b", cursor: "pointer", whiteSpace: "nowrap" }}>
+              {d.name}
+            </button>
+          ))}
+        </div>
+      );
+    }
+    return (
+      <div style={{ ...s.bizSwitcher, padding: compact ? "8px" : "12px" }}>
+        {DIVISIONS.map((d) => (
+          <button key={d.id} onClick={() => switchDivision(d.id)} title={`${d.name} — ${d.subtitle}`} style={s.divBtn(division === d.id, d.accent)}>
+            {compact ? d.name.split(" ").map((w) => w[0]).join("") : (
+              <>
+                <div>{d.name}</div>
+                <div style={{ fontSize: 9, fontWeight: 400, opacity: 0.75, marginTop: 1 }}>{d.subtitle}</div>
+              </>
+            )}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   const SidebarContent = () => (
     <>
       <div style={{ ...s.logo, padding: navCollapsed ? "20px 8px 12px" : "20px 16px 12px", textAlign: navCollapsed ? "center" : "left" }}>
@@ -2995,10 +3037,11 @@ export default function BookkeeperApp() {
         ) : (
           <>
             <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
-            <div style={{ fontSize: 10, color: "#10b981", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>{bizInfo?.name}</div>
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>{COMPANY.name}</div>
           </>
         )}
       </div>
+      {navCollapsed ? <DivisionSwitcher compact /> : <DivisionSwitcher />}
       <div style={s.nav}>
         {navItems.map((item) => (
           <button key={item.id} onMouseEnter={item.submenu ? (e) => openNavMenu(e, item.submenu) : undefined} onMouseLeave={item.submenu ? closeNavMenuSoon : undefined} onClick={(e) => { if (item.submenu) openNavMenu(e, item.submenu); else setPage(item.id); }} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
@@ -3054,8 +3097,9 @@ export default function BookkeeperApp() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{PAGE_TITLES[page] || ""}</div>
-                <div style={{ fontSize: 10, color: "#10b981", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{bizInfo?.name}</div>
+                <div style={{ fontSize: 10, color: accent, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{divInfo.name}</div>
               </div>
+              <DivisionSwitcher horizontal />
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button onClick={() => setModal("receipt")} style={s.btn("#8b5cf6", true)}><Icons.Camera /> Receipt</button>
