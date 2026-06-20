@@ -8,9 +8,10 @@ These SQL files document the schema/constraints/RLS the app relies on.
   constraint the Outlook OAuth upsert needs. **Review before applying.**
 - `0003_rls_policies.sql` — Row Level Security policies. **Review carefully**
   against existing live policies before applying — duplicates will error.
-- `0007_divisions.sql` — `division` column on `bk_transactions`, `bk_invoices`,
-  and `bk_jobs` for Mworx Group / MT Management scoping. **Apply before using
-  the division switcher** — existing rows default to `mworx`.
+- `0007_divisions.sql` — Adds a `division` column on top of the existing
+  `business_id = 'mworx'` setup. All current Mworx data is backfilled to
+  `division = 'mworx'`. Required before saving MT Management records; Mworx
+  Group keeps working without it (the app omits division on insert until applied).
 
 ## Applying
 

@@ -47,7 +47,9 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 // quotes under Sales) keep their own title even though they share a nav item.
 const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", import: "Import", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
 
-// One legal entity (ABN); two operating divisions toggled in the UI.
+// One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
+// invoices, expenses, and projects live there today. Division is an extra tag
+// on those same rows — not a second business or database setup.
 const COMPANY = { id: "mworx", name: "MT Management Pty Ltd" };
 
 const DIVISIONS = [
@@ -79,7 +81,7 @@ function MoneyBig({ value, color = "#0f172a", size = 30 }) {
 
 const GST_TREATMENTS = ["GST included", "No GST", "GST free", "BAS excluded", "Input taxed", "Unsure"];
 
-const recordDivision = (r) => r?.division || "mworx";
+const recordDivision = (r) => r?.division || "mworx"; // pre-migration rows without division → Mworx Group
 const divisionInfo = (id) => DIVISIONS.find((d) => d.id === id) || DIVISIONS[0];
 
 const sanitizeFilePart = (s) => (s || "").replace(/[/\\:*?"<>|&#%]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
@@ -528,7 +530,7 @@ export default function BookkeeperApp() {
     setInvoices(loadedInvoices);
     setTxns(tRes.data || []);
     setJobs(jRes.data || []);
-    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: COMPANY.name });
+    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
     setEmailConn(eRes.data || null);
     setLoading(false);
 
@@ -608,6 +610,26 @@ export default function BookkeeperApp() {
     return { ok: true, data, error: null };
   };
 
+  // Insert with division when the column exists (migration 0007). Existing Mworx
+  // Supabase rows keep working before migration: division is omitted and treated
+  // as mworx. MT Management saves require the migration first.
+  const sbInsert = async (table, row, action, multi = false) => {
+    let query = supabase.from(table).insert(row);
+    query = multi ? query.select() : query.select().single();
+    let res = await sbWrite(query, action);
+    if (!res.ok && res.error?.message?.match(/division/i) && "division" in row) {
+      if (row.division !== "mworx") {
+        alert("To save MT Management records, apply supabase/migrations/0007_divisions.sql in Supabase first.");
+        return res;
+      }
+      const { division: _d, ...noDiv } = row;
+      query = supabase.from(table).insert(noDiv);
+      query = multi ? query.select() : query.select().single();
+      res = await sbWrite(query, action);
+    }
+    return res;
+  };
+
   const openReceipt = async (t) => {
     if (!t?.receipt_path) { alert("No receipt attached to this expense."); return; }
     const { data, error } = await supabase.storage.from("receipts").createSignedUrl(t.receipt_path, 600);
@@ -621,7 +643,7 @@ export default function BookkeeperApp() {
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
     const row = { user_id: session.user.id, business_id: biz, division, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, gst_amount: t.gst_amount != null && t.gst_amount !== "" ? Number(t.gst_amount) : null, gst_treatment: t.gst_treatment || "Unsure", ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
-    const { ok, data: inserted } = await sbWrite(supabase.from("bk_transactions").insert(row).select().single(), "save expense");
+    const { ok, data: inserted } = await sbInsert("bk_transactions", row, "save expense");
     if (!ok) return;
     if (inserted) {
       if (inserted.receipt_path) {
@@ -694,7 +716,7 @@ export default function BookkeeperApp() {
 
     let inserted = [];
     if (rows.length) {
-      const { ok, data } = await sbWrite(supabase.from("bk_transactions").insert(rows).select(), "import transactions");
+      const { ok, data } = await sbInsert("bk_transactions", rows, "import transactions", true);
       if (!ok) return null;
       inserted = data || [];
     }
@@ -744,7 +766,7 @@ export default function BookkeeperApp() {
   const addInvoice = async (inv) => {
     const items = inv.items || [];
     const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, division, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
-    const { ok, data: inserted } = await sbWrite(supabase.from("bk_invoices").insert(row).select().single(), "save invoice");
+    const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice");
     if (!ok) return;
     if (inserted) {
       if (items.length) {
@@ -846,7 +868,7 @@ export default function BookkeeperApp() {
     } else {
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
       const row = { user_id: session.user.id, business_id: biz, division, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, division) };
-      const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
+      const { data: inserted } = await sbInsert("bk_jobs", row, "save job");
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
   };
@@ -856,7 +878,7 @@ export default function BookkeeperApp() {
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
     const row = { user_id: session.user.id, business_id: biz, division, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, division) };
-    const { ok, data: inserted } = await sbWrite(supabase.from("bk_jobs").insert(row).select().single(), "create project");
+    const { ok, data: inserted } = await sbInsert("bk_jobs", row, "create project");
     if (!ok) return null;
     if (inserted) setJobs((prev) => [inserted, ...prev]);
     return inserted;

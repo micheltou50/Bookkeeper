@@ -1,6 +1,11 @@
--- Division scoping for MT Management Pty Ltd operating units.
--- Both divisions share one business_id ('mworx') and ABN; division separates
--- Mworx Group (drafting/planning) from MT Management (STR property management).
+-- Additive division scoping on the EXISTING mworx Supabase setup.
+--
+-- Your live project already stores everything under business_id = 'mworx'
+-- (profiles, invoices, expenses, jobs, OAuth, etc.). This migration does NOT
+-- create a new business or move data — it only adds a division tag so the app
+-- can separate Mworx Group from MT Management under the same ABN.
+--
+-- Safe to apply: existing rows get division = 'mworx' automatically.
 
 alter table public.bk_transactions
   add column if not exists division text not null default 'mworx';
@@ -19,5 +24,3 @@ create index if not exists bk_invoices_business_division_idx
 
 create index if not exists bk_jobs_business_division_idx
   on public.bk_jobs (business_id, division);
-
--- Existing rows default to 'mworx' via the column default above.
