@@ -41,7 +41,7 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "" };
 
 // Header titles per page. Sub-pages (reimbursements/import live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
@@ -105,6 +105,19 @@ function getNextDocumentNumber(invoices, profile, type) {
     .filter((s) => s > 0);
   const next = seqs.length ? Math.max(...seqs) + 1 : 1;
   return `${tag}${String(next).padStart(3, "0")}`;
+}
+
+// Per-business job/project number in the YY### scheme (e.g. 26106 = 6th job of
+// 2026). Continues from the highest existing number for the current year; if
+// there are none yet, starts the year at YY101.
+function getNextJobNumber(jobs, businessId) {
+  const yy = String(new Date().getFullYear()).slice(-2);
+  const nums = (jobs || [])
+    .filter((j) => j.business_id === businessId)
+    .map((j) => { const m = String(j.job_number || "").match(/^(\d{4,})$/); return m ? Number(m[1]) : 0; })
+    .filter((n) => n > 0 && String(n).startsWith(yy));
+  const next = nums.length ? Math.max(...nums) + 1 : Number(`${yy}101`);
+  return String(next);
 }
 
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
@@ -213,6 +226,7 @@ const Icons = {
   More: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>,
   Bell: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>,
   Eye: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
+  Cloud: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>,
   Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
   ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
@@ -441,6 +455,13 @@ export default function BookkeeperApp() {
   const [importMeta, setImportMeta] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [importBusy, setImportBusy] = useState(false);
+  const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
+  const navMenuTimer = useRef(null);
+  // Sidebar sub-menus open on hover; a short close delay lets the cursor travel
+  // from the nav item into the popover without it vanishing.
+  const openNavMenu = (e, items) => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; const r = e.currentTarget.getBoundingClientRect(); setNavMenu({ x: r.right, y: r.top, items }); };
+  const holdNavMenu = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; };
+  const closeNavMenuSoon = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = setTimeout(() => setNavMenu(null), 220); };
 
   const bizInfo = BUSINESSES.find((b) => b.id === biz);
   const accent = bizInfo?.accent || "#10b981";
@@ -611,6 +632,7 @@ export default function BookkeeperApp() {
       }
       setTxns((prev) => [inserted, ...prev]);
     }
+    if (inserted && inserted.receipt_path && emailConn) saveToOneDrive("expense", inserted.id, { silent: true });
     setModal(null);
     setAiData(null);
   };
@@ -731,6 +753,7 @@ export default function BookkeeperApp() {
       }
       setInvoices((prev) => [inserted, ...prev]);
     }
+    if (inserted && emailConn) saveToOneDrive("invoice", inserted.id, { silent: true });
     formDirtyRef.current = false;
     setModal(null);
     setEditItem(null);
@@ -818,7 +841,7 @@ export default function BookkeeperApp() {
       setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
     } else {
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
-      const row = { user_id: session.user.id, business_id: biz, name: trimmed, contact_id: contact?.id || null };
+      const row = { user_id: session.user.id, business_id: biz, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, biz) };
       const { data: inserted } = await supabase.from("bk_jobs").insert(row).select().single();
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
@@ -828,7 +851,7 @@ export default function BookkeeperApp() {
 
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
-    const row = { user_id: session.user.id, business_id: biz, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active" };
+    const row = { user_id: session.user.id, business_id: biz, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, biz) };
     const { ok, data: inserted } = await sbWrite(supabase.from("bk_jobs").insert(row).select().single(), "create project");
     if (!ok) return null;
     if (inserted) setJobs((prev) => [inserted, ...prev]);
@@ -883,7 +906,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "" };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
     if (saved) setProfile(saved);
@@ -1112,6 +1135,27 @@ export default function BookkeeperApp() {
     setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
   };
 
+  // Save an invoice PDF or expense receipt to OneDrive via the Netlify function
+  // (reuses the Microsoft connection). silent=true for auto-save (no popups).
+  const saveToOneDrive = async (kind, id, opts = {}) => {
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) return false;
+      const resp = await fetch("/.netlify/functions/onedrive-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ kind, id }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) { if (!opts.silent) alert(data.error || "Could not save to OneDrive."); return false; }
+      if (!opts.silent) alert(`Saved to OneDrive → ${data.savedTo || "done"}`);
+      return true;
+    } catch {
+      if (!opts.silent) alert("Could not reach OneDrive. Please try again.");
+      return false;
+    }
+  };
+
   const connectOutlook = async () => {
     const token = (await supabase.auth.getSession()).data.session?.access_token;
     if (!token) return;
@@ -1144,8 +1188,8 @@ export default function BookkeeperApp() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
-    { id: "expenses", label: "Expenses", icon: Icons.Expenses },
-    { id: "invoices", label: "Sales", icon: Icons.Invoices },
+    { id: "expenses", label: "Expenses", icon: Icons.Expenses, submenu: [{ id: "expenses", label: "Expenses", icon: Icons.Expenses }, { id: "reimbursements", label: "Reimbursements", icon: Icons.Reimburse }, { id: "import", label: "Import", icon: Icons.Import }] },
+    { id: "invoices", label: "Sales", icon: Icons.Invoices, submenu: [{ id: "invoices", label: "Invoices", icon: Icons.Invoices }, { id: "quotes", label: "Quotes", icon: Icons.Quotes }] },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
@@ -1771,7 +1815,7 @@ export default function BookkeeperApp() {
         <div style={{ marginBottom: 12 }}><label style={s.label}>Address (shown as the project label)</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="e.g. 10 Mcpherson Road Smeaton Grange NSW" style={s.input} /></div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Name / Description</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Construction Certificate - Gym" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="lead">Lead</option><option value="active">Active</option><option value="completed">Completed</option><option value="archived">Archived</option></select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="active">Active</option><option value="job_lost">Job Lost</option><option value="lead">Lead</option><option value="finalised">Finalised</option></select></div>
         </div>
         <div style={{ marginBottom: 16 }}><label style={s.label}>Notes</label><textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Notes (optional)" style={{ ...s.input, minHeight: 50, resize: "vertical" }} /></div>
 
@@ -1903,6 +1947,11 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
         </div>
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
+          <label style={{ ...s.label, marginBottom: 6 }}>OneDrive</label>
+          <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group" style={s.input} />
+          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>The OneDrive folder that holds your job folders. Invoices &amp; receipts save into the matching "26105 - …" subfolder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect &amp; reconnect to grant file access.</div>
+        </div>
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Email Integration</label>
           {emailConn ? (
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#ecfdf5", borderRadius: 8, border: "1px solid #a7f3d0" }}>
@@ -1974,23 +2023,6 @@ export default function BookkeeperApp() {
     );
   };
 
-  // Sub-navigation toggles. Expenses/Reimbursements/Import share the Expenses
-  // section; Invoices/Quotes share the Sales section. They drive App-level `page`
-  // state so switching survives re-renders.
-  const ExpensesNav = () => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-      <button onClick={() => setPage("expenses")} style={s.pill(page === "expenses")}>Expenses</button>
-      <button onClick={() => setPage("reimbursements")} style={s.pill(page === "reimbursements")}>Reimbursements</button>
-      <button onClick={() => setPage("import")} title="Import a bank statement" style={{ ...s.btnOutline, marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, ...(page === "import" ? { color: accent, borderColor: accent } : {}) }}><Icons.Import /> Import</button>
-    </div>
-  );
-  const SalesNav = () => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-      <button onClick={() => setPage("invoices")} style={s.pill(page === "invoices")}>Invoices</button>
-      <button onClick={() => setPage("quotes")} style={s.pill(page === "quotes")}>Quotes</button>
-    </div>
-  );
-
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = txns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
@@ -2000,6 +2032,7 @@ export default function BookkeeperApp() {
     const activeProjects = jobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, invoices).remaining, 0);
     const recentExpenses = [...txns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, invoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
 
     return (
       <div>
@@ -2047,6 +2080,27 @@ export default function BookkeeperApp() {
             </div>
           )}
         </div>
+        <div style={s.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Active Projects</h4>
+            <button onClick={() => setPage("projects")} style={s.btnOutline}>View All</button>
+          </div>
+          {topProjects.length === 0 ? (
+            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No active projects</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}><tbody>
+                {topProjects.map(({ p, t }) => (
+                  <tr key={p.id} onClick={() => { setEditItem(p); setModal("project"); }} style={{ cursor: "pointer" }}>
+                    <td style={{ ...s.td, color: "#94a3b8", width: 70, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{p.job_number || ""}</td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{projectLabel(p)}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.remaining)}<div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400 }}>remaining</div></td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </div>
+          )}
+        </div>
         {txns.some(t => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending") && (
           <div className="bk-card-hover" style={{ ...s.card, cursor: "pointer", borderColor: "#fde68a", background: "#fffef5" }} onClick={() => setPage("reimbursements")}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2087,7 +2141,6 @@ export default function BookkeeperApp() {
 
     return (
       <div>
-        <ExpensesNav />
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 220, flex: "1 1 160px" }} />
           <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180, flex: "0 1 160px" }}>
@@ -2112,6 +2165,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       {t.receipt_path && <button onClick={(e) => { e.stopPropagation(); openReceipt(t); }} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
+                      {t.receipt_path && <button onClick={(e) => { e.stopPropagation(); saveToOneDrive("expense", t.id); }} title="Save receipt to OneDrive" style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", padding: 2 }}><Icons.Cloud /></button>}
                       <button onClick={(e) => { e.stopPropagation(); deleteTransaction(t.id); }} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
                     </td>
                   </tr>
@@ -2126,24 +2180,24 @@ export default function BookkeeperApp() {
 
   const DocList = ({ docType }) => {
     const isQuoteList = docType === "quote";
-    const [filter, setFilter] = useState("all");
+    const [filter, setFilter] = useState(isQuoteList ? "all" : "outstanding");
     const [jobFilter, setJobFilter] = useState("");
     const [search, setSearch] = useState("");
     const [sortKey, setSortKey] = useState("due_date");
     const [sortDir, setSortDir] = useState("desc");
     const [selected, setSelected] = useState(() => new Set());
     const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
-    const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["all", "draft", "sent", "paid", "overdue"];
+    const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["outstanding", "paid", "overdue", "draft"];
     const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((i) => {
-      if (filter !== "all" && i.status !== filter) return false;
+      if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; } else if (filter !== "all" && i.status !== filter) return false;
       if (jobFilter && i.job !== jobFilter) return false;
       if (search && !(i.number || "").toLowerCase().includes(search.toLowerCase()) && !(i.contact_name || "").toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
     const sumTotals = (arr) => arr.reduce((acc, i) => acc + Number(i.total || 0), 0);
-    const tabs = statusTabs.map((st) => ({ key: st, label: st.charAt(0).toUpperCase() + st.slice(1), count: st === "all" ? sorted.length : sorted.filter((i) => i.status === st).length }));
+    const tabs = statusTabs.map((st) => ({ key: st, label: st.charAt(0).toUpperCase() + st.slice(1), count: st === "all" ? sorted.length : st === "outstanding" ? sorted.filter((i) => i.status === "sent" || i.status === "overdue").length : sorted.filter((i) => i.status === st).length }));
     const tiles = isQuoteList
       ? [{ label: "Total quoted", value: fmt(sumTotals(sorted)) }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981" }, { label: "Awaiting", value: fmt(sumTotals(sorted.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6" }]
       : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))) }, { label: "Outstanding", value: fmt(sumTotals(sorted.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6" }, { label: "Overdue", value: fmt(sumTotals(sorted.filter((i) => i.status === "overdue"))), color: "#ef4444" }];
@@ -2270,6 +2324,7 @@ export default function BookkeeperApp() {
               <div style={{ position: "fixed", top: menu.y + 4, left: Math.max(8, menu.x - 212), width: 212, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
                 {item(emailConn ? "Email via default app" : "Open in Outlook", emailConn ? <Icons.Send /> : <Icons.Outlook />, () => emailConn ? sendInvoice(mi) : createOutlookDraft(mi))}
                 {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
+                {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
                 {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
                 {!isQuoteList && (mi.status === "sent" || mi.status === "overdue") && item("Send payment reminder", <Icons.Bell />, () => sendReminderViaResend(mi))}
                 {item(isQuoteList ? "Delete quote" : "Delete invoice", <Icons.Trash />, () => deleteInvoice(mi.id), true)}
@@ -2281,22 +2336,41 @@ export default function BookkeeperApp() {
     );
   };
 
-  const InvoicesPage = () => <><SalesNav /><DocList docType="invoice" /></>;
-  const QuotesPage = () => <><SalesNav /><DocList docType="quote" /></>;
+  const InvoicesPage = () => <DocList docType="invoice" />;
+  const QuotesPage = () => <DocList docType="quote" />;
 
   const ProjectsPage = () => {
-    const [statusFilter, setStatusFilter] = useState("active");
+    const [statusFilter, setStatusFilter] = useState("all");
     const [search, setSearch] = useState("");
+    const [sortKey, setSortKey] = useState("job_number");
+    const [sortDir, setSortDir] = useState("asc");
+    const consultantsLabel = (parties) => parties.length === 0 ? "—" : parties.length === 1 ? parties[0].name : `${parties.length} consultants/clients`;
+    const sortVal = (r) => {
+      switch (sortKey) {
+        case "project": return projectLabel(r.p).toLowerCase();
+        case "consultants": return consultantsLabel(r.parties).toLowerCase();
+        case "contract": return r.t.contract;
+        case "invoiced": return r.t.invoiced;
+        case "paid": return r.t.paid;
+        case "remaining": return r.t.remaining;
+        case "progress": return r.t.contract > 0 ? r.t.paid / r.t.contract : 0;
+        default: return r.p.job_number || "";
+      }
+    };
     const rows = jobs
       .filter((p) => statusFilter === "all" || (p.status || "active") === statusFilter)
       .filter((p) => !search || (p.name || "").toLowerCase().includes(search.toLowerCase()))
       .map((p) => ({ p, t: projectTotals(p, invoices), parties: projectConsultants(p, invoices) }))
-      .sort((a, b) => b.t.remaining - a.t.remaining);
-    const consultantsLabel = (parties) => parties.length === 0 ? "—" : parties.length === 1 ? parties[0].name : `${parties.length} consultants/clients`;
+      .sort((a, b) => { const va = sortVal(a), vb = sortVal(b); const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb)); return sortDir === "asc" ? cmp : -cmp; });
+    const SortTh = ({ label, k, align, width }) => (
+      <th onClick={() => { if (sortKey === k) setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir(["contract", "invoiced", "paid", "remaining", "progress"].includes(k) ? "desc" : "asc"); } }} style={{ ...s.th, textAlign: align || "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", ...(width ? { width } : {}) }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{label}<span style={{ fontSize: 9, color: sortKey === k ? "#0f172a" : "#cbd5e1" }}>{sortKey === k ? (sortDir === "asc" ? "▲" : "▼") : "↕"}</span></span>
+      </th>
+    );
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <FilterPills tabs={["lead", "active", "completed", "archived", "all"].map((sf) => ({ key: sf, label: sf.charAt(0).toUpperCase() + sf.slice(1), count: sf === "all" ? jobs.length : jobs.filter((p) => (p.status || "active") === sf).length }))} active={statusFilter} onChange={setStatusFilter} />
+          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? jobs.length : jobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px", marginLeft: "auto" }} />
         </div>
         <div style={s.card}>
@@ -2305,11 +2379,12 @@ export default function BookkeeperApp() {
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr><th style={s.th}>Project</th><th style={s.th}>Consultants/Clients</th><th style={{ ...s.th, textAlign: "right" }}>Contract</th><th style={{ ...s.th, textAlign: "right" }}>Invoiced</th><th style={{ ...s.th, textAlign: "right" }}>Paid</th><th style={{ ...s.th, textAlign: "right" }}>Remaining</th><th style={{ ...s.th, width: 120 }}>Progress</th></tr></thead>
+                <thead><tr><SortTh label="Job #" k="job_number" /><SortTh label="Project" k="project" /><SortTh label="Consultants/Clients" k="consultants" /><SortTh label="Contract" k="contract" align="right" /><SortTh label="Invoiced" k="invoiced" align="right" /><SortTh label="Paid" k="paid" align="right" /><SortTh label="Remaining" k="remaining" align="right" /><SortTh label="Progress" k="progress" width={120} /></tr></thead>
                 <tbody>{rows.map(({ p, t, parties }) => {
                   const pct = t.contract > 0 ? Math.min(100, Math.round((t.paid / t.contract) * 100)) : 0;
                   return (
                     <tr key={p.id} onClick={() => { setEditItem(p); setModal("project"); }} style={{ cursor: "pointer" }}>
+                      <td style={{ ...s.td, color: "#64748b", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{p.job_number || "—"}</td>
                       <td style={{ ...s.td, fontWeight: 600 }}>{projectLabel(p)}{p.address && p.name && p.name !== projectLabel(p) ? <div style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>{p.name}</div> : null}</td>
                       <td style={{ ...s.td, color: "#64748b", fontSize: 12 }}>{consultantsLabel(parties)}</td>
                       <td style={{ ...s.td, textAlign: "right" }}>{fmt(t.contract)}</td>
@@ -2402,7 +2477,6 @@ export default function BookkeeperApp() {
 
     return (
       <div>
-        <ExpensesNav />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pending Reimbursement</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}</div><div style={{ fontSize: 12, color: "#92400e", marginTop: 6, fontWeight: 500 }}>{pending.length} expense{pending.length !== 1 ? "s" : ""}</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Reimbursed This Month</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(reimbursedThisMonth)}</div><div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).length} this month</div></div>
@@ -2635,10 +2709,10 @@ export default function BookkeeperApp() {
 
   const MobileDocs = ({ docType }) => {
     const isQuoteList = docType === "quote";
-    const [tab, setTab] = useState("All");
-    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["All", "Draft", "Sent", "Paid", "Overdue"];
+    const [tab, setTab] = useState(isQuoteList ? "All" : "Outstanding");
+    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["Outstanding", "Paid", "Overdue", "Draft"];
     const sorted = [...invoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    const filtered = sorted.filter((inv) => tab === "All" || inv.status === tab.toLowerCase());
+    const filtered = sorted.filter((inv) => tab === "All" || (tab === "Outstanding" ? (inv.status === "sent" || inv.status === "overdue") : inv.status === tab.toLowerCase()));
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ paddingTop: 8, paddingBottom: 12 }}>
@@ -2656,19 +2730,19 @@ export default function BookkeeperApp() {
   const MobileQuotes = () => <><MobileSalesNav /><MobileDocs docType="quote" /></>;
 
   const MobileProjects = () => {
-    const [tab, setTab] = useState("Active");
+    const [tab, setTab] = useState("All");
     const rows = jobs
-      .filter((p) => tab === "All" || (p.status || "active") === tab.toLowerCase())
+      .filter((p) => tab === "All" || (p.status || "active") === ({ "Active": "active", "Job Lost": "job_lost", "Lead": "lead", "Finalised": "finalised" })[tab])
       .map((p) => ({ p, t: projectTotals(p, invoices) }))
       .sort((a, b) => b.t.remaining - a.t.remaining);
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ paddingTop: 8, paddingBottom: 12 }}>
-          <MobileFilterTabs tabs={["Lead", "Active", "Completed", "Archived", "All"]} active={tab} onChange={setTab} />
+          <MobileFilterTabs tabs={["Active", "Job Lost", "Lead", "Finalised", "All"]} active={tab} onChange={setTab} />
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {rows.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No projects found</div> : rows.map(({ p, t }, i) => (
-            <MobileRow key={p.id} primary={projectLabel(p)} secondary={`${fmt(t.paid)} paid of ${fmt(t.contract)}`} right={fmt(t.remaining)} rightSub="remaining" isLast={i === rows.length - 1} onClick={() => { setEditItem(p); setModal("project"); }} />
+            <MobileRow key={p.id} primary={projectLabel(p)} secondary={`${p.job_number ? p.job_number + " · " : ""}${fmt(t.paid)} paid of ${fmt(t.contract)}`} right={fmt(t.remaining)} rightSub="remaining" isLast={i === rows.length - 1} onClick={() => { setEditItem(p); setModal("project"); }} />
           ))}
         </div>
       </div>
@@ -2927,8 +3001,8 @@ export default function BookkeeperApp() {
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
-          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
-            <item.icon />{!navCollapsed && <span>{item.label}</span>}
+          <button key={item.id} onMouseEnter={item.submenu ? (e) => openNavMenu(e, item.submenu) : undefined} onMouseLeave={item.submenu ? closeNavMenuSoon : undefined} onClick={(e) => { if (item.submenu) openNavMenu(e, item.submenu); else setPage(item.id); }} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
+            <item.icon />{!navCollapsed && <span>{item.label}</span>}{!navCollapsed && item.submenu && <span style={{ marginLeft: "auto", display: "inline-flex", opacity: 0.5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg></span>}
           </button>
         ))}
       </div>
@@ -2966,6 +3040,15 @@ export default function BookkeeperApp() {
     <>
       <div style={s.app}>
         <div style={{ ...s.sidebar, width: navCollapsed ? 72 : 220, transition: "width .15s ease" }}><SidebarContent /></div>
+        {navMenu && (
+          <div onMouseEnter={holdNavMenu} onMouseLeave={closeNavMenuSoon} style={{ position: "fixed", top: navMenu.y, left: navMenu.x + 8, width: 190, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
+            {navMenu.items.map((opt) => (
+              <button key={opt.id} className="bk-menuitem" onClick={() => { setPage(opt.id); setNavMenu(null); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "9px 11px", background: page === opt.id ? "#ecfdf5" : "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: page === opt.id ? 600 : 400, color: page === opt.id ? "#059669" : "#334155", textAlign: "left", borderRadius: 7 }}>
+                <span style={{ display: "inline-flex", width: 16, justifyContent: "center", color: page === opt.id ? "#059669" : "#64748b" }}><opt.icon /></span>{opt.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div style={s.main}>
           <div style={s.header}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

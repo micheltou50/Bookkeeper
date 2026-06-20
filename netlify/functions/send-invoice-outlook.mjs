@@ -34,7 +34,7 @@ async function refreshAccessToken(connectionId, decryptedRefreshToken) {
       client_secret: CLIENT_SECRET,
       refresh_token: decryptedRefreshToken,
       grant_type: "refresh_token",
-      scope: "offline_access User.Read Mail.Send Mail.ReadWrite",
+      scope: "offline_access User.Read Mail.Send Mail.ReadWrite Files.ReadWrite",
     }),
   });
 

@@ -61,7 +61,7 @@ export default async (req) => {
   authUrl.searchParams.set("client_id", CLIENT_ID);
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
-  authUrl.searchParams.set("scope", "offline_access User.Read Mail.Send Mail.ReadWrite");
+  authUrl.searchParams.set("scope", "offline_access User.Read Mail.Send Mail.ReadWrite Files.ReadWrite");
   authUrl.searchParams.set("response_mode", "query");
   authUrl.searchParams.set("state", nonce);
   authUrl.searchParams.set("prompt", "consent");
