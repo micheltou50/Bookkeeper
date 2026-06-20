@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
-import { processBankFile, summarise, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES } from "./bankImport";
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES } from "./bankImport";
 
 const REVENUE_ACCOUNTS = [
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
@@ -36,9 +36,11 @@ Kind regards,
 
 const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "" };
 
-// Header titles per page. Sub-pages (reimbursements/import live under Expenses,
+// Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", import: "Import", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts", pnl: "Profit & Loss" };
+const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", reconcile: "Bank Reconciliation", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts", pnl: "Profit & Loss" };
+
+const isReconciled = (r) => !!(r?.reconciliation_id || r?.reconciled_at);
 
 // One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
 // invoices, expenses, and projects live there today. Division is an extra tag
@@ -280,7 +282,7 @@ const Icons = {
   Logout: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
   Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
   Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
-  Import: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M3 17v2a2 2 0 002 2h14a2 2 0 002-2v-2"/></svg>,
+  Reconcile: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>,
   More: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>,
   Bell: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>,
   Eye: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
@@ -515,14 +517,7 @@ export default function BookkeeperApp() {
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
 
-  // Bank-import flow state lives at App level on purpose: the page components are
-  // defined inline and remount on every App render (see formDirtyRef note above),
-  // which would otherwise wipe a half-finished import.
-  const [importPhase, setImportPhase] = useState("upload"); // upload | review | done
-  const [importItems, setImportItems] = useState([]);
-  const [importMeta, setImportMeta] = useState(null);
-  const [importResult, setImportResult] = useState(null);
-  const [importBusy, setImportBusy] = useState(false);
+  const [lastReconciliation, setLastReconciliation] = useState(null);
   const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
   const [divMenuOpen, setDivMenuOpen] = useState(false);
   const navMenuTimer = useRef(null);
@@ -602,6 +597,8 @@ export default function BookkeeperApp() {
     setJobs(jRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
     setEmailConn(eRes.data || null);
+    const { data: lastRec } = await supabase.from("bk_reconciliations").select("*").eq("business_id", businessId).order("statement_date", { ascending: false }).limit(1).maybeSingle();
+    setLastReconciliation(lastRec || null);
     setLoading(false);
 
     // Mark overdue invoices server-side. Scope to type "invoice" only — quotes share
@@ -762,47 +759,31 @@ export default function BookkeeperApp() {
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
   };
 
-  // Commit a reviewed bank import: insert the ticked money-out rows as expenses
-  // (tagged source:'bank' with a dedupe_key so a re-import can spot them), and
-  // mark each ticked invoice-matched deposit as paid. Returns a summary or null.
-  const importTransactions = async (items) => {
-    const chosen = items.filter((it) => it.include);
-    const expenseItems = chosen.filter((it) => it.direction === "out" && it.status !== "invoice");
-    const invoiceItems = chosen.filter((it) => it.status === "invoice" && it.invoice?.id);
-    const batchId = (crypto?.randomUUID?.() || `imp_${today()}_${Math.round(performance.now())}`);
+  const completeReconciliation = async ({ statementDate, closingBalance, openingBalance, txnIds, invoiceIds }) => {
+    const row = { user_id: session.user.id, business_id: biz, statement_date: statementDate, opening_balance: openingBalance, closing_balance: closingBalance };
+    const { ok, data: rec, error } = await sbWrite(supabase.from("bk_reconciliations").insert(row).select().single(), "save reconciliation");
+    if (!ok) {
+      if (error?.message?.match(/bk_reconciliations|reconciliation/i)) {
+        alert("Bank reconciliation requires migration 0009_bank_reconciliation.sql in Supabase first.");
+      }
+      return false;
+    }
     const stamp = new Date().toISOString();
-
-    const rows = expenseItems.map((it) => ({
-      user_id: session.user.id, business_id: biz, division: insertDivision,
-      date: it.date, type: "expense", description: it.description,
-      amount: Math.abs(Number(it.amount)) || 0,
-      account: it.account || "Other", contact: null, reference: it.bank_ref || null,
-      job: null, payment_source: "business", paid_by: null,
-      reimbursement_required: false, reimbursement_status: "not_required",
-      source: "bank", bank_ref: it.bank_ref || null,
-      import_batch_id: batchId, dedupe_key: it.dedupe_key, imported_at: stamp,
-    }));
-
-    let inserted = [];
-    if (rows.length) {
-      const { ok, data } = await sbInsert("bk_transactions", rows, "import transactions", true);
-      if (!ok) return null;
-      inserted = data || [];
+    const patch = { reconciled_at: stamp, reconciliation_id: rec.id };
+    if (txnIds.length) {
+      const tRes = await sbWrite(supabase.from("bk_transactions").update(patch).in("id", txnIds), "reconcile expenses");
+      if (!tRes.ok) return false;
     }
-
-    let paid = 0;
-    const paidIds = [];
-    for (const it of invoiceItems) {
-      const { ok } = await sbWrite(supabase.from("bk_invoices").update({ status: "paid", paid_date: it.date || today() }).eq("id", it.invoice.id), "mark invoice paid");
-      if (ok) { paid++; paidIds.push(it.invoice.id); }
+    if (invoiceIds.length) {
+      const iRes = await sbWrite(supabase.from("bk_invoices").update(patch).in("id", invoiceIds), "reconcile invoices");
+      if (!iRes.ok) return false;
     }
-
-    if (inserted.length) setTxns((prev) => [...inserted, ...prev]);
-    if (paidIds.length) {
-      const set = new Set(paidIds);
-      setInvoices((prev) => prev.map((i) => set.has(i.id) ? { ...i, status: "paid", paid_date: i.paid_date || today() } : i));
-    }
-    return { expenses: inserted.length, invoicesPaid: paid };
+    const txnSet = new Set(txnIds);
+    const invSet = new Set(invoiceIds);
+    setTxns((prev) => prev.map((t) => (txnSet.has(t.id) ? { ...t, ...patch } : t)));
+    setInvoices((prev) => prev.map((i) => (invSet.has(i.id) ? { ...i, ...patch } : i)));
+    setLastReconciliation(rec);
+    return true;
   };
 
   const addContact = async (c, keepModal) => {
@@ -1283,15 +1264,15 @@ export default function BookkeeperApp() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
-    { id: "expenses", label: "Expenses", icon: Icons.Expenses, submenu: [{ id: "expenses", label: "Expenses", icon: Icons.Expenses }, { id: "reimbursements", label: "Reimbursements", icon: Icons.Reimburse }, { id: "import", label: "Import", icon: Icons.Import }] },
+    { id: "expenses", label: "Expenses", icon: Icons.Expenses, submenu: [{ id: "expenses", label: "Expenses", icon: Icons.Expenses }, { id: "reimbursements", label: "Reimbursements", icon: Icons.Reimburse }, { id: "reconcile", label: "Bank Reconciliation", icon: Icons.Reconcile }] },
     { id: "invoices", label: "Sales", icon: Icons.Invoices, submenu: [{ id: "invoices", label: "Invoices", icon: Icons.Invoices }, { id: "quotes", label: "Quotes", icon: Icons.Quotes }] },
     { id: "pnl", label: "P&L", icon: Icons.Reports },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
   // Sub-pages reached via in-page toggles map to their parent nav item for the
-  // active highlight: reimburse/import sit under Expenses, quotes under Sales.
-  const activeNav = ({ reimbursements: "expenses", import: "expenses", quotes: "invoices" })[page] || page;
+  // active highlight: reimburse/reconcile sit under Expenses, quotes under Sales.
+  const activeNav = ({ reimbursements: "expenses", reconcile: "expenses", quotes: "invoices" })[page] || page;
 
   const badgeBg = { "#34d399": "#ecfdf5", "#3b82f6": "#eff6ff", "#64748b": "#f1f5f9", "#ef4444": "#fef2f2", "#f59e0b": "#fffbeb" };
   const badgeTx = { "#34d399": "#065f46", "#3b82f6": "#1e40af", "#64748b": "#475569", "#ef4444": "#991b1b", "#f59e0b": "#92400e" };
@@ -1329,6 +1310,10 @@ export default function BookkeeperApp() {
 
   // Shared list-screen UX bits (pills with counts, summary tiles, friendly empty
   // states) so every table screen looks and behaves consistently.
+  const ReconciledMark = () => (
+    <span style={{ display: "inline-flex", alignItems: "center", marginLeft: 6, padding: "1px 7px", borderRadius: 10, fontSize: 9, fontWeight: 600, background: "#ecfdf5", color: "#059669", whiteSpace: "nowrap" }} title="Reconciled to bank statement">✓ Bank</span>
+  );
+
   const FilterPills = ({ tabs, active, onChange }) => (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {tabs.map((t) => (
@@ -2356,7 +2341,7 @@ export default function BookkeeperApp() {
                 <tbody>{filtered.map((t) => (
                   <tr key={t.id} onClick={() => { setEditItem(t); setModal("expense"); }} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}</td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}{isReconciled(t) && <ReconciledMark />}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "--"}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.job || ""}</td>
                     <td style={s.td}>{paymentBadge(t)}</td>
@@ -2495,7 +2480,7 @@ export default function BookkeeperApp() {
                     <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
                       <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
                       <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.date)}</td>
-                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
+                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.status === "paid" && isReconciled(inv) && <ReconciledMark />}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(inv.total || 0)}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
@@ -3013,13 +2998,198 @@ export default function BookkeeperApp() {
     );
   };
 
+  const ReconcilePage = () => {
+    const [phase, setPhase] = useState("setup");
+    const [statementDate, setStatementDate] = useState(today());
+    const [closingBalance, setClosingBalance] = useState("");
+    const [checked, setChecked] = useState({});
+    const [busy, setBusy] = useState(false);
+    const [doneMeta, setDoneMeta] = useState(null);
+
+    const openingBalance = Number(lastReconciliation?.closing_balance) || 0;
+    const periodStart = lastReconciliation?.statement_date
+      ? (() => { const d = new Date(`${lastReconciliation.statement_date}T12:00:00`); d.setDate(d.getDate() + 1); return d.toISOString().split("T")[0]; })()
+      : null;
+
+    const inPeriod = (d) => {
+      if (!d || d > statementDate) return false;
+      if (periodStart && d < periodStart) return false;
+      return true;
+    };
+
+    const unreconciledExpenses = divTxns
+      .filter((t) => t.type === "expense" && !isReconciled(t) && inPeriod(t.date))
+      .map((t) => ({ kind: "expense", id: t.id, date: t.date, label: t.description, sub: t.account || "Expense", amount: -(Number(t.amount) || 0) }));
+
+    const unreconciledIncome = divInvoices
+      .filter((i) => i.type === "invoice" && i.status === "paid" && !isReconciled(i) && inPeriod(i.paid_date || i.date))
+      .map((i) => ({ kind: "invoice", id: i.id, date: i.paid_date || i.date, label: `Invoice ${i.number}`, sub: i.contact_name || i.contact_company || "Payment received", amount: Number(i.total) || 0 }));
+
+    const items = [...unreconciledExpenses, ...unreconciledIncome].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+    const tickedItems = items.filter((it) => checked[`${it.kind}:${it.id}`]);
+    const tickedSum = tickedItems.reduce((s, it) => s + it.amount, 0);
+    const runningTotal = openingBalance + tickedSum;
+    const targetClosing = Number(closingBalance) || 0;
+    const balanced = phase === "match" && Math.abs(runningTotal - targetClosing) < 0.01;
+
+    const toggle = (it) => {
+      const k = `${it.kind}:${it.id}`;
+      setChecked((prev) => ({ ...prev, [k]: !prev[k] }));
+    };
+
+    const startMatching = () => {
+      if (!statementDate) { alert("Enter the statement date."); return; }
+      if (closingBalance === "" || Number.isNaN(Number(closingBalance))) { alert("Enter the closing balance from your bank statement."); return; }
+      setChecked({});
+      setPhase("match");
+    };
+
+    const resetReconcile = () => {
+      setPhase("setup");
+      setChecked({});
+      setDoneMeta(null);
+    };
+
+    const finish = async () => {
+      if (!balanced) return;
+      setBusy(true);
+      const txnIds = tickedItems.filter((it) => it.kind === "expense").map((it) => it.id);
+      const invoiceIds = tickedItems.filter((it) => it.kind === "invoice").map((it) => it.id);
+      const ok = await completeReconciliation({ statementDate, closingBalance: targetClosing, openingBalance, txnIds, invoiceIds });
+      setBusy(false);
+      if (ok) {
+        setDoneMeta({ count: tickedItems.length, statementDate, closingBalance: targetClosing });
+        setPhase("done");
+      }
+    };
+
+    if (phase === "done") {
+      return (
+        <div style={{ ...s.card, textAlign: "center", padding: "40px 20px" }}>
+          <div style={{ width: 54, height: 54, borderRadius: 27, background: "#ecfdf5", color: "#059669", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icons.Check /></div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 12 }}>Reconciliation complete</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+            {doneMeta?.count || 0} transaction{(doneMeta?.count || 0) === 1 ? "" : "s"} matched to statement ending {fmtDate(doneMeta?.statementDate)} ({fmt(doneMeta?.closingBalance || 0)}).
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 18 }}>
+            <button onClick={resetReconcile} style={s.btnOutline}>Reconcile again</button>
+            <button onClick={() => setPage("expenses")} style={s.btn(accent)}>View expenses</button>
+          </div>
+        </div>
+      );
+    }
+
+    if (phase === "setup") {
+      return (
+        <div style={s.card}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 20 }}>
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: "#ecfdf5", color: accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icons.Reconcile /></div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Match your bank statement</div>
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+                Enter the closing balance and date from your bank statement, then tick off each transaction that appears on it. Personal card expenses are included — they are real business transactions on your books.
+              </div>
+            </div>
+          </div>
+          <div style={{ ...s.grid2, maxWidth: 480 }}>
+            <div>
+              <label style={s.label}>Statement date</label>
+              <input type="date" value={statementDate} onChange={(e) => setStatementDate(e.target.value)} style={s.input} />
+            </div>
+            <div>
+              <label style={s.label}>Closing balance ($)</label>
+              <input type="number" step="0.01" value={closingBalance} onChange={(e) => setClosingBalance(e.target.value)} placeholder="e.g. 12450.00" style={s.input} />
+            </div>
+          </div>
+          {lastReconciliation && (
+            <div style={{ marginTop: 14, fontSize: 12, color: "#64748b" }}>
+              Last reconciled {fmtDate(lastReconciliation.statement_date)} · opening balance {fmt(openingBalance)}
+            </div>
+          )}
+          <button onClick={startMatching} style={{ ...s.btn(accent), marginTop: 18 }}><Icons.Reconcile /> Start matching</button>
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#64748b" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", fontWeight: 600, color: "#0f172a" }}>
+            <Icons.Reconcile /> Statement {fmtDate(statementDate)}
+          </span>
+          <span>Target {fmt(targetClosing)} · Opening {fmt(openingBalance)}</span>
+          <button onClick={resetReconcile} style={{ ...s.btnOutline, marginLeft: "auto" }}>Change details</button>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <ListStat label="Unreconciled" value={items.length} />
+          <ListStat label="Selected" value={tickedItems.length} color="#059669" />
+          <ListStat label="Running total" value={fmt(runningTotal)} color={balanced ? "#059669" : "#0f172a"} />
+          <ListStat label="Statement balance" value={fmt(targetClosing)} />
+        </div>
+        {balanced && (
+          <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 600, color: "#059669", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <Icons.Check /> Balanced — running total matches your bank statement
+          </div>
+        )}
+        {!balanced && tickedItems.length > 0 && (
+          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 12 }}>
+            Difference {fmt(runningTotal - targetClosing)} — keep ticking transactions until the running total matches {fmt(targetClosing)}.
+          </div>
+        )}
+        <div style={s.card}>
+          {items.length === 0 ? (
+            <EmptyState icon={Icons.Reconcile} title="Nothing to reconcile" hint={periodStart ? `No unreconciled transactions between ${fmtDate(periodStart)} and ${fmtDate(statementDate)}.` : `No unreconciled transactions on or before ${fmtDate(statementDate)}.`} />
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    <th style={{ ...s.th, width: 36 }}></th>
+                    <th style={s.th}>Transaction</th>
+                    <th style={{ ...s.th, textAlign: "right" }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it) => (
+                    <tr key={`${it.kind}:${it.id}`}>
+                      <td style={{ ...s.td, textAlign: "center" }}>
+                        <input type="checkbox" checked={!!checked[`${it.kind}:${it.id}`]} onChange={() => toggle(it)} style={{ width: 16, height: 16, accentColor: accent, cursor: "pointer" }} />
+                      </td>
+                      <td style={s.td}>
+                        <div style={{ fontWeight: 500 }}>{it.label}</div>
+                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{fmtDate(it.date)} · {it.sub}</div>
+                      </td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: it.amount >= 0 ? "#059669" : "#0f172a" }}>
+                        {it.amount >= 0 ? "+" : "-"}{fmt(Math.abs(it.amount))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12, ...s.card, marginBottom: 0 }}>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
+            {tickedItems.length} selected · running total {fmt(runningTotal)}
+            {balanced && " · Balanced ✓"}
+          </div>
+          <button disabled={!balanced || busy || !tickedItems.length} onClick={finish} style={{ ...s.btn(accent), opacity: !balanced || busy || !tickedItems.length ? 0.5 : 1 }}>
+            {busy ? "Saving…" : "Mark reconciliation complete"}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const MobileLayout = () => (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
         {page === "expenses" && <MobileExpenses />}
-        {page === "import" && <div style={{ padding: "40px 24px", textAlign: "center", color: "#64748b", fontSize: 13 }}>Bank statement import is available on the desktop version.</div>}
+        {page === "reconcile" && <div style={{ padding: 16 }}><ReconcilePage /></div>}
         {page === "reimbursements" && <MobileReimbursements />}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
@@ -3031,172 +3201,7 @@ export default function BookkeeperApp() {
     </div>
   );
 
-  const ImportPage = () => {
-    const [filter, setFilter] = useState("all");
-    const [dragOver, setDragOver] = useState(false);
-    const fileRef = useRef(null);
-    const openInvoices = divInvoices.filter((i) => i.type === "invoice" && (i.status === "sent" || i.status === "overdue"));
-
-    const handleText = (text, name) => {
-      const res = processBankFile(text, name, { invoices: divInvoices, existingTxns: divTxns });
-      if (res.error) { setImportMeta({ fileName: name, error: res.error }); setImportItems([]); setImportPhase("review"); return; }
-      setImportMeta({ fileName: name, columnMap: res.columnMap, format: res.format, warnings: res.warnings || [] });
-      setImportItems(res.items);
-      setImportPhase("review");
-    };
-    const readFile = (file) => {
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => handleText(String(reader.result || ""), file.name);
-      reader.onerror = () => { setImportMeta({ fileName: file.name, error: "Couldn't read that file." }); setImportItems([]); setImportPhase("review"); };
-      reader.readAsText(file);
-    };
-    const updateItem = (k, patch) => setImportItems((prev) => prev.map((it) => (it._k === k ? { ...it, ...patch } : it)));
-    const resetImport = () => { setImportItems([]); setImportMeta(null); setImportResult(null); setImportPhase("upload"); };
-    const doImport = async () => {
-      setImportBusy(true);
-      const result = await importTransactions(importItems);
-      setImportBusy(false);
-      if (result) { setImportResult(result); setImportPhase("done"); }
-    };
-
-    if (importPhase === "upload") {
-      return (
-        <div style={s.card}>
-          <div onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); readFile(e.dataTransfer.files?.[0]); }}
-            style={{ border: `2px dashed ${dragOver ? accent : "#cbd5e1"}`, borderRadius: 12, padding: "40px 20px", textAlign: "center", background: dragOver ? "#ecfdf5" : "#fbfdfc", transition: "all .12s ease" }}>
-            <div style={{ width: 52, height: 52, borderRadius: 14, background: "#ecfdf5", color: accent, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}><Icons.Import /></div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Drop your bank statement here</div>
-            <div style={{ fontSize: 12, color: "#94a3b8", margin: "6px auto 0", maxWidth: 360, lineHeight: 1.5 }}>CSV or OFX export from any Australian bank. Columns are detected automatically; you review every row before anything is saved.</div>
-            <input ref={fileRef} type="file" accept=".csv,.ofx,.qfx,text/csv" style={{ display: "none" }} onChange={(e) => readFile(e.target.files?.[0])} />
-            <button onClick={() => fileRef.current?.click()} style={{ ...s.btn(accent), marginTop: 16 }}><Icons.Download /> Choose file</button>
-          </div>
-          <div style={{ textAlign: "center", marginTop: 14, fontSize: 11, color: "#94a3b8" }}>Parsed in your browser — nothing is saved until you confirm the matches.</div>
-        </div>
-      );
-    }
-
-    if (importPhase === "done") {
-      const r = importResult || { expenses: 0, invoicesPaid: 0 };
-      return (
-        <div style={{ ...s.card, textAlign: "center", padding: "40px 20px" }}>
-          <div style={{ width: 54, height: 54, borderRadius: 27, background: "#ecfdf5", color: "#059669", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icons.Check /></div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 12 }}>Import complete</div>
-          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>{r.expenses} expense{r.expenses === 1 ? "" : "s"} added{r.invoicesPaid ? ` · ${r.invoicesPaid} invoice${r.invoicesPaid === 1 ? "" : "s"} marked paid` : ""}.</div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 18 }}>
-            <button onClick={resetImport} style={s.btnOutline}>Import another file</button>
-            <button onClick={() => setPage("expenses")} style={s.btn(accent)}>View expenses</button>
-          </div>
-        </div>
-      );
-    }
-
-    if (importMeta?.error) {
-      return (
-        <div style={s.card}>
-          <EmptyState icon={Icons.Import} title="Couldn't read that file" hint={importMeta.error} />
-          <div style={{ textAlign: "center" }}><button onClick={resetImport} style={s.btnOutline}>Try another file</button></div>
-        </div>
-      );
-    }
-
-    const counts = summarise(importItems);
-    const cm = importMeta?.columnMap;
-    const colNames = importMeta?.format === "ofx" ? "OFX fields" : cm?.headerless ? "auto-detected (no header row)" : "from header row";
-    const tabs = [
-      { key: "all", label: "All", count: counts.total },
-      { key: "invoice", label: "Invoices", count: counts.invoice },
-      { key: "expense", label: "Expenses", count: counts.expense },
-      { key: "review", label: "Needs review", count: counts.review },
-      { key: "duplicate", label: "Duplicates", count: counts.duplicate },
-    ];
-    const visible = importItems.filter((it) => filter === "all" || it.status === filter);
-    const includedCount = importItems.filter((it) => it.include).length;
-    const toAdd = importItems.filter((it) => it.include && it.direction === "out" && it.status !== "invoice").length;
-    const willPay = importItems.filter((it) => it.include && it.status === "invoice").length;
-    const importLabel = toAdd && willPay ? `Import ${toAdd} ${toAdd === 1 ? "expense" : "expenses"} · mark ${willPay} paid`
-      : toAdd ? `Import ${toAdd} ${toAdd === 1 ? "expense" : "expenses"}`
-      : willPay ? `Mark ${willPay} invoice${willPay === 1 ? "" : "s"} paid`
-      : "Import";
-
-    const suggestionCell = (it) => {
-      if (it.status === "invoice") return (
-        <div><span style={s.badge("#34d399")}>{it.invoice?.confidence === "manual" ? "Matched" : "Auto-matched"}</span>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>Invoice {it.invoice.number}{it.invoice.contact ? ` · ${it.invoice.contact}` : ""}</div></div>
-      );
-      if (it.status === "duplicate") return (
-        <div><span style={s.badge("#64748b")}>Duplicate</span><div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Already in your expenses</div></div>
-      );
-      if (it.direction === "in") return (
-        <div>
-          <select value="" onChange={(e) => { const inv = openInvoices.find((x) => x.id === e.target.value); if (inv) updateItem(it._k, { status: "invoice", invoice: { id: inv.id, number: inv.number, contact: inv.contact_name || inv.contact_company || "", confidence: "manual" }, include: true }); }} style={{ ...s.select, maxWidth: 230 }}>
-            <option value="">Match to invoice…</option>
-            {openInvoices.map((inv) => <option key={inv.id} value={inv.id}>{inv.number} · {fmt(inv.total || 0)} · {inv.contact_name || inv.contact_company || ""}</option>)}
-          </select>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>{it.reviewReason}</div>
-        </div>
-      );
-      return (
-        <div>
-          <select value={it.account || "Office Supplies & Stationery"} onChange={(e) => updateItem(it._k, { account: e.target.value })} style={{ ...s.select, maxWidth: 230 }}>
-            {EXPENSE_CATEGORY_GROUPS.map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.categories.map((c) => <option key={c} value={c}>{c}</option>)}
-              </optgroup>
-            ))}
-          </select>
-          <div style={{ fontSize: 11, color: it.status === "review" ? "#b45309" : "#94a3b8", marginTop: 3 }}>{it.status === "review" ? it.reviewReason : "New expense · auto-categorised"}</div>
-        </div>
-      );
-    };
-
-    return (
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#64748b" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", fontWeight: 600, color: "#0f172a" }}><Icons.Download /> {importMeta?.fileName}</span>
-          <span>{importItems.length} rows · columns {colNames}</span>
-          <button onClick={resetImport} style={{ ...s.btnOutline, marginLeft: "auto" }}>Change file</button>
-        </div>
-        {(importMeta?.warnings || []).map((w, i) => (
-          <div key={i} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 8 }}>{w}</div>
-        ))}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          <ListStat label="Matched to invoices" value={counts.invoice} color="#059669" />
-          <ListStat label="New expenses" value={counts.expense} />
-          <ListStat label="Needs review" value={counts.review} color="#b45309" />
-          <ListStat label="Duplicate" value={counts.duplicate} color="#64748b" />
-        </div>
-        <div style={{ marginBottom: 12 }}><FilterPills tabs={tabs} active={filter} onChange={setFilter} /></div>
-        <div style={s.card}>
-          {visible.length === 0 ? (
-            <EmptyState icon={Icons.Import} title="Nothing here" hint="No rows match this filter." />
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={s.table}>
-                <thead><tr><th style={{ ...s.th, width: 36 }}></th><th style={s.th}>Bank transaction</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={s.th}>Suggested match</th></tr></thead>
-                <tbody>
-                  {visible.map((it) => (
-                    <tr key={it._k} style={{ opacity: it.status === "duplicate" && !it.include ? 0.6 : 1 }}>
-                      <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={!!it.include} onChange={(e) => updateItem(it._k, { include: e.target.checked })} style={{ width: 16, height: 16, accentColor: accent, cursor: "pointer" }} /></td>
-                      <td style={s.td}><div style={{ fontWeight: 500 }}>{it.description}</div><div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{fmtDate(it.date)}</div></td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: it.direction === "in" ? "#059669" : "#0f172a" }}>{it.direction === "in" ? "+" : "-"}{fmt(Math.abs(it.amount))}</td>
-                      <td style={s.td}>{suggestionCell(it)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12, ...s.card, marginBottom: 0 }}>
-          <div style={{ fontSize: 12, color: "#64748b" }}>{includedCount} of {importItems.length} selected</div>
-          <button disabled={!includedCount || importBusy} onClick={doImport} style={{ ...s.btn(accent), opacity: !includedCount || importBusy ? 0.5 : 1 }}>{importBusy ? "Importing…" : importLabel}</button>
-        </div>
-      </div>
-    );
-  };
-
-  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, import: ImportPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, pnl: PnlPage, projects: ProjectsPage, contacts: ContactsPage };
+  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reconcile: ReconcilePage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, pnl: PnlPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   const SidebarContent = () => (

@@ -14,10 +14,14 @@ These SQL files document the schema/constraints/RLS the app relies on.
   Group keeps working without it (the app omits division on insert until applied).
 - `0008_standardise_division_slug.sql` — Renames legacy `mtmgmt` rows to
   `mt_management`. Apply after 0007.
+- `0009_bank_reconciliation.sql` — Bank reconciliation table
+  (`bk_reconciliations`) plus `reconciled_at` / `reconciliation_id` on
+  `bk_transactions` and `bk_invoices`. **Required for Bank Reconciliation**
+  in the app.
 
-## Urgent: apply 0007 to live project
+## Urgent: apply 0007–0009 to live project
 
-Project `yzndkdlzgegrcotfeqlp` — paste `0007_divisions.sql` (then `0008`) into
+Project `yzndkdlzgegrcotfeqlp` — paste migrations in order (`0007`, then `0008`, then `0009`) into
 the [Supabase SQL editor](https://supabase.com/dashboard/project/yzndkdlzgegrcotfeqlp/sql/new),
 or run `node scripts/apply-supabase-migrations.mjs` with `SUPABASE_SERVICE_KEY`
 (and optionally `SUPABASE_DB_URL`) in `.env`.
