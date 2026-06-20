@@ -1,10 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
+import { PDFDocument } from "pdf-lib";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 
 // Save an invoice PDF or expense receipt into the user's OneDrive. Invoices go
-// into the matching job folder under onedrive_folder. Receipts go into
-// onedrive_receipts_folder (year/month subfolders), falling back to the job
-// folder only when the receipts path is unset.
+// into the matching job folder under onedrive_folder. Receipts are converted to
+// PDF and saved flat in onedrive_receipts_folder (falling back to onedrive_folder).
 
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
@@ -46,6 +46,7 @@ async function refreshAccessToken(connId, refreshTok) {
 
 const encPath = (p) => String(p || "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
 const sanitize = (s) => String(s || "").replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
+const sanitizePart = (s) => String(s || "").replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim();
 
 async function listChildren(token, basePath) {
   const seg = encPath(basePath);
@@ -75,8 +76,6 @@ async function createFolder(token, basePath, name) {
   return { id: j.id, name: j.name };
 }
 
-// Find the existing "<jobNumber> ..." folder under basePath, or create one. With
-// no job number, use a shared fallback folder. Returns { id, name } or { status }.
 async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName) {
   const { items, status } = await listChildren(token, basePath);
   if (status) return { status };
@@ -90,12 +89,10 @@ async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName)
   return createFolder(token, basePath, fallbackName);
 }
 
-// Walk/create each segment of a nested OneDrive path (e.g. "Mworx Group/Receipts/2026/06-June").
 async function ensureFolderPath(token, fullPath) {
   const parts = String(fullPath || "").split("/").filter(Boolean);
   if (!parts.length) return { status: 400 };
   let currentPath = "";
-  let last = null;
   for (const name of parts) {
     const parentPath = currentPath;
     currentPath = currentPath ? `${currentPath}/${name}` : name;
@@ -103,30 +100,42 @@ async function ensureFolderPath(token, fullPath) {
     if (status === 401) return { auth: true };
     if (status) return { status };
     const existing = items.find((c) => c.folder && c.name === name);
-    if (existing) {
-      last = { id: existing.id, name: existing.name, path: currentPath };
-      continue;
-    }
+    if (existing) continue;
     const created = await createFolder(token, parentPath, name);
     if (created.status === 401) return { auth: true };
-    if (created.status || !created.id) return { status: created.status || 500 };
-    last = { id: created.id, name: created.name, path: currentPath };
+    if (created.status) return { status: created.status };
   }
-  return last;
-}
-
-function receiptMonthFolder(dateStr) {
-  const d = dateStr ? new Date(`${dateStr}T12:00:00`) : new Date();
-  if (Number.isNaN(d.getTime())) return null;
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const monthLabel = d.toLocaleDateString("en-AU", { month: "long" });
-  return `${year}/${month}-${monthLabel}`;
+  return { path: fullPath };
 }
 
 async function uploadToFolder(token, folderId, fileName, buffer, contentType) {
   const url = `${GRAPH}/me/drive/items/${folderId}:/${encodeURIComponent(fileName)}:/content`;
   return fetchWithTimeout(url, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType }, body: buffer }, 30000);
+}
+
+async function uploadToDrivePath(token, folderPath, fileName, buffer, contentType) {
+  const seg = encPath(folderPath);
+  const url = `${GRAPH}/me/drive/root:/${seg}/${encodeURIComponent(fileName)}:/content`;
+  return fetchWithTimeout(url, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType }, body: buffer }, 30000);
+}
+
+async function imageToPdf(imageBuffer, ext) {
+  const pdfDoc = await PDFDocument.create();
+  const image = ext === "png"
+    ? await pdfDoc.embedPng(imageBuffer)
+    : await pdfDoc.embedJpg(imageBuffer);
+  const { width, height } = image.scale(1);
+  const page = pdfDoc.addPage([width, height]);
+  page.drawImage(image, { x: 0, y: 0, width, height });
+  return Buffer.from(await pdfDoc.save());
+}
+
+function receiptPdfName(tx) {
+  const date = tx.date || "undated";
+  const vendor = sanitizePart(tx.contact || tx.description || "receipt") || "receipt";
+  const amount = Number(tx.amount || 0).toFixed(2);
+  const category = sanitizePart(tx.account || "Uncategorised") || "Uncategorised";
+  return `${date}_${vendor}_${amount}_${category}.pdf`.slice(0, 200);
 }
 
 export default async (req) => {
@@ -146,8 +155,8 @@ export default async (req) => {
   const { data: { user } } = await userClient.auth.getUser(authToken);
   if (!user) return json({ error: "Unauthorized" }, 401);
 
-  // Resolve the file to upload + which job it belongs to.
-  let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName, expenseDate;
+  let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
+  let receiptFolderPath = null;
 
   if (kind === "invoice") {
     let { data: inv } = await supabase.from("bk_invoices").select("*").eq("id", id).single();
@@ -178,19 +187,24 @@ export default async (req) => {
     if (!tx || tx.user_id !== user.id) return json({ error: "Expense not found" }, 404);
     if (!tx.receipt_path) return json({ error: "This expense has no receipt to save" }, 400);
     businessId = tx.business_id;
-    expenseDate = tx.date;
     const { data: rData, error: rErr } = await supabase.storage.from("receipts").download(tx.receipt_path);
     if (rErr || !rData) return json({ error: "Could not load the receipt" }, 500);
-    fileBuffer = Buffer.from(await rData.arrayBuffer());
+    const rawBuffer = Buffer.from(await rData.arrayBuffer());
     const ext = (tx.receipt_path.split(".").pop() || "jpg").toLowerCase();
-    contentType = ext === "pdf" ? "application/pdf" : ext === "png" ? "image/png" : "image/jpeg";
-    fileName = sanitize(`${tx.date || ""} ${tx.contact || tx.description || "receipt"} ${Number(tx.amount || 0).toFixed(2)}`).slice(0, 120) + "." + ext;
-    fallbackName = "Unfiled Receipts";
-    if (tx.job) {
-      const { data: jobsList } = await supabase.from("bk_jobs").select("job_number,name,address").eq("business_id", businessId);
-      const job = (jobsList || []).find((j) => j.address === tx.job || j.name === tx.job);
-      if (job) { jobNumber = job.job_number; jobLabel = job.address || job.name; }
+    if (ext === "pdf") {
+      fileBuffer = rawBuffer;
+    } else if (ext === "png" || ext === "jpg" || ext === "jpeg") {
+      try {
+        fileBuffer = await imageToPdf(rawBuffer, ext === "png" ? "png" : "jpg");
+      } catch (err) {
+        console.error("Receipt PDF conversion failed:", err);
+        return json({ error: "Could not convert receipt to PDF" }, 500);
+      }
+    } else {
+      return json({ error: "Unsupported receipt format" }, 400);
     }
+    contentType = "application/pdf";
+    fileName = receiptPdfName(tx);
   } else {
     return json({ error: "Unknown kind" }, 400);
   }
@@ -214,23 +228,46 @@ export default async (req) => {
   const projectsBase = (profile?.onedrive_folder || "Mworx Group").trim();
   const receiptsBase = (profile?.onedrive_receipts_folder || "").trim();
 
+  if (kind === "expense") {
+    receiptFolderPath = receiptsBase || projectsBase;
+  }
+
   const run = async (tok) => {
-    let folder;
-    if (kind === "expense" && receiptsBase) {
-      const monthPath = receiptMonthFolder(expenseDate);
-      const fullPath = monthPath ? `${receiptsBase}/${monthPath}` : receiptsBase;
-      folder = await ensureFolderPath(tok, fullPath);
-    } else {
-      folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
+    if (kind === "expense") {
+      const ensured = await ensureFolderPath(tok, receiptFolderPath);
+      if (ensured.auth) return { auth: true };
+      if (ensured.status) {
+        if (ensured.status === 404) {
+          return { error: `OneDrive receipts folder not found — check "${receiptFolderPath}" exists in Settings` };
+        }
+        return { error: `OneDrive folder error (${ensured.status})` };
+      }
+      const up = await uploadToDrivePath(tok, receiptFolderPath, fileName, fileBuffer, contentType);
+      if (up.status === 401) return { auth: true };
+      if (up.status === 404) {
+        return { error: `OneDrive receipts folder not found — check "${receiptFolderPath}" exists in Settings` };
+      }
+      if (!up.ok) {
+        let e = "";
+        try { e = JSON.stringify(await up.json()); } catch { /* ignore */ }
+        return { error: `OneDrive upload failed (${up.status})`, detail: e };
+      }
+      const item = await up.json();
+      return { ok: true, webUrl: item.webUrl, savedTo: `${receiptFolderPath}/${fileName}` };
     }
-    if (folder.auth) return { auth: true };
+
+    const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
+    if (folder.status === 401) return { auth: true };
     if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
     const up = await uploadToFolder(tok, folder.id, fileName, fileBuffer, contentType);
     if (up.status === 401) return { auth: true };
-    if (!up.ok) { let e = ""; try { e = JSON.stringify(await up.json()); } catch { /* ignore */ } return { error: `OneDrive upload failed (${up.status})`, detail: e }; }
+    if (!up.ok) {
+      let e = "";
+      try { e = JSON.stringify(await up.json()); } catch { /* ignore */ }
+      return { error: `OneDrive upload failed (${up.status})`, detail: e };
+    }
     const item = await up.json();
-    const savedIn = folder.path || folder.name;
-    return { ok: true, webUrl: item.webUrl, savedTo: `${savedIn}/${fileName}` };
+    return { ok: true, webUrl: item.webUrl, savedTo: `${folder.name}/${fileName}` };
   };
 
   let res = await run(accessToken);

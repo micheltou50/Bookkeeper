@@ -2056,7 +2056,7 @@ export default function BookkeeperApp() {
           <div>
             <label style={s.label}>Receipts folder</label>
             <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
-            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts, organised by year and month (e.g. 2026/06-June). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect &amp; reconnect to grant file access.</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts saved as PDFs (e.g. 2026-06-20_Vendor_45.00_Category.pdf). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect &amp; reconnect to grant file access.</div>
           </div>
         </div>
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
