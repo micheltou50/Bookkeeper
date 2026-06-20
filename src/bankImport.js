@@ -6,22 +6,62 @@
 // Amount convention everywhere: positive = money IN, negative = money OUT.
 
 // ---------------------------------------------------------------------------
-// Expense category suggestion (money out). Category names MUST match the
-// DEFAULT_ACCOUNTS list in App.jsx so the imported expense lands in a real
-// account. First matching rule wins; falls back to "Other".
+// ATO-aligned expense categories (shared with App.jsx expense form).
+// Category names in CATEGORY_RULES MUST match EXPENSE_CATEGORIES.
 // ---------------------------------------------------------------------------
+export const EXPENSE_CATEGORY_GROUPS = [
+  {
+    label: "Operating Expenses",
+    categories: [
+      "Advertising & Marketing", "Bad Debts", "Bank Fees & Charges", "Cleaning", "Commissions Paid",
+      "Donations", "Fringe Benefits Tax (FBT)", "Freight & Postage", "Home Office Expenses", "Insurance",
+      "Interest & Loan Charges", "Land Tax", "Lease Payments", "Legal & Professional Fees", "Licences & Permits",
+      "Meals & Entertainment", "Motor Vehicle", "Office Supplies & Stationery", "Phone & Internet",
+      "Printing & Stationery", "Rates & Taxes", "Rent & Occupancy", "Repairs & Maintenance",
+      "Software & Subscriptions", "Security", "Tools & Equipment (under $1,000)", "Training & Education",
+      "Travel & Accommodation", "Uniforms & Protective Clothing", "Utilities", "Wages & Salaries",
+      "Superannuation", "Workers Compensation Insurance",
+    ],
+  },
+  {
+    label: "Assets & Capital",
+    categories: ["Equipment Purchase (over $1,000)", "Furniture & Fittings", "Vehicles", "Depreciation"],
+  },
+  {
+    label: "Subcontractors & Labour",
+    categories: ["Subcontractors", "Consulting Fees"],
+  },
+  {
+    label: "Industry Specific",
+    categories: ["Council & Government Fees", "Platform Fees", "Professional Memberships", "Drafting & CAD Software", "Plotting & Printing"],
+  },
+];
+
+export const EXPENSE_CATEGORIES = EXPENSE_CATEGORY_GROUPS.flatMap((g) => g.categories);
+
+export const BUSINESS_PURPOSE_CATEGORIES = new Set([
+  "Motor Vehicle", "Meals & Entertainment", "Travel & Accommodation", "Donations", "Home Office Expenses",
+]);
+
+const DEFAULT_EXPENSE_CATEGORY = "Office Supplies & Stationery";
+
 const CATEGORY_RULES = [
   [/facebook|fb ?ads|meta (pl|ads|platforms)|google ads|adwords|linkedin|mailchimp|instagram ads|\bseo\b/i, "Advertising & Marketing"],
-  [/accountant|bookkeep|lawyer|legal|solicitor|consult|advisor|advisory|\baudit/i, "Accounting & Professional Fees"],
-  [/bank fee|account fee|monthly fee|service fee|interest charge|overdrawn|merchant fee|stripe|paypal|square ?(au|inc|up)|gocardless|transaction fee|atm fee|fx fee|foreign (transaction|currency) fee/i, "Bank Fees & Interest"],
+  [/accountant|bookkeep|lawyer|legal|solicitor|consult|advisor|advisory|\baudit/i, "Legal & Professional Fees"],
+  [/bank fee|account fee|monthly fee|service fee|interest charge|overdrawn|merchant fee|stripe|paypal|square ?(au|inc|up)|gocardless|transaction fee|atm fee|fx fee|foreign (transaction|currency) fee/i, "Bank Fees & Charges"],
+  [/subcontract|freelanc|contractor|fiverr|upwork/i, "Subcontractors"],
+  [/autocad|revit|sketchup|drafting|\bcad\b|rhino|archicad/i, "Drafting & CAD Software"],
+  [/plotter|large format|blueprint|plan print|a0 print|a1 print/i, "Plotting & Printing"],
+  [/airbnb|guesty|hostaway|hospitable|property management platform/i, "Platform Fees"],
   [/adobe|microsoft|msft|office ?365|canva|chatgpt|openai|claude|anthropic|figma|notion|slack|zoom|github|gitlab|atlassian|jira|dropbox|google ?(cloud|workspace|gsuite)|aws|amazon web|godaddy|namecheap|vercel|netlify|squarespace|\bwix\b|shopify|xero|myob|quickbooks?|spotify|apple\.com\/bill|icloud|linktree/i, "Software & Subscriptions"],
-  [/officeworks|stationery|australia ?post|auspost|post office|reply paid|printer (ink|paper)|toner/i, "Office & Supplies"],
-  [/jb ?hi-?fi|harvey norman|the good guys|\bdell\b|hp store|apple store|bunnings|total tools|sydney tools|\bikea\b|kogan/i, "Equipment & Assets"],
+  [/officeworks|stationery|australia ?post|auspost|post office|reply paid|printer (ink|paper)|toner/i, "Office Supplies & Stationery"],
+  [/jb ?hi-?fi|harvey norman|the good guys|\bdell\b|hp store|apple store|bunnings|total tools|sydney tools|\bikea\b|kogan/i, "Tools & Equipment (under $1,000)"],
   [/\bbp\b|shell|caltex|ampol|7-?eleven|united petroleum|\bmobil\b|fuel|petrol|\bservo\b|linkt|e-?toll|\btoll\b|citylink|eastlink|vicroads|\brego\b|car wash|wilson parking|secure parking|\bparking\b/i, "Motor Vehicle"],
-  [/qantas|jetstar|virgin aus|\brex\b air|webjet|flight ?centre|\bhotel\b|\bmotel\b|airbnb|booking\.com|expedia|trivago|uber(?! ?eats)|\bcab\b|\btaxi\b|\bdidi\b|rydges|accor|hilton|marriott/i, "Travel"],
+  [/qantas|jetstar|virgin aus|\brex\b air|webjet|flight ?centre|\bhotel\b|\bmotel\b|airbnb|booking\.com|expedia|trivago|uber(?! ?eats)|\bcab\b|\btaxi\b|\bdidi\b|rydges|accor|hilton|marriott/i, "Travel & Accommodation"],
   [/telstra|optus|vodafone|\btpg\b|aussie ?broadband|belong|amaysim|iinet|\bdodo\b|internode|superloop|\bnbn\b|mobile plan|broadband/i, "Phone & Internet"],
-  [/insurance|\baami\b|allianz|\bnrma\b|\bqbe\b|\bbupa\b|medibank|\bhcf\b|\bcgu\b|budget direct|\byoui\b|comminsure/i, "Insurance"],
-  [/\basic\b|\bato\b|australian tax|business name|fair ?work|austrac|ip australia|land tax|council rates/i, "Tax & Government Fees"],
+  [/insurance|\baami\b|allianz|\bnrma\b|\bqbe\b|\bbupa\b|medibank|\bhcf\b|\bcgu\b|budget direct|\byoui\b|comminsure|workers comp/i, "Insurance"],
+  [/\basic\b|\bato\b|australian tax|business name|fair ?work|austrac|ip australia|land tax|council rates|council fee|lodgement fee|certifier|da fee/i, "Council & Government Fees"],
+  [/restaurant|cafe|coffee|uber eats|menulog|deliveroo|doordash|lunch|dinner|entertainment/i, "Meals & Entertainment"],
 ];
 
 // Money-out lines that usually AREN'T expenses (internal moves, owner draws).
@@ -29,13 +69,6 @@ const CATEGORY_RULES = [
 const TRANSFER_RE = /transfer|tfr\b|to savings|own account|internal|withdrawal|cash ?out|\batm\b|drawings?|owner (draw|contribution)|director loan|loan repayment|payid to/i;
 
 const STOPWORDS = new Set(["pty", "ltd", "the", "and", "for", "co", "inc", "au", "aus", "australia", "trust", "group", "services", "service", "payment", "pmt", "invoice", "inv", "ref", "tfr", "card", "value", "date", "eftpos", "visa", "mastercard", "debit", "credit", "purchase", "withdrawal", "deposit"]);
-
-export const EXPENSE_CATEGORIES = [
-  "Advertising & Marketing", "Accounting & Professional Fees", "Bank Fees & Interest",
-  "Contractors & Subcontractors", "Software & Subscriptions", "Office & Supplies",
-  "Equipment & Assets", "Motor Vehicle", "Travel", "Phone & Internet",
-  "Insurance", "Tax & Government Fees", "Other",
-];
 
 // ---------------------------------------------------------------------------
 // Low-level parsing helpers
@@ -242,7 +275,7 @@ const tokens = (s) => norm(s).split(" ").filter((t) => t.length > 2 && !STOPWORD
 
 export function suggestExpenseCategory(description) {
   for (const [re, cat] of CATEGORY_RULES) if (re.test(description)) return cat;
-  return "Other";
+  return DEFAULT_EXPENSE_CATEGORY;
 }
 
 // Best open invoice for a money-in line, or null. Confidence:

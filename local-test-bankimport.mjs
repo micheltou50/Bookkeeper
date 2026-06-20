@@ -39,10 +39,10 @@ const commbank = `02/07/2026,+1650.00,STRIPE PAYMENTS AUS PTY,12650.00
   check("2 invoice matches", s.invoice === 2, JSON.stringify(s));
   check("Stripe -> INV MWX26042 (name overlap)", r.items[0].invoice?.number === "MWX26042", r.items[0].invoice?.number);
   check("Adobe -> Software & Subscriptions", r.items[1].account === "Software & Subscriptions", r.items[1].account);
-  check("Officeworks -> Office & Supplies", r.items[2].account === "Office & Supplies", r.items[2].account);
+  check("Officeworks -> Office Supplies & Stationery", r.items[2].account === "Office Supplies & Stationery", r.items[2].account);
   check("transfer flagged review", r.items[4].status === "review", r.items[4].status);
   check("Telstra flagged duplicate (existing 21 Jul)", r.items[5].status === "duplicate", r.items[5].status);
-  check("Uber -> Travel", r.items[6].account === "Travel", r.items[6].account);
+  check("Uber -> Travel & Accommodation", r.items[6].account === "Travel & Accommodation", r.items[6].account);
   check("default selection excludes dup + review", r.items.filter((i) => i.include).length === 5, String(r.items.filter((i) => i.include).length));
 }
 

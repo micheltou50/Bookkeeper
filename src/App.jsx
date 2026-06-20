@@ -1,25 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
-import { processBankFile, summarise, EXPENSE_CATEGORIES } from "./bankImport";
+import { processBankFile, summarise, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES } from "./bankImport";
 
-const DEFAULT_ACCOUNTS = [
+const REVENUE_ACCOUNTS = [
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
   { code: "4200", name: "Service Revenue", type: "Revenue" },
   { code: "4300", name: "Other Income", type: "Revenue" },
-  { code: "6000", name: "Advertising & Marketing", type: "Expense" },
-  { code: "6100", name: "Accounting & Professional Fees", type: "Expense" },
-  { code: "6200", name: "Bank Fees & Interest", type: "Expense" },
-  { code: "6300", name: "Contractors & Subcontractors", type: "Expense" },
-  { code: "6400", name: "Software & Subscriptions", type: "Expense" },
-  { code: "6500", name: "Office & Supplies", type: "Expense" },
-  { code: "6600", name: "Equipment & Assets", type: "Expense" },
-  { code: "6700", name: "Motor Vehicle", type: "Expense" },
-  { code: "6800", name: "Travel", type: "Expense" },
-  { code: "6900", name: "Phone & Internet", type: "Expense" },
-  { code: "7000", name: "Insurance", type: "Expense" },
-  { code: "7100", name: "Tax & Government Fees", type: "Expense" },
-  { code: "7200", name: "Other", type: "Expense" },
 ];
+const EXPENSE_ACCOUNTS = EXPENSE_CATEGORIES.map((name, i) => ({
+  code: String(6000 + i * 10),
+  name,
+  type: "Expense",
+}));
+const DEFAULT_ACCOUNTS = [...REVENUE_ACCOUNTS, ...EXPENSE_ACCOUNTS];
 
 const DEFAULT_EMAIL_TEMPLATE_INVOICE = `Hi {first_name},
 
@@ -719,13 +712,13 @@ export default function BookkeeperApp() {
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: isPersonal ? (t.business_purpose || null) : null, ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
+    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null, ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
     const { ok, data: inserted } = await sbInsert("bk_transactions", row, "save expense");
     if (!ok) return;
     if (inserted) {
       if (inserted.receipt_path) {
         const ext = (inserted.receipt_path.split(".").pop() || "jpg").toLowerCase();
-        const newName = safeFileName([inserted.date, inserted.contact || "Unknown-Supplier", inserted.account || "Uncategorised", fmtAmtFile(inserted.amount), inserted.id], ext);
+        const newName = safeFileName([inserted.date, (inserted.description || "Expense").slice(0, 40), inserted.account || "Uncategorised", fmtAmtFile(inserted.amount), inserted.id], ext);
         const newPath = `${session.user.id}/${newName}`;
         const { error: moveErr } = await supabase.storage.from("receipts").move(inserted.receipt_path, newPath);
         if (!moveErr) {
@@ -745,7 +738,7 @@ export default function BookkeeperApp() {
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: t.contact, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || null) : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status || "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: isPersonal ? (t.business_purpose || null) : null };
+    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status === "reimbursed" ? "reimbursed" : "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null };
     const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update expense");
     if (!ok) return;
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
@@ -1539,12 +1532,32 @@ export default function BookkeeperApp() {
     const ai = !existing ? aiData : null;
     const fromReimbursements = ai?.fromReimbursements;
     const initPersonalCard = existing ? derivePersonalCard(existing) : (fromReimbursements || false);
-    const init = existing ? { ...existing, personal_card: initPersonalCard, paid_by: existing.paid_by || "Michel", business_purpose: existing.business_purpose || "", reimbursement_status: existing.reimbursement_status || "not_required" } : ai ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: accounts.find(a => a.name === ai.category && a.type === "Expense")?.name || ai.category || "", contact: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, paid_by: initPersonalCard ? "Michel" : "", business_purpose: ai.businessPurpose || "", reimbursement_status: "not_required", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null } : { date: today(), type: "expense", description: "", amount: "", account: accounts.find(a => a.type === "Expense")?.name || "", contact: "", reference: "", job: "", personal_card: false, paid_by: "", business_purpose: "", reimbursement_status: "not_required" };
+    const defaultCategory = EXPENSE_CATEGORIES.includes("Office Supplies & Stationery") ? "Office Supplies & Stationery" : EXPENSE_CATEGORIES[0];
+    const init = existing
+      ? { ...existing, personal_card: initPersonalCard, business_purpose: existing.business_purpose || "" }
+      : ai
+        ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: EXPENSE_CATEGORIES.includes(ai.category) ? ai.category : defaultCategory, reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, business_purpose: ai.businessPurpose || "", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null }
+        : { date: today(), type: "expense", description: "", amount: "", account: defaultCategory, reference: "", job: "", personal_card: false, business_purpose: "" };
     const [f, setF] = useState({ ...init, amount: String(init.amount || "") });
     const [saving, setSaving] = useState(false);
-    const expenseAccounts = accounts.filter((a) => a.type === "Expense");
+    const needsBusinessPurpose = BUSINESS_PURPOSE_CATEGORIES.has(f.account);
     const hasWarnings = ai && (ai.confidence < 0.7 || ai.warnings?.length > 0);
-    const toSave = () => ({ ...f, payment_source: f.personal_card ? "personal_reimburse" : "business", paid_by: f.personal_card ? (f.paid_by || "Michel") : "" });
+    const toSave = () => ({
+      ...f,
+      payment_source: f.personal_card ? "personal_reimburse" : "business",
+      paid_by: f.personal_card ? "Michel" : "",
+      business_purpose: needsBusinessPurpose ? (f.business_purpose || "") : "",
+    });
+    const categorySelect = (
+      <select value={f.account} onChange={(e) => { const account = e.target.value; setF({ ...f, account, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(account) ? f.business_purpose : "" }); }} style={s.select}>
+        {!EXPENSE_CATEGORIES.includes(f.account) && f.account ? <option value={f.account}>{f.account} (legacy)</option> : null}
+        {EXPENSE_CATEGORY_GROUPS.map((g) => (
+          <optgroup key={g.label} label={g.label}>
+            {g.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    );
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -1569,25 +1582,21 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
         </div>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Office supplies from Officeworks" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label>{categorySelect}</div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}><option value="">Select...</option>{expenseAccounts.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Contact</label><select value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} style={s.select}><option value="">None</option>{f.contact && !contacts.find(c => (c.name || c.company) === f.contact) && <option value={f.contact}>{f.contact}</option>}{contacts.map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)}</select></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt #, PO number, etc." style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt number" style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><select value={f.job} onChange={(e) => setF({ ...f, job: e.target.value })} style={s.select}><option value="">Select job...</option>{jobNames.map(j => <option key={j} value={j}>{j}</option>)}</select></div>
         </div>
+        {needsBusinessPurpose && (
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased? (required for ATO-scrutinised categories)" style={s.input} /></div>
+        )}
         <div style={{ marginBottom: 12, padding: "12px 14px", background: f.personal_card ? "#fffbeb" : "#f8fafc", border: `1px solid ${f.personal_card ? "#fde68a" : "#e2e8f0"}`, borderRadius: 9 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", margin: 0 }}>
-            <input type="checkbox" checked={!!f.personal_card} onChange={(e) => { const on = e.target.checked; setF({ ...f, personal_card: on, paid_by: on ? (f.paid_by || "Michel") : "", business_purpose: on ? f.business_purpose : "" }); }} style={{ width: 16, height: 16, accentColor: accent }} />
+            <input type="checkbox" checked={!!f.personal_card} onChange={(e) => setF({ ...f, personal_card: e.target.checked })} style={{ width: 16, height: 16, accentColor: accent }} />
             <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>Paid on personal card</span>
           </label>
           {f.personal_card && (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #fde68a" }}>
-              <div style={{ fontSize: 11, color: "#92400e", marginBottom: 8, fontWeight: 500 }}>Flagged as reimbursement pending — owed to Michel</div>
-              <div style={{ marginBottom: 10 }}><label style={s.label}>Paid By</label><input value={f.paid_by} onChange={(e) => setF({ ...f, paid_by: e.target.value })} placeholder="Michel" style={s.input} /></div>
-              <div><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased?" style={s.input} /></div>
-            </div>
+            <div style={{ fontSize: 11, color: "#92400e", marginTop: 10, fontWeight: 500 }}>Will appear in Reimbursements as pending — owed to Michel</div>
           )}
         </div>
         <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); const payload = toSave(); existing ? await updateTransaction(existing.id, payload) : await addTransaction(payload); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
@@ -3129,8 +3138,12 @@ export default function BookkeeperApp() {
       );
       return (
         <div>
-          <select value={it.account || "Other"} onChange={(e) => updateItem(it._k, { account: e.target.value })} style={{ ...s.select, maxWidth: 230 }}>
-            {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          <select value={it.account || "Office Supplies & Stationery"} onChange={(e) => updateItem(it._k, { account: e.target.value })} style={{ ...s.select, maxWidth: 230 }}>
+            {EXPENSE_CATEGORY_GROUPS.map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </optgroup>
+            ))}
           </select>
           <div style={{ fontSize: 11, color: it.status === "review" ? "#b45309" : "#94a3b8", marginTop: 3 }}>{it.status === "review" ? it.reviewReason : "New expense · auto-categorised"}</div>
         </div>

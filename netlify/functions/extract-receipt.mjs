@@ -46,28 +46,21 @@ export default async (req) => {
             },
             {
               type: "text",
-              text: `You are a receipt data extractor for an Australian bookkeeping app. Extract data from this receipt image and return ONLY valid JSON with no markdown fences, no explanation, no extra text.
+              text: `You are a receipt data extractor for an Australian bookkeeping app. The company is NOT registered for GST — do not extract or mention GST. Extract data from this receipt image and return ONLY valid JSON with no markdown fences, no explanation, no extra text.
 
-TAX CATEGORIES — use ONLY one of these exact strings:
-- Advertising & Marketing
-- Accounting & Professional Fees (accountant, lawyer, consultant, bookkeeper)
-- Bank Fees & Interest (Stripe, PayPal, bank fees, Western Union fees, merchant fees)
-- Contractors & Subcontractors (contractors, admin support, overseas helpers)
-- Software & Subscriptions (Adobe, Microsoft, Canva, ChatGPT, Claude, Xero, software apps)
-- Office & Supplies (printer paper, stationery, small office purchases, Officeworks)
-- Equipment & Assets (laptop, phone, monitor, printer, furniture, tools)
-- Motor Vehicle (fuel, tolls, rego, servicing, car insurance, parking)
-- Travel (flights, hotels, Uber/taxis for business trips)
-- Phone & Internet
-- Insurance
-- Tax & Government Fees (ASIC, business name renewals, ATO payments)
-- Other (use when uncertain and add a warning)
+EXPENSE CATEGORIES — use ONLY one of these exact strings:
+Operating: Advertising & Marketing, Bad Debts, Bank Fees & Charges, Cleaning, Commissions Paid, Donations, Fringe Benefits Tax (FBT), Freight & Postage, Home Office Expenses, Insurance, Interest & Loan Charges, Land Tax, Lease Payments, Legal & Professional Fees, Licences & Permits, Meals & Entertainment, Motor Vehicle, Office Supplies & Stationery, Phone & Internet, Printing & Stationery, Rates & Taxes, Rent & Occupancy, Repairs & Maintenance, Software & Subscriptions, Security, Tools & Equipment (under $1,000), Training & Education, Travel & Accommodation, Uniforms & Protective Clothing, Utilities, Wages & Salaries, Superannuation, Workers Compensation Insurance
+Assets: Equipment Purchase (over $1,000), Furniture & Fittings, Vehicles, Depreciation
+Labour: Subcontractors, Consulting Fees
+Industry: Council & Government Fees, Platform Fees, Professional Memberships, Drafting & CAD Software, Plotting & Printing
+
+If uncertain, use "Office Supplies & Stationery" and add a warning.
 
 RULES:
-- Use null for missing date, total, or vendor — do NOT guess.
+- Use null for missing date or total — do NOT guess.
 - If total is uncertain, return null and add a warning.
-- If category is uncertain, use "Other" and add a warning.
-- Clean vendor names (e.g. "ADOBE SYSTEMS SOFTWARE IRELAND" → "Adobe").
+- description: brief description of what was purchased (include vendor name if visible).
+- businessPurpose: only include when category is Motor Vehicle, Meals & Entertainment, Travel & Accommodation, Donations, or Home Office Expenses; otherwise null.
 - confidence: 0.0–1.0, how readable and complete the receipt is overall.
 - categoryConfidence: 0.0–1.0, how certain the category assignment is.
 - warnings: array of short strings about missing or uncertain information.
@@ -81,7 +74,7 @@ Return this exact JSON structure:
   "total": 0.00,
   "description": "brief description of purchase",
   "category": "one of the listed categories",
-  "businessPurpose": "brief business purpose suggestion",
+  "businessPurpose": "string or null",
   "confidence": 0.92,
   "categoryConfidence": 0.95,
   "warnings": []
