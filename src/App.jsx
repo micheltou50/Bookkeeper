@@ -81,8 +81,14 @@ function MoneyBig({ value, color = "#0f172a", size = 30 }) {
 
 const GST_TREATMENTS = ["GST included", "No GST", "GST free", "BAS excluded", "Input taxed", "Unsure"];
 
-const recordDivision = (r) => r?.division || "mworx"; // pre-migration rows without division → Mworx Group
+const recordDivision = (r) => {
+  const d = r?.division;
+  if (!d || d === "mworx") return "mworx";
+  if (d === "mtmgmt" || d === "mt_management" || d === "MT Management") return "mtmgmt";
+  return "mworx"; // unknown values → treat as Mworx (existing data)
+};
 const divisionInfo = (id) => DIVISIONS.find((d) => d.id === id) || DIVISIONS[0];
+const isValidDivision = (id) => DIVISIONS.some((d) => d.id === id);
 
 const sanitizeFilePart = (s) => (s || "").replace(/[/\\:*?"<>|&#%]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 const safeFileName = (parts, ext) => parts.map(p => sanitizeFilePart(String(p))).filter(Boolean).join("_") + "." + ext;
@@ -438,8 +444,15 @@ export default function BookkeeperApp() {
   const toggleNav = () => setNavCollapsed((v) => { const nv = !v; localStorage.setItem("bk_navCollapsed", nv ? "1" : "0"); return nv; });
 
   const [biz] = useState(() => localStorage.getItem("bk_activeBusiness") || COMPANY.id);
-  const [division, setDivision] = useState(() => localStorage.getItem("bk_activeDivision") || "mworx");
-  const switchDivision = (id) => { localStorage.setItem("bk_activeDivision", id); setDivision(id); };
+  const [division, setDivision] = useState(() => {
+    const saved = localStorage.getItem("bk_activeDivision");
+    return isValidDivision(saved) ? saved : "mworx";
+  });
+  const switchDivision = (id) => {
+    if (!isValidDivision(id) || id === division) return;
+    localStorage.setItem("bk_activeDivision", id);
+    setDivision(id);
+  };
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [txns, setTxns] = useState([]);
@@ -2586,7 +2599,7 @@ export default function BookkeeperApp() {
     <div style={{ padding: "52px 20px 12px", background: "#ffffff" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: accent, textTransform: "uppercase" }}>{divInfo.name}</div>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: "#94a3b8", textTransform: "uppercase" }}>{COMPANY.name}</div>
           <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
@@ -2613,7 +2626,9 @@ export default function BookkeeperApp() {
         </button>
         </div>
       </div>
-      <DivisionSwitcher horizontal />
+      <div style={{ padding: "0 20px 12px" }}>
+        <DivisionBar />
+      </div>
     </div>
   );
 
@@ -3023,33 +3038,38 @@ export default function BookkeeperApp() {
   const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, import: ImportPage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
-  const DivisionSwitcher = ({ compact, horizontal }) => {
-    if (horizontal) {
-      return (
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {DIVISIONS.map((d) => (
-            <button key={d.id} onClick={() => switchDivision(d.id)} title={d.subtitle} style={{ padding: "5px 11px", fontSize: 11, fontWeight: 600, borderRadius: 7, border: division === d.id ? "none" : "1px solid #e2e8f0", background: division === d.id ? d.accent : "#fff", color: division === d.id ? "#fff" : "#64748b", cursor: "pointer", whiteSpace: "nowrap" }}>
-              {d.name}
-            </button>
-          ))}
-        </div>
-      );
-    }
-    return (
-      <div style={{ ...s.bizSwitcher, padding: compact ? "8px" : "12px" }}>
-        {DIVISIONS.map((d) => (
-          <button key={d.id} onClick={() => switchDivision(d.id)} title={`${d.name} — ${d.subtitle}`} style={s.divBtn(division === d.id, d.accent)}>
-            {compact ? d.name.split(" ").map((w) => w[0]).join("") : (
-              <>
-                <div>{d.name}</div>
-                <div style={{ fontSize: 9, fontWeight: 400, opacity: 0.75, marginTop: 1 }}>{d.subtitle}</div>
-              </>
-            )}
+  const DivisionBar = () => (
+    <div style={{ display: "flex", gap: 0, padding: 4, background: "#f1f5f9", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+      {DIVISIONS.map((d) => {
+        const active = division === d.id;
+        return (
+          <button
+            key={d.id}
+            type="button"
+            onClick={() => switchDivision(d.id)}
+            title={d.subtitle}
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              border: "none",
+              borderRadius: 7,
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              textAlign: "center",
+              background: active ? d.accent : "transparent",
+              color: active ? "#fff" : "#64748b",
+              boxShadow: active ? "0 1px 3px rgba(0,0,0,0.12)" : "none",
+              lineHeight: 1.3,
+            }}
+          >
+            <div>{d.name}</div>
+            {!isMobile && <div style={{ fontSize: 9, fontWeight: 400, opacity: active ? 0.85 : 0.7, marginTop: 1 }}>{d.subtitle}</div>}
           </button>
-        ))}
-      </div>
-    );
-  };
+        );
+      })}
+    </div>
+  );
 
   const SidebarContent = () => (
     <>
@@ -3063,7 +3083,11 @@ export default function BookkeeperApp() {
           </>
         )}
       </div>
-      {navCollapsed ? <DivisionSwitcher compact /> : <DivisionSwitcher />}
+      {!navCollapsed && (
+        <div style={{ padding: "12px", borderBottom: "1px solid #e2e8f0" }}>
+          <DivisionBar />
+        </div>
+      )}
       <div style={s.nav}>
         {navItems.map((item) => (
           <button key={item.id} onMouseEnter={item.submenu ? (e) => openNavMenu(e, item.submenu) : undefined} onMouseLeave={item.submenu ? closeNavMenuSoon : undefined} onClick={(e) => { if (item.submenu) openNavMenu(e, item.submenu); else setPage(item.id); }} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
@@ -3116,13 +3140,7 @@ export default function BookkeeperApp() {
         )}
         <div style={s.main}>
           <div style={s.header}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{PAGE_TITLES[page] || ""}</div>
-                <div style={{ fontSize: 10, color: accent, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{divInfo.name}</div>
-              </div>
-              <DivisionSwitcher horizontal />
-            </div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{PAGE_TITLES[page] || ""}</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button onClick={() => setModal("receipt")} style={s.btn("#8b5cf6", true)}><Icons.Camera /> Receipt</button>
               {(page === "expenses" || page === "dashboard" || page === "reimbursements") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
@@ -3131,6 +3149,9 @@ export default function BookkeeperApp() {
               {page === "projects" && <button onClick={() => { setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
             </div>
+          </div>
+          <div style={{ padding: "10px 16px", background: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+            <DivisionBar />
           </div>
           <div style={s.content}><PageComponent /></div>
         </div>
