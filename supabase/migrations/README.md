@@ -18,10 +18,13 @@ These SQL files document the schema/constraints/RLS the app relies on.
   (`bk_reconciliations`) plus `reconciled_at` / `reconciliation_id` on
   `bk_transactions` and `bk_invoices`. **Required for Bank Reconciliation**
   in the app.
+- `0010_onedrive_receipts_folder.sql` — Adds `onedrive_receipts_folder` on
+  `bk_profiles` for a dedicated OneDrive receipts path (separate from project
+  folders). **Required before saving the receipts folder setting.**
 
-## Urgent: apply 0007–0009 to live project
+## Urgent: apply 0007–0010 to live project
 
-Project `yzndkdlzgegrcotfeqlp` — paste migrations in order (`0007`, then `0008`, then `0009`) into
+Project `yzndkdlzgegrcotfeqlp` — paste migrations in order (`0007` through `0010`) into
 the [Supabase SQL editor](https://supabase.com/dashboard/project/yzndkdlzgegrcotfeqlp/sql/new),
 or run `node scripts/apply-supabase-migrations.mjs` with `SUPABASE_SERVICE_KEY`
 (and optionally `SUPABASE_DB_URL`) in `.env`.

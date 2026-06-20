@@ -34,7 +34,7 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", onedrive_receipts_folder: "" };
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
@@ -595,7 +595,7 @@ export default function BookkeeperApp() {
     setInvoices(loadedInvoices);
     setTxns(tRes.data || []);
     setJobs(jRes.data || []);
-    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
+    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group", onedrive_receipts_folder: "Mworx Group/Receipts" });
     setEmailConn(eRes.data || null);
     const { data: lastRec } = await supabase.from("bk_reconciliations").select("*").eq("business_id", businessId).order("statement_date", { ascending: false }).limit(1).maybeSingle();
     setLastReconciliation(lastRec || null);
@@ -982,7 +982,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "", onedrive_receipts_folder: p.onedrive_receipts_folder || "" };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
     if (saved) setProfile(saved);
@@ -2047,9 +2047,17 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
         </div>
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
-          <label style={{ ...s.label, marginBottom: 6 }}>OneDrive</label>
-          <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group" style={s.input} />
-          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>The OneDrive folder that holds your job folders. Invoices &amp; receipts save into the matching "26105 - …" subfolder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect &amp; reconnect to grant file access.</div>
+          <label style={{ ...s.label, marginBottom: 12 }}>OneDrive</label>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Projects folder</label>
+            <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group" style={s.input} />
+            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Base folder for job/project subfolders. Invoice PDFs save into the matching &quot;26105 - …&quot; subfolder.</div>
+          </div>
+          <div>
+            <label style={s.label}>Receipts folder</label>
+            <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
+            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts, organised by year and month (e.g. 2026/06-June). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect &amp; reconnect to grant file access.</div>
+          </div>
         </div>
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
           <label style={{ ...s.label, marginBottom: 12 }}>Email Integration</label>

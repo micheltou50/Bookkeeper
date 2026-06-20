@@ -1,10 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 
-// Save an invoice PDF or expense receipt into the user's OneDrive, in the job
-// folder that matches the document's job number (e.g. "26105 - ..."). Reuses the
-// existing Microsoft (Outlook) connection — it just needs the Files.ReadWrite
-// scope, which is added to the OAuth request, so the user re-consents once.
+// Save an invoice PDF or expense receipt into the user's OneDrive. Invoices go
+// into the matching job folder under onedrive_folder. Receipts go into
+// onedrive_receipts_folder (year/month subfolders), falling back to the job
+// folder only when the receipts path is unset.
 
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
@@ -90,6 +90,40 @@ async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName)
   return createFolder(token, basePath, fallbackName);
 }
 
+// Walk/create each segment of a nested OneDrive path (e.g. "Mworx Group/Receipts/2026/06-June").
+async function ensureFolderPath(token, fullPath) {
+  const parts = String(fullPath || "").split("/").filter(Boolean);
+  if (!parts.length) return { status: 400 };
+  let currentPath = "";
+  let last = null;
+  for (const name of parts) {
+    const parentPath = currentPath;
+    currentPath = currentPath ? `${currentPath}/${name}` : name;
+    const { items, status } = await listChildren(token, parentPath);
+    if (status === 401) return { auth: true };
+    if (status) return { status };
+    const existing = items.find((c) => c.folder && c.name === name);
+    if (existing) {
+      last = { id: existing.id, name: existing.name, path: currentPath };
+      continue;
+    }
+    const created = await createFolder(token, parentPath, name);
+    if (created.status === 401) return { auth: true };
+    if (created.status || !created.id) return { status: created.status || 500 };
+    last = { id: created.id, name: created.name, path: currentPath };
+  }
+  return last;
+}
+
+function receiptMonthFolder(dateStr) {
+  const d = dateStr ? new Date(`${dateStr}T12:00:00`) : new Date();
+  if (Number.isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const monthLabel = d.toLocaleDateString("en-AU", { month: "long" });
+  return `${year}/${month}-${monthLabel}`;
+}
+
 async function uploadToFolder(token, folderId, fileName, buffer, contentType) {
   const url = `${GRAPH}/me/drive/items/${folderId}:/${encodeURIComponent(fileName)}:/content`;
   return fetchWithTimeout(url, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType }, body: buffer }, 30000);
@@ -113,7 +147,7 @@ export default async (req) => {
   if (!user) return json({ error: "Unauthorized" }, 401);
 
   // Resolve the file to upload + which job it belongs to.
-  let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
+  let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName, expenseDate;
 
   if (kind === "invoice") {
     let { data: inv } = await supabase.from("bk_invoices").select("*").eq("id", id).single();
@@ -144,6 +178,7 @@ export default async (req) => {
     if (!tx || tx.user_id !== user.id) return json({ error: "Expense not found" }, 404);
     if (!tx.receipt_path) return json({ error: "This expense has no receipt to save" }, 400);
     businessId = tx.business_id;
+    expenseDate = tx.date;
     const { data: rData, error: rErr } = await supabase.storage.from("receipts").download(tx.receipt_path);
     if (rErr || !rData) return json({ error: "Could not load the receipt" }, 500);
     fileBuffer = Buffer.from(await rData.arrayBuffer());
@@ -175,18 +210,27 @@ export default async (req) => {
     if (!accessToken) return json({ error: "Reconnect Microsoft in Settings" }, 401);
   }
 
-  const { data: profile } = await supabase.from("bk_profiles").select("onedrive_folder").eq("user_id", user.id).eq("business_id", businessId).maybeSingle();
-  const basePath = (profile?.onedrive_folder || "Mworx Group").trim();
+  const { data: profile } = await supabase.from("bk_profiles").select("onedrive_folder, onedrive_receipts_folder").eq("user_id", user.id).eq("business_id", businessId).maybeSingle();
+  const projectsBase = (profile?.onedrive_folder || "Mworx Group").trim();
+  const receiptsBase = (profile?.onedrive_receipts_folder || "").trim();
 
   const run = async (tok) => {
-    const folder = await resolveFolder(tok, basePath, jobNumber, jobLabel, fallbackName);
-    if (folder.status === 401) return { auth: true };
+    let folder;
+    if (kind === "expense" && receiptsBase) {
+      const monthPath = receiptMonthFolder(expenseDate);
+      const fullPath = monthPath ? `${receiptsBase}/${monthPath}` : receiptsBase;
+      folder = await ensureFolderPath(tok, fullPath);
+    } else {
+      folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
+    }
+    if (folder.auth) return { auth: true };
     if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
     const up = await uploadToFolder(tok, folder.id, fileName, fileBuffer, contentType);
     if (up.status === 401) return { auth: true };
     if (!up.ok) { let e = ""; try { e = JSON.stringify(await up.json()); } catch { /* ignore */ } return { error: `OneDrive upload failed (${up.status})`, detail: e }; }
     const item = await up.json();
-    return { ok: true, webUrl: item.webUrl, savedTo: `${folder.name}/${fileName}` };
+    const savedIn = folder.path || folder.name;
+    return { ok: true, webUrl: item.webUrl, savedTo: `${savedIn}/${fileName}` };
   };
 
   let res = await run(accessToken);

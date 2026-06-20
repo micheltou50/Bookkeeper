@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Apply BookKeeper Supabase migrations (0007 + 0008 + 0009) to the live project.
+ * Apply BookKeeper Supabase migrations (0007 + 0008 + 0009 + 0010) to the live project.
  *
  * Requires SUPABASE_SERVICE_KEY (service_role) in .env or environment.
  * Project ref: yzndkdlzgegrcotfeqlp
@@ -84,12 +84,14 @@ async function main() {
   const m0007 = readFileSync(join(root, "supabase/migrations/0007_divisions.sql"), "utf8");
   const m0008 = readFileSync(join(root, "supabase/migrations/0008_standardise_division_slug.sql"), "utf8");
   const m0009 = readFileSync(join(root, "supabase/migrations/0009_bank_reconciliation.sql"), "utf8");
+  const m0010 = readFileSync(join(root, "supabase/migrations/0010_onedrive_receipts_folder.sql"), "utf8");
 
   const r7 = await runSql(m0007, "0007_divisions.sql");
   const r8 = await runSql(m0008, "0008_standardise_division_slug.sql");
   const r9 = await runSql(m0009, "0009_bank_reconciliation.sql");
+  const r10 = await runSql(m0010, "0010_onedrive_receipts_folder.sql");
 
-  if (r7.manual || r8.manual || r9.manual) {
+  if (r7.manual || r8.manual || r9.manual || r10.manual) {
     console.log("\nNo SUPABASE_DB_URL set — copy the SQL above into:");
     console.log(`https://supabase.com/dashboard/project/${PROJECT_REF}/sql/new`);
     process.exit(0);
