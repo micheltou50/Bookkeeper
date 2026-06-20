@@ -57,41 +57,37 @@ const DIVISIONS = [
   { id: "mtmgmt", name: "MT Management", short: "MT Mgmt", subtitle: "STR property management", accent: "#3b82f6", invoicePrefix: "MTM", quotePrefix: "QMTM", tagline: "Short-Term Rental Property Management" },
 ];
 
-// Visible in sidebar so you can confirm the updated app is running locally.
-const APP_BUILD = "2026.06-divisions";
-
-function DivisionBar({ division, onSwitch, compact = false }) {
+function DivisionMenu({ division, onSwitch, onClose, style }) {
   return (
-    <div style={{ display: "flex", flexDirection: compact ? "column" : "row", gap: compact ? 4 : 0, padding: 4, background: "#f1f5f9", borderRadius: 10, border: "1px solid #e2e8f0" }}>
-      {DIVISIONS.map((d) => {
-        const active = division === d.id;
-        return (
-          <button
-            key={d.id}
-            type="button"
-            onClick={() => onSwitch(d.id)}
-            title={`${d.name} — ${d.subtitle}`}
-            style={{
-              flex: 1,
-              padding: compact ? "6px 4px" : "8px 10px",
-              border: "none",
-              borderRadius: 7,
-              cursor: "pointer",
-              fontSize: compact ? 10 : 12,
-              fontWeight: 600,
-              textAlign: "center",
-              background: active ? d.accent : "transparent",
-              color: active ? "#fff" : "#64748b",
-              boxShadow: active ? "0 1px 3px rgba(0,0,0,0.12)" : "none",
-              lineHeight: 1.25,
-            }}
-          >
-            {compact ? d.short : d.name}
-            {!compact && <div style={{ fontSize: 9, fontWeight: 400, opacity: active ? 0.85 : 0.7, marginTop: 1 }}>{d.subtitle}</div>}
-          </button>
-        );
-      })}
-    </div>
+    <>
+      <div style={{ position: "fixed", inset: 0, zIndex: 58 }} onClick={onClose} aria-hidden="true" />
+      <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, minWidth: 200, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 12px 28px -8px rgba(16,24,40,0.25)", padding: 4, zIndex: 59, ...style }}>
+        {DIVISIONS.map((d) => {
+          const active = division === d.id;
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => { onSwitch(d.id); onClose(); }}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "10px 12px",
+                border: "none",
+                borderRadius: 7,
+                cursor: "pointer",
+                background: active ? d.accent + "18" : "transparent",
+                borderLeft: active ? `3px solid ${d.accent}` : "3px solid transparent",
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 600, color: active ? d.accent : "#0f172a" }}>{d.name}</div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 1 }}>{d.subtitle}</div>
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -507,10 +503,11 @@ export default function BookkeeperApp() {
   const [importResult, setImportResult] = useState(null);
   const [importBusy, setImportBusy] = useState(false);
   const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
+  const [divMenuOpen, setDivMenuOpen] = useState(false);
   const navMenuTimer = useRef(null);
   // Sidebar sub-menus open on hover; a short close delay lets the cursor travel
   // from the nav item into the popover without it vanishing.
-  const openNavMenu = (e, items) => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; const r = e.currentTarget.getBoundingClientRect(); setNavMenu({ x: r.right, y: r.top, items }); };
+  const openNavMenu = (e, items) => { setDivMenuOpen(false); if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; const r = e.currentTarget.getBoundingClientRect(); setNavMenu({ x: r.right, y: r.top, items }); };
   const holdNavMenu = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; };
   const closeNavMenuSoon = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = setTimeout(() => setNavMenu(null), 220); };
 
@@ -2635,10 +2632,17 @@ export default function BookkeeperApp() {
 
   const MobileHeader = () => (
     <div style={{ padding: "52px 20px 12px", background: "#ffffff" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: "#94a3b8", textTransform: "uppercase" }}>{COMPANY.name}</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div style={{ position: "relative" }}>
+          <button type="button" onClick={() => setDivMenuOpen((v) => !v)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: "#94a3b8", textTransform: "uppercase" }}>{COMPANY.name}</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
+            <div style={{ fontSize: 12, color: accent, fontWeight: 600, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              {divInfo.name}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ opacity: 0.7, transform: divMenuOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease" }}><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+          </button>
+          {divMenuOpen && <DivisionMenu division={division} onSwitch={switchDivision} onClose={() => setDivMenuOpen(false)} />}
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
         {page === "expenses" && (
@@ -2663,9 +2667,6 @@ export default function BookkeeperApp() {
           <Icons.Logout />
         </button>
         </div>
-      </div>
-      <div style={{ padding: "0 20px 12px" }}>
-        <DivisionBar division={division} onSwitch={switchDivision} />
       </div>
     </div>
   );
@@ -3078,18 +3079,34 @@ export default function BookkeeperApp() {
 
   const SidebarContent = () => (
     <>
-      <div style={{ ...s.logo, padding: navCollapsed ? "16px 6px 10px" : "20px 16px 12px", textAlign: navCollapsed ? "center" : "left" }}>
-        {navCollapsed ? (
-          <div style={{ width: 34, height: 34, margin: "0 auto 8px", borderRadius: 9, background: accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>B</div>
-        ) : (
-          <>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
-            <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, textTransform: "uppercase", letterSpacing: "0.08em" }}>{COMPANY.name}</div>
-          </>
+      <div style={{ ...s.logo, position: "relative", padding: navCollapsed ? "16px 6px 12px" : "20px 16px 12px", textAlign: navCollapsed ? "center" : "left" }}>
+        <button
+          type="button"
+          onClick={() => setDivMenuOpen((v) => !v)}
+          title="Switch division"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: navCollapsed ? "center" : "left" }}
+        >
+          {navCollapsed ? (
+            <div style={{ width: 34, height: 34, margin: "0 auto", borderRadius: 9, background: accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>B</div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2.5" style={{ transform: divMenuOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease" }}><path d="M6 9l6 6 6-6"/></svg>
+              </div>
+              <div style={{ fontSize: 12, color: accent, fontWeight: 600, marginTop: 4 }}>{divInfo.name}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 1 }}>{COMPANY.name}</div>
+            </>
+          )}
+        </button>
+        {divMenuOpen && (
+          <DivisionMenu
+            division={division}
+            onSwitch={switchDivision}
+            onClose={() => setDivMenuOpen(false)}
+            style={navCollapsed ? { left: "calc(100% + 8px)", top: 0, minWidth: 210 } : undefined}
+          />
         )}
-        <div style={{ marginTop: navCollapsed ? 0 : 10 }}>
-          <DivisionBar division={division} onSwitch={switchDivision} compact={navCollapsed} />
-        </div>
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
@@ -3104,7 +3121,6 @@ export default function BookkeeperApp() {
           <button onClick={() => setModal("settings")} title="Settings" style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Settings />{!navCollapsed && <span>Settings</span>}</button>
           <button onClick={logout} title="Sign Out" style={{ ...s.btnOutline, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11 }}><Icons.Logout />{!navCollapsed && <span>Sign Out</span>}</button>
         </div>
-        {!navCollapsed && <div style={{ fontSize: 9, color: "#cbd5e1", textAlign: "center", marginTop: 4 }}>{APP_BUILD}</div>}
       </div>
     </>
   );
@@ -3156,9 +3172,6 @@ export default function BookkeeperApp() {
               {page === "projects" && <button onClick={() => { setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
             </div>
-          </div>
-          <div style={{ padding: "10px 16px", background: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
-            <DivisionBar division={division} onSwitch={switchDivision} />
           </div>
           <div style={s.content}><PageComponent /></div>
         </div>
