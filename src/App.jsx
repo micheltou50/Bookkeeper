@@ -1604,7 +1604,7 @@ export default function BookkeeperApp() {
   const ExpenseForm = ({ existing }) => {
     const derivePersonalCard = (e) => {
       if (!e) return false;
-      return e.payment_source === "personal" && e.reimbursement_required;
+      return e.payment_source === "personal";
     };
     const ai = !existing ? aiData : null;
     const fromReimbursements = ai?.fromReimbursements;
@@ -1675,10 +1675,8 @@ export default function BookkeeperApp() {
     };
     const toSave = () => ({
       ...f,
-      payment_source: f.personal_card ? "personal" : "business",
+      payment_source: f.personal_card ? "personal_reimburse" : "business",
       paid_by: f.personal_card ? "Michel" : null,
-      reimbursement_required: !!f.personal_card,
-      reimbursement_status: f.personal_card ? "pending" : "not_required",
       business_purpose: needsBusinessPurpose ? (f.business_purpose || "") : "",
     });
     const categorySelect = (
