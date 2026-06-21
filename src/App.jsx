@@ -1769,13 +1769,15 @@ export default function BookkeeperApp() {
     const defCat = EXPENSE_CATEGORIES.includes("Office Supplies & Stationery") ? "Office Supplies & Stationery" : EXPENSE_CATEGORIES[0];
 
     const scanOne = async (file, i) => {
-      const base = { key: `${i}-${file.name}`, include: true, status: "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const base = { key: `${i}-${file.name}`, include: true, status: isPdf ? "pdf" : "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
       try {
-        const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const ext = isPdf ? "pdf" : (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
         const path = `${session.user.id}/${Date.now()}_${i}_receipt.${ext}`;
-        const up = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || "image/jpeg" });
+        const up = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || (isPdf ? "application/pdf" : "image/jpeg") });
         if (up.error) return { ...base, status: "error" };
         base.receipt_path = path;
+        if (isPdf) return base;
         const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(file); });
         base.scannedUrl = dataUrl;
         const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -1787,8 +1789,8 @@ export default function BookkeeperApp() {
     };
 
     const onFiles = async (fileList) => {
-      const files = [...(fileList || [])].filter((f) => (f.type || "").startsWith("image/")).slice(0, 25);
-      if (!files.length) { alert("Drop receipt images (JPG or PNG). PDFs aren't auto-read."); return; }
+      const files = [...(fileList || [])].filter((f) => { const t = f.type || ""; return t.startsWith("image/") || t === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"); }).slice(0, 25);
+      if (!files.length) { alert("Drop receipt images (JPG, PNG) or PDFs."); return; }
       setPhase("scanning");
       setProgress({ done: 0, total: files.length });
       const out = [];
@@ -1818,17 +1820,17 @@ export default function BookkeeperApp() {
         </div>
         {phase === "select" && (
           <>
-            <input ref={fileRef} type="file" accept="image/*" multiple onChange={(e) => onFiles(e.target.files)} style={{ display: "none" }} />
+            <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => onFiles(e.target.files)} style={{ display: "none" }} />
             <div onClick={() => fileRef.current?.click()} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files); }} style={{ border: `2px dashed ${dragOver ? accent : "#cbd5e1"}`, borderRadius: 12, padding: "40px 20px", textAlign: "center", cursor: "pointer", background: dragOver ? "#ecfdf5" : "#f8fafc" }}>
               <div style={{ color: accent, marginBottom: 8, display: "flex", justifyContent: "center" }}><Icons.Camera /></div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Drop receipt photos here, or click to choose</div>
-              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Up to 25 images. The AI reads each one — you review before saving.</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Drop receipt photos or PDFs here, or click to choose</div>
+              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Up to 25 files. Images are auto-read by AI — PDFs go straight to manual entry.</div>
             </div>
           </>
         )}
         {phase === "scanning" && (
           <div style={{ padding: "30px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Reading receipts… {progress.done}/{progress.total}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Uploading &amp; reading… {progress.done}/{progress.total}</div>
             <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, marginTop: 14, overflow: "hidden" }}><div style={{ height: "100%", width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`, background: accent, transition: "width .2s" }} /></div>
           </div>
         )}
@@ -1840,9 +1842,10 @@ export default function BookkeeperApp() {
                 <div key={d.key} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, opacity: d.include ? 1 : 0.5, background: "#fff" }}>
                   <div style={{ display: "flex", gap: 10 }}>
                     <input type="checkbox" checked={d.include} onChange={() => upd(d.key, { include: !d.include })} style={{ width: 16, height: 16, accentColor: accent, marginTop: 2, flexShrink: 0 }} />
-                    {d.scannedUrl && <img src={d.scannedUrl} alt="" style={{ width: 44, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0", flexShrink: 0 }} />}
+                    {d.status === "pdf" ? <div style={{ width: 44, height: 56, borderRadius: 6, border: "1px solid #e2e8f0", background: "#fef3c7", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#92400e" }}>PDF</div> : d.scannedUrl ? <img src={d.scannedUrl} alt="" style={{ width: 44, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0", flexShrink: 0 }} /> : null}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      {d.status !== "ok" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>{d.status === "scanfail" ? "Couldn't auto-read — enter manually" : "Upload failed"}</div>}
+                      {d.status === "pdf" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>PDF — enter details manually</div>}
+                      {d.status !== "ok" && d.status !== "pdf" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>{d.status === "scanfail" ? "Couldn't auto-read — enter manually" : "Upload failed"}</div>}
                       {d.status === "ok" && d.confidence != null && <div style={{ fontSize: 10, color: d.confidence < 0.7 ? "#92400e" : "#94a3b8", marginBottom: 4 }}>AI {Math.round(d.confidence * 100)}%{d.warnings?.length ? ` · ${d.warnings.join(" ")}` : ""}</div>}
                       <div style={s.grid2}>
                         <input value={d.merchant} onChange={(e) => upd(d.key, { merchant: e.target.value })} placeholder="Merchant" style={{ ...s.input, marginBottom: 6 }} />
