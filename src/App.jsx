@@ -1595,6 +1595,8 @@ export default function BookkeeperApp() {
     const hasWarnings = ai && (ai.confidence < 0.7 || ai.warnings?.length > 0);
     const receiptInputRef = useRef(null);
     const [uploadingReceipt, setUploadingReceipt] = useState(false);
+    const [extracting, setExtracting] = useState(false);
+    const [extractInfo, setExtractInfo] = useState(null);
     const origReceiptRef = useRef(existing?.receipt_path || null);
     const draftPathRef = useRef(ai?.receiptPath || null);
     const handleReceiptFile = async (e) => {
@@ -1611,6 +1613,32 @@ export default function BookkeeperApp() {
         if (draftPathRef.current && draftPathRef.current !== origReceiptRef.current) supabase.storage.from("receipts").remove([draftPathRef.current]).catch(() => {});
         draftPathRef.current = path;
         setF((prev) => ({ ...prev, receipt_path: path }));
+        // For an image receipt on a new expense, let the AI read it and fill the blanks.
+        if (!existing && !isPdf) {
+          setExtracting(true);
+          setExtractInfo(null);
+          try {
+            const base64 = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(",")[1]); fr.onerror = reject; fr.readAsDataURL(file); });
+            const token = (await supabase.auth.getSession()).data.session?.access_token;
+            const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: file.type || "image/jpeg" }) });
+            if (resp.ok) {
+              const r = await resp.json();
+              setF((prev) => ({
+                ...prev,
+                merchant: prev.merchant || r.vendor || "",
+                description: prev.description || r.description || r.vendor || "",
+                amount: prev.amount && prev.amount !== "" ? prev.amount : (r.total != null ? String(r.total) : ""),
+                date: r.date || prev.date,
+                account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : prev.account),
+                business_purpose: prev.business_purpose || r.businessPurpose || "",
+              }));
+              setExtractInfo({ confidence: r.confidence, warnings: r.warnings || [] });
+            } else {
+              setExtractInfo({ error: true });
+            }
+          } catch { setExtractInfo({ error: true }); }
+          finally { setExtracting(false); }
+        }
       } finally { setUploadingReceipt(false); }
     };
     const removeReceiptDraft = () => {
@@ -1680,11 +1708,14 @@ export default function BookkeeperApp() {
           </div>
           <input ref={receiptInputRef} type="file" accept="image/*,application/pdf" capture="environment" onChange={handleReceiptFile} style={{ display: "none" }} />
           <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button type="button" disabled={uploadingReceipt} onClick={() => receiptInputRef.current?.click()} style={{ ...s.btnOutline, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: uploadingReceipt ? 0.5 : 1 }}><Icons.Camera /> {uploadingReceipt ? "Uploading…" : (f.receipt_path ? "Replace" : "Snap / attach")}</button>
+            <button type="button" disabled={uploadingReceipt || extracting} onClick={() => receiptInputRef.current?.click()} style={{ ...s.btnOutline, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: uploadingReceipt || extracting ? 0.5 : 1 }}><Icons.Camera /> {uploadingReceipt ? "Uploading…" : extracting ? "Reading…" : (f.receipt_path ? "Replace" : "Snap / attach")}</button>
             {f.receipt_path && <button type="button" onClick={() => openReceipt({ receipt_path: f.receipt_path })} style={{ ...s.btnOutline, gap: 6 }}>View</button>}
             {f.receipt_path && <button type="button" onClick={removeReceiptDraft} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
           </div>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, lineHeight: 1.5 }}>{emailConn ? "Photograph or attach the receipt — it's filed to your OneDrive receipts folder as a PDF when you save." : "Photograph or attach the receipt. Connect Microsoft in Settings to also file it to OneDrive."}</div>
+          {extracting && <div style={{ fontSize: 12, color: "#8b5cf6", fontWeight: 600, marginTop: 8 }}>Reading the receipt with AI…</div>}
+          {!extracting && extractInfo && !extractInfo.error && <div style={{ fontSize: 11, color: "#059669", fontWeight: 600, marginTop: 8 }}>AI filled the details{extractInfo.confidence != null ? ` · ${Math.round(extractInfo.confidence * 100)}% confidence` : ""} — please review.{extractInfo.warnings?.length ? ` ${extractInfo.warnings.join(" ")}` : ""}</div>}
+          {!extracting && extractInfo?.error && <div style={{ fontSize: 11, color: "#92400e", marginTop: 8 }}>Couldn't auto-read this receipt — enter the details manually.</div>}
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, lineHeight: 1.5 }}>{emailConn ? "Photograph or attach a receipt — the AI reads it to fill the fields, and it's filed to your OneDrive receipts folder as a PDF when you save." : "Photograph or attach a receipt — the AI reads it to fill the fields. Connect Microsoft in Settings to also file it to OneDrive."}</div>
         </div>
         <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); const payload = toSave(); existing ? await updateTransaction(existing.id, payload) : await addTransaction(payload); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
         {existing && !existing.receipt_path && existing.payment_source === "personal" && (
