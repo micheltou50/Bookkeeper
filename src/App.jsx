@@ -1770,18 +1770,17 @@ export default function BookkeeperApp() {
 
     const scanOne = async (file, i) => {
       const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      const base = { key: `${i}-${file.name}`, include: true, status: isPdf ? "pdf" : "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
+      const base = { key: `${i}-${file.name}`, include: true, isPdf, status: "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
       try {
         const ext = isPdf ? "pdf" : (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
         const path = `${session.user.id}/${Date.now()}_${i}_receipt.${ext}`;
         const up = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || (isPdf ? "application/pdf" : "image/jpeg") });
         if (up.error) return { ...base, status: "error" };
         base.receipt_path = path;
-        if (isPdf) return base;
         const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(file); });
-        base.scannedUrl = dataUrl;
+        if (!isPdf) base.scannedUrl = dataUrl;
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || "image/jpeg" }) });
+        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
         if (!resp.ok) return { ...base, status: "scanfail" };
         const r = await resp.json();
         return { ...base, merchant: r.vendor || "", description: r.description || r.vendor || "", amount: r.total != null ? String(r.total) : "", date: r.date || base.date, account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : defCat), business_purpose: r.businessPurpose || "", confidence: r.confidence, warnings: r.warnings || [] };
@@ -1842,11 +1841,12 @@ export default function BookkeeperApp() {
                 <div key={d.key} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, opacity: d.include ? 1 : 0.5, background: "#fff" }}>
                   <div style={{ display: "flex", gap: 10 }}>
                     <input type="checkbox" checked={d.include} onChange={() => upd(d.key, { include: !d.include })} style={{ width: 16, height: 16, accentColor: accent, marginTop: 2, flexShrink: 0 }} />
-                    {d.status === "pdf" ? <div style={{ width: 44, height: 56, borderRadius: 6, border: "1px solid #e2e8f0", background: "#fef3c7", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#92400e" }}>PDF</div> : d.scannedUrl ? <img src={d.scannedUrl} alt="" style={{ width: 44, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0", flexShrink: 0 }} /> : null}
+                    {d.isPdf ? <div style={{ width: 44, height: 56, borderRadius: 6, border: "1px solid #e2e8f0", background: "#fef3c7", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#92400e" }}>PDF</div> : d.scannedUrl ? <img src={d.scannedUrl} alt="" style={{ width: 44, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0", flexShrink: 0 }} /> : null}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      {d.status === "pdf" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>PDF — enter details manually</div>}
-                      {d.status !== "ok" && d.status !== "pdf" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>{d.status === "scanfail" ? "Couldn't auto-read — enter manually" : "Upload failed"}</div>}
-                      {d.status === "ok" && d.confidence != null && <div style={{ fontSize: 10, color: d.confidence < 0.7 ? "#92400e" : "#94a3b8", marginBottom: 4 }}>AI {Math.round(d.confidence * 100)}%{d.warnings?.length ? ` · ${d.warnings.join(" ")}` : ""}</div>}
+                      {d.status === "scanfail" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>{d.isPdf ? "Couldn't read PDF — enter manually" : "Couldn't auto-read — enter manually"}</div>}
+                      {d.status === "error" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>Upload failed</div>}
+                      {d.status === "ok" && d.confidence != null && <div style={{ fontSize: 10, color: d.confidence < 0.7 ? "#92400e" : "#94a3b8", marginBottom: 4 }}>{d.isPdf ? "PDF · " : ""}AI {Math.round(d.confidence * 100)}%{d.warnings?.length ? ` · ${d.warnings.join(" ")}` : ""}</div>}
+                      {d.status === "ok" && d.confidence == null && d.isPdf && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>PDF — enter details manually</div>}
                       <div style={s.grid2}>
                         <input value={d.merchant} onChange={(e) => upd(d.key, { merchant: e.target.value })} placeholder="Merchant" style={{ ...s.input, marginBottom: 6 }} />
                         <input type="number" step="0.01" value={d.amount} onChange={(e) => upd(d.key, { amount: e.target.value })} placeholder="Amount" style={{ ...s.input, marginBottom: 6 }} />

@@ -33,6 +33,11 @@ export default async (req) => {
       });
     }
 
+    const isPdf = mediaType === "application/pdf";
+    const mediaBlock = isPdf
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: image } }
+      : { type: "image", source: { type: "base64", media_type: mediaType, data: image } };
+
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
@@ -40,10 +45,7 @@ export default async (req) => {
         {
           role: "user",
           content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: mediaType, data: image },
-            },
+            mediaBlock,
             {
               type: "text",
               text: `You are a receipt data extractor for an Australian bookkeeping app. The company is NOT registered for GST — do not extract or mention GST. Extract data from this receipt image and return ONLY valid JSON with no markdown fences, no explanation, no extra text.
