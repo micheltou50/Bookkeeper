@@ -1640,13 +1640,13 @@ export default function BookkeeperApp() {
         draftPathRef.current = path;
         setF((prev) => ({ ...prev, receipt_path: path }));
         // For an image receipt on a new expense, let the AI read it and fill the blanks.
-        if (!existing && !isPdf) {
+        if (!existing) {
           setExtracting(true);
           setExtractInfo(null);
           try {
             const base64 = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(",")[1]); fr.onerror = reject; fr.readAsDataURL(file); });
             const token = (await supabase.auth.getSession()).data.session?.access_token;
-            const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: file.type || "image/jpeg" }) });
+            const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
             if (resp.ok) {
               const r = await resp.json();
               setF((prev) => ({
