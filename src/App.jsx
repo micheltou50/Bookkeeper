@@ -772,6 +772,32 @@ export default function BookkeeperApp() {
     setAiData(null);
   };
 
+  // Insert several scanned expenses at once (batch receipts) without closing the
+  // modal per item. Mirrors addTransaction's per-row handling: receipt rename,
+  // category learning, OneDrive filing. Returns the inserted rows.
+  const addExpensesBatch = async (items) => {
+    const inserted = [];
+    for (const t of items) {
+      const isPersonal = !!t.personal_card;
+      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: "expense", description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, merchant: t.merchant || null, reference: t.reference || null, receipt_path: t.receipt_path || "", payment_source: isPersonal ? "personal" : "business", paid_by: isPersonal ? "Michel" : null, reimbursement_required: isPersonal, reimbursement_status: isPersonal ? "pending" : "not_required", business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null };
+      const { ok, data } = await sbInsert("bk_transactions", row, "save expense");
+      if (!ok || !data) continue;
+      let rec = data;
+      if (rec.receipt_path) {
+        const ext = (rec.receipt_path.split(".").pop() || "jpg").toLowerCase();
+        const newName = safeFileName([rec.date, (rec.merchant || rec.description || "Expense").slice(0, 40), rec.account || "Uncategorised", fmtAmtFile(rec.amount), rec.id], ext);
+        const newPath = `${session.user.id}/${newName}`;
+        const { error: moveErr } = await supabase.storage.from("receipts").move(rec.receipt_path, newPath);
+        if (!moveErr) { await supabase.from("bk_transactions").update({ receipt_path: newPath }).eq("id", rec.id); rec = { ...rec, receipt_path: newPath }; }
+      }
+      setTxns((prev) => [rec, ...prev]);
+      learnCategory(rec.merchant, rec.description, rec.account);
+      if (rec.receipt_path && emailConn) saveToOneDrive("expense", rec.id, { silent: true });
+      inserted.push(rec);
+    }
+    return inserted;
+  };
+
   const updateTransaction = async (id, t) => {
     const orig = txns.find((x) => x.id === id);
     const ps = t.payment_source || "business";
@@ -1665,7 +1691,10 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Expense</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Expense</h3>
+            {!existing && <button type="button" onClick={() => setModal("batch")} title="Add many receipts at once" style={{ ...s.btnOutline, color: "#7c3aed", borderColor: "#7c3aed40", padding: "3px 9px", fontSize: 11, gap: 5 }}><Icons.Camera /> Batch</button>}
+          </div>
           <button onClick={() => { if (ai?.receiptPath) supabase.storage.from("receipts").remove([ai.receiptPath]).catch(() => {}); if (draftPathRef.current && draftPathRef.current !== origReceiptRef.current) supabase.storage.from("receipts").remove([draftPathRef.current]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         {ai && (
@@ -1725,6 +1754,120 @@ export default function BookkeeperApp() {
           <button onClick={() => deleteTransaction(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
             <Icons.Trash /> Delete Expense
           </button>
+        )}
+      </div>
+    );
+  };
+
+  const BatchReceipts = () => {
+    const [phase, setPhase] = useState("select"); // select | scanning | review | saving | done
+    const [drafts, setDrafts] = useState([]);
+    const [progress, setProgress] = useState({ done: 0, total: 0 });
+    const [dragOver, setDragOver] = useState(false);
+    const [savedCount, setSavedCount] = useState(0);
+    const fileRef = useRef(null);
+    const defCat = EXPENSE_CATEGORIES.includes("Office Supplies & Stationery") ? "Office Supplies & Stationery" : EXPENSE_CATEGORIES[0];
+
+    const scanOne = async (file, i) => {
+      const base = { key: `${i}-${file.name}`, include: true, status: "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
+      try {
+        const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const path = `${session.user.id}/${Date.now()}_${i}_receipt.${ext}`;
+        const up = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || "image/jpeg" });
+        if (up.error) return { ...base, status: "error" };
+        base.receipt_path = path;
+        const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(file); });
+        base.scannedUrl = dataUrl;
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || "image/jpeg" }) });
+        if (!resp.ok) return { ...base, status: "scanfail" };
+        const r = await resp.json();
+        return { ...base, merchant: r.vendor || "", description: r.description || r.vendor || "", amount: r.total != null ? String(r.total) : "", date: r.date || base.date, account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : defCat), business_purpose: r.businessPurpose || "", confidence: r.confidence, warnings: r.warnings || [] };
+      } catch { return { ...base, status: "scanfail" }; }
+    };
+
+    const onFiles = async (fileList) => {
+      const files = [...(fileList || [])].filter((f) => (f.type || "").startsWith("image/")).slice(0, 25);
+      if (!files.length) { alert("Drop receipt images (JPG or PNG). PDFs aren't auto-read."); return; }
+      setPhase("scanning");
+      setProgress({ done: 0, total: files.length });
+      const out = [];
+      for (let i = 0; i < files.length; i++) { out.push(await scanOne(files[i], i)); setProgress({ done: i + 1, total: files.length }); }
+      setDrafts(out);
+      setPhase("review");
+    };
+
+    const upd = (key, patch) => setDrafts((prev) => prev.map((d) => (d.key === key ? { ...d, ...patch } : d)));
+    const chosen = drafts.filter((d) => d.include && d.amount && Number(d.amount) > 0);
+
+    const addAll = async () => {
+      if (!chosen.length) { alert("Set an amount on at least one receipt to add it."); return; }
+      setPhase("saving");
+      const dropped = drafts.filter((d) => !d.include && d.receipt_path).map((d) => d.receipt_path);
+      if (dropped.length) supabase.storage.from("receipts").remove(dropped).catch(() => {});
+      const added = await addExpensesBatch(chosen.map((d) => ({ date: d.date, amount: d.amount, account: d.account, merchant: d.merchant, description: d.description || d.merchant || "Expense", business_purpose: d.business_purpose, receipt_path: d.receipt_path })));
+      setSavedCount(added.length);
+      setPhase("done");
+    };
+
+    return (
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Batch Receipts</h3>
+          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        </div>
+        {phase === "select" && (
+          <>
+            <input ref={fileRef} type="file" accept="image/*" multiple onChange={(e) => onFiles(e.target.files)} style={{ display: "none" }} />
+            <div onClick={() => fileRef.current?.click()} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files); }} style={{ border: `2px dashed ${dragOver ? accent : "#cbd5e1"}`, borderRadius: 12, padding: "40px 20px", textAlign: "center", cursor: "pointer", background: dragOver ? "#ecfdf5" : "#f8fafc" }}>
+              <div style={{ color: accent, marginBottom: 8, display: "flex", justifyContent: "center" }}><Icons.Camera /></div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Drop receipt photos here, or click to choose</div>
+              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Up to 25 images. The AI reads each one — you review before saving.</div>
+            </div>
+          </>
+        )}
+        {phase === "scanning" && (
+          <div style={{ padding: "30px 10px", textAlign: "center" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Reading receipts… {progress.done}/{progress.total}</div>
+            <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, marginTop: 14, overflow: "hidden" }}><div style={{ height: "100%", width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`, background: accent, transition: "width .2s" }} /></div>
+          </div>
+        )}
+        {phase === "review" && (
+          <>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>{drafts.length} scanned · {chosen.length} ready to add. Review and edit, then add.</div>
+            <div style={{ maxHeight: "55vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+              {drafts.map((d) => (
+                <div key={d.key} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, opacity: d.include ? 1 : 0.5, background: "#fff" }}>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <input type="checkbox" checked={d.include} onChange={() => upd(d.key, { include: !d.include })} style={{ width: 16, height: 16, accentColor: accent, marginTop: 2, flexShrink: 0 }} />
+                    {d.scannedUrl && <img src={d.scannedUrl} alt="" style={{ width: 44, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0", flexShrink: 0 }} />}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {d.status !== "ok" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>{d.status === "scanfail" ? "Couldn't auto-read — enter manually" : "Upload failed"}</div>}
+                      {d.status === "ok" && d.confidence != null && <div style={{ fontSize: 10, color: d.confidence < 0.7 ? "#92400e" : "#94a3b8", marginBottom: 4 }}>AI {Math.round(d.confidence * 100)}%{d.warnings?.length ? ` · ${d.warnings.join(" ")}` : ""}</div>}
+                      <div style={s.grid2}>
+                        <input value={d.merchant} onChange={(e) => upd(d.key, { merchant: e.target.value })} placeholder="Merchant" style={{ ...s.input, marginBottom: 6 }} />
+                        <input type="number" step="0.01" value={d.amount} onChange={(e) => upd(d.key, { amount: e.target.value })} placeholder="Amount" style={{ ...s.input, marginBottom: 6 }} />
+                      </div>
+                      <div style={s.grid2}>
+                        <input type="date" value={d.date} onChange={(e) => upd(d.key, { date: e.target.value })} style={{ ...s.input, marginBottom: 0 }} />
+                        <select value={d.account} onChange={(e) => upd(d.key, { account: e.target.value })} style={{ ...s.select, marginBottom: 0 }}>{EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.label} label={g.label}>{g.categories.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}</select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button disabled={!chosen.length} onClick={addAll} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 12, opacity: chosen.length ? 1 : 0.5 }}>Add {chosen.length} expense{chosen.length === 1 ? "" : "s"}</button>
+          </>
+        )}
+        {phase === "saving" && <div style={{ padding: "30px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Adding expenses…</div>}
+        {phase === "done" && (
+          <div style={{ padding: "30px 10px", textAlign: "center" }}>
+            <div style={{ width: 54, height: 54, borderRadius: 27, background: "#ecfdf5", color: "#059669", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icons.Check /></div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 12 }}>{savedCount} expense{savedCount === 1 ? "" : "s"} added</div>
+            <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>They're in your Expenses{emailConn ? " and filed to OneDrive" : ""}.</div>
+            <button onClick={() => setModal(null)} style={{ ...s.btn(accent), marginTop: 18 }}>Done</button>
+          </div>
         )}
       </div>
     );
@@ -2459,6 +2602,7 @@ export default function BookkeeperApp() {
         )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
           <button onClick={() => setModal("receipt")} style={{ ...s.btn("#8b5cf6"), justifyContent: "center", padding: "14px" }}><Icons.Camera /> Snap Receipt</button>
+          <button onClick={() => setModal("batch")} style={{ ...s.btn("#7c3aed"), justifyContent: "center", padding: "14px" }}><Icons.Camera /> Batch Receipts</button>
           <button onClick={() => setModal("expense")} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> Add Expense</button>
           <button onClick={() => setModal("invoice")} style={{ ...s.btn("#3b82f6"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Invoice</button>
         </div>
@@ -3634,6 +3778,7 @@ export default function BookkeeperApp() {
             <div className="bk-modal" style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "income" && <IncomeForm existing={editItem} />}
+              {modal === "batch" && <BatchReceipts />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "project" && <ProjectForm existing={editItem} />}
@@ -3681,6 +3826,7 @@ export default function BookkeeperApp() {
             <div className="bk-modal" style={s.modalContent}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "income" && <IncomeForm existing={editItem} />}
+              {modal === "batch" && <BatchReceipts />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "project" && <ProjectForm existing={editItem} />}
