@@ -51,7 +51,7 @@ export default async (req) => {
               text: `You are a receipt data extractor for an Australian bookkeeping app. The company is NOT registered for GST — do not extract or mention GST. Extract data from this receipt image and return ONLY valid JSON with no markdown fences, no explanation, no extra text.
 
 EXPENSE CATEGORIES — use ONLY one of these exact strings:
-Operating: Advertising & Marketing, Bad Debts, Bank Fees & Charges, Cleaning, Commissions Paid, Donations, Fringe Benefits Tax (FBT), Freight & Postage, Home Office Expenses, Insurance, Interest & Loan Charges, Land Tax, Lease Payments, Legal & Professional Fees, Licences & Permits, Meals & Entertainment, Motor Vehicle, Office Supplies & Stationery, Phone & Internet, Printing & Stationery, Rates & Taxes, Rent & Occupancy, Repairs & Maintenance, Software & Subscriptions, Security, Tools & Equipment (under $1,000), Training & Education, Travel & Accommodation, Uniforms & Protective Clothing, Utilities, Wages & Salaries, Superannuation, Workers Compensation Insurance
+Operating: Advertising & Marketing, Bad Debts, Bank Fees & Charges, Cleaning, Commissions Paid, Donations, Fringe Benefits Tax (FBT), Freight & Postage, Home Office Expenses, Insurance, Interest & Loan Charges, Land Tax, Lease Payments, Legal & Professional Fees, Licences & Permits, Meals & Entertainment, Motor Vehicle, Office Supplies & Stationery, Phone & Internet, Printing & Stationery, Rates & Taxes, Rent & Occupancy, Repairs & Maintenance, Software & Subscriptions, Computers & Electronics, Security, Tools & Equipment (under $1,000), Training & Education, Travel & Accommodation, Uniforms & Protective Clothing, Utilities, Wages & Salaries, Superannuation, Workers Compensation Insurance
 Assets: Equipment Purchase (over $1,000), Furniture & Fittings, Vehicles, Depreciation
 Labour: Subcontractors, Consulting Fees
 Industry: Council & Government Fees, Platform Fees, Professional Memberships, Drafting & CAD Software, Plotting & Printing
@@ -62,18 +62,21 @@ RULES:
 - Use null for missing date or total — do NOT guess.
 - If total is uncertain, return null and add a warning.
 - description: brief description of what was purchased (include vendor name if visible).
+- reference: the receipt number, invoice number, order number, or reference code printed on the document (e.g. "INV-1234", "W4567890"). null if not visible.
 - businessPurpose: only include when category is Motor Vehicle, Meals & Entertainment, Travel & Accommodation, Donations, or Home Office Expenses; otherwise null.
 - confidence: 0.0–1.0, how readable and complete the receipt is overall.
 - categoryConfidence: 0.0–1.0, how certain the category assignment is.
 - warnings: array of short strings about missing or uncertain information.
 - Assume AUD unless receipt clearly shows another currency.
 - Amounts must be numbers, not strings.
+- Use "Computers & Electronics" for phones, laptops, tablets, headphones, cameras, and other consumer electronics.
 
 Return this exact JSON structure:
 {
   "vendor": "string or null",
   "date": "YYYY-MM-DD or null",
   "total": 0.00,
+  "reference": "string or null",
   "description": "brief description of purchase",
   "category": "one of the listed categories",
   "businessPurpose": "string or null",

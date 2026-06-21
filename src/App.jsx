@@ -1657,6 +1657,7 @@ export default function BookkeeperApp() {
                 date: r.date || prev.date,
                 account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : prev.account),
                 business_purpose: prev.business_purpose || r.businessPurpose || "",
+                reference: prev.reference || r.reference || "",
               }));
               setExtractInfo({ confidence: r.confidence, warnings: r.warnings || [] });
             } else {
@@ -1674,8 +1675,10 @@ export default function BookkeeperApp() {
     };
     const toSave = () => ({
       ...f,
-      payment_source: f.personal_card ? "personal_reimburse" : "business",
-      paid_by: f.personal_card ? "Michel" : "",
+      payment_source: f.personal_card ? "personal" : "business",
+      paid_by: f.personal_card ? "Michel" : null,
+      reimbursement_required: !!f.personal_card,
+      reimbursement_status: f.personal_card ? "pending" : "not_required",
       business_purpose: needsBusinessPurpose ? (f.business_purpose || "") : "",
     });
     const categorySelect = (
@@ -1770,7 +1773,7 @@ export default function BookkeeperApp() {
 
     const scanOne = async (file, i) => {
       const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      const base = { key: `${i}-${file.name}`, include: true, isPdf, status: "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
+      const base = { key: `${i}-${file.name}`, include: true, isPdf, status: "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", reference: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
       try {
         const ext = isPdf ? "pdf" : (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
         const path = `${session.user.id}/${Date.now()}_${i}_receipt.${ext}`;
@@ -1783,7 +1786,7 @@ export default function BookkeeperApp() {
         const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
         if (!resp.ok) return { ...base, status: "scanfail" };
         const r = await resp.json();
-        return { ...base, merchant: r.vendor || "", description: r.description || r.vendor || "", amount: r.total != null ? String(r.total) : "", date: r.date || base.date, account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : defCat), business_purpose: r.businessPurpose || "", confidence: r.confidence, warnings: r.warnings || [] };
+        return { ...base, merchant: r.vendor || "", description: r.description || r.vendor || "", amount: r.total != null ? String(r.total) : "", date: r.date || base.date, account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : defCat), business_purpose: r.businessPurpose || "", reference: r.reference || "", confidence: r.confidence, warnings: r.warnings || [] };
       } catch { return { ...base, status: "scanfail" }; }
     };
 
@@ -1806,7 +1809,7 @@ export default function BookkeeperApp() {
       setPhase("saving");
       const dropped = drafts.filter((d) => !d.include && d.receipt_path).map((d) => d.receipt_path);
       if (dropped.length) supabase.storage.from("receipts").remove(dropped).catch(() => {});
-      const added = await addExpensesBatch(chosen.map((d) => ({ date: d.date, amount: d.amount, account: d.account, merchant: d.merchant, description: d.description || d.merchant || "Expense", business_purpose: d.business_purpose, receipt_path: d.receipt_path })));
+      const added = await addExpensesBatch(chosen.map((d) => ({ date: d.date, amount: d.amount, account: d.account, merchant: d.merchant, description: d.description || d.merchant || "Expense", business_purpose: d.business_purpose, reference: d.reference, receipt_path: d.receipt_path })));
       setSavedCount(added.length);
       setPhase("done");
     };
@@ -1855,6 +1858,7 @@ export default function BookkeeperApp() {
                         <input type="date" value={d.date} onChange={(e) => upd(d.key, { date: e.target.value })} style={{ ...s.input, marginBottom: 0 }} />
                         <select value={d.account} onChange={(e) => upd(d.key, { account: e.target.value })} style={{ ...s.select, marginBottom: 0 }}>{EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.label} label={g.label}>{g.categories.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}</select>
                       </div>
+                      {d.reference && <input value={d.reference} onChange={(e) => upd(d.key, { reference: e.target.value })} placeholder="Receipt #" style={{ ...s.input, marginTop: 6, marginBottom: 0, fontSize: 11 }} />}
                     </div>
                   </div>
                 </div>
