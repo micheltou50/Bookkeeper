@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
-import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES } from "./bankImport";
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES, processBankFile } from "./bankImport";
 
 const REVENUE_ACCOUNTS = [
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
@@ -516,8 +516,10 @@ export default function BookkeeperApp() {
   const [jobs, setJobs] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
+  const [categoryRules, setCategoryRules] = useState([]);
 
   const [lastReconciliation, setLastReconciliation] = useState(null);
+  const [reconciliations, setReconciliations] = useState([]);
   const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
   const [divMenuOpen, setDivMenuOpen] = useState(false);
   const navMenuTimer = useRef(null);
@@ -569,13 +571,14 @@ export default function BookkeeperApp() {
     if (!session) return;
     setLoading(true);
     try {
-    const [cRes, iRes, tRes, pRes, jRes, eRes] = await Promise.all([
+    const [cRes, iRes, tRes, pRes, jRes, eRes, rRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_transactions").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
       supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
+      supabase.from("bk_category_rules").select("*").eq("business_id", businessId),
     ]);
 
     const loadedInvoices = iRes.data || [];
@@ -597,8 +600,10 @@ export default function BookkeeperApp() {
     setJobs(jRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group", onedrive_receipts_folder: "Mworx Group/Receipts" });
     setEmailConn(eRes.data || null);
-    const { data: lastRec } = await supabase.from("bk_reconciliations").select("*").eq("business_id", businessId).order("statement_date", { ascending: false }).limit(1).maybeSingle();
-    setLastReconciliation(lastRec || null);
+    setCategoryRules(rRes.data || []);
+    const { data: recs } = await supabase.from("bk_reconciliations").select("*").eq("business_id", businessId).order("statement_date", { ascending: false }).limit(20);
+    setReconciliations(recs || []);
+    setLastReconciliation((recs && recs[0]) || null);
     setLoading(false);
 
     // Mark overdue invoices server-side. Scope to type "invoice" only — quotes share
@@ -640,6 +645,8 @@ export default function BookkeeperApp() {
     setJobs([]);
     setProfile({ ...DEFAULT_PROFILE });
     setEmailConn(null);
+    setCategoryRules([]);
+    setReconciliations([]);
   };
 
   useEffect(() => {
@@ -704,18 +711,52 @@ export default function BookkeeperApp() {
     window.open(data.signedUrl, "_blank");
   };
 
+  // ---- Learned categorisation -------------------------------------------------
+  // Remember "merchant keyword -> category" from the user's own choices and reuse
+  // it for imports, receipt scans, and manual entry. Best-effort & silent.
+  const CAT_STOPWORDS = new Set(["pty", "ltd", "the", "and", "for", "au", "aus", "australia", "card", "value", "date", "payment", "pmt", "direct", "debit", "credit", "purchase", "transfer", "fast", "from", "account", "inv", "ref", "eftpos", "visa", "mastercard", "group", "services", "service", "store", "online", "www", "com"]);
+  const catKeyword = (text) => {
+    const toks = String(text || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+      .filter((t) => t.length > 2 && !CAT_STOPWORDS.has(t) && !/^\d+$/.test(t));
+    return toks[0] || "";
+  };
+  const learnedCategoryFor = (text) => {
+    const hay = " " + String(text || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim() + " ";
+    let best = null;
+    for (const r of categoryRules) {
+      if (r.keyword && hay.includes(" " + r.keyword + " ")) {
+        if (!best || (r.hits || 0) > (best.hits || 0) || ((r.hits || 0) === (best.hits || 0) && r.keyword.length > best.keyword.length)) best = r;
+      }
+    }
+    return best && EXPENSE_CATEGORIES.includes(best.category) ? best.category : null;
+  };
+  const learnCategory = async (merchant, description, category) => {
+    if (!category || !EXPENSE_CATEGORIES.includes(category)) return;
+    const keyword = catKeyword(merchant) || catKeyword(description);
+    if (!keyword) return;
+    const existing = categoryRules.find((r) => r.keyword === keyword);
+    if (existing && existing.category === category) {
+      supabase.from("bk_category_rules").update({ hits: (existing.hits || 1) + 1, updated_at: new Date().toISOString() }).eq("id", existing.id).then(() => {}, () => {});
+      setCategoryRules((prev) => prev.map((r) => (r.id === existing.id ? { ...r, hits: (r.hits || 1) + 1 } : r)));
+      return;
+    }
+    const row = { user_id: session.user.id, business_id: biz, keyword, category, hits: (existing?.hits || 0) + 1, updated_at: new Date().toISOString() };
+    const { data } = await supabase.from("bk_category_rules").upsert(row, { onConflict: "business_id,keyword" }).select().single();
+    if (data) setCategoryRules((prev) => [...prev.filter((r) => !(r.business_id === data.business_id && r.keyword === data.keyword)), data]);
+  };
+
   const addTransaction = async (t) => {
     const ps = t.payment_source || "business";
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null, ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
+    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, merchant: t.merchant || null, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null, ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
     const { ok, data: inserted } = await sbInsert("bk_transactions", row, "save expense");
     if (!ok) return;
     if (inserted) {
       if (inserted.receipt_path) {
         const ext = (inserted.receipt_path.split(".").pop() || "jpg").toLowerCase();
-        const newName = safeFileName([inserted.date, (inserted.description || "Expense").slice(0, 40), inserted.account || "Uncategorised", fmtAmtFile(inserted.amount), inserted.id], ext);
+        const newName = safeFileName([inserted.date, (inserted.merchant || inserted.description || "Expense").slice(0, 40), inserted.account || "Uncategorised", fmtAmtFile(inserted.amount), inserted.id], ext);
         const newPath = `${session.user.id}/${newName}`;
         const { error: moveErr } = await supabase.storage.from("receipts").move(inserted.receipt_path, newPath);
         if (!moveErr) {
@@ -724,6 +765,7 @@ export default function BookkeeperApp() {
         }
       }
       setTxns((prev) => [inserted, ...prev]);
+      learnCategory(inserted.merchant, inserted.description, inserted.account);
     }
     if (inserted && inserted.receipt_path && emailConn) saveToOneDrive("expense", inserted.id, { silent: true });
     setModal(null);
@@ -731,23 +773,35 @@ export default function BookkeeperApp() {
   };
 
   const updateTransaction = async (id, t) => {
+    const orig = txns.find((x) => x.id === id);
     const ps = t.payment_source || "business";
     const isReimburse = ps === "personal_reimburse";
     const isPersonalNoReimburse = ps === "personal_no_reimburse";
     const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, reference: t.reference, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status === "reimbursed" ? "reimbursed" : "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null };
+    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, merchant: t.merchant || null, reference: t.reference, receipt_path: t.receipt_path || null, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status === "reimbursed" ? "reimbursed" : "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null };
     const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update expense");
     if (!ok) return;
     if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
+    if (updated && updated.receipt_path && updated.receipt_path !== (orig?.receipt_path || null) && emailConn) saveToOneDrive("expense", updated.id, { silent: true });
+    if (updated) learnCategory(updated.merchant, updated.description, updated.account);
     setModal(null);
     setEditItem(null);
   };
 
   const deleteTransaction = async (id) => {
-    if (!window.confirm("Delete this expense? This cannot be undone.")) return;
+    if (!window.confirm("Delete this transaction? This cannot be undone.")) return;
     const { ok } = await sbWrite(supabase.from("bk_transactions").delete().eq("id", id), "delete expense");
     if (!ok) return;
     setTxns((prev) => prev.filter((t) => t.id !== id));
+    setModal(null);
+    setEditItem(null);
+  };
+
+  const updateIncome = async (id, f) => {
+    const row = { date: f.date, amount: Number(f.amount) || 0, description: f.description, account: f.account };
+    const { ok, data } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update income");
+    if (!ok) return;
+    if (data) setTxns((prev) => prev.map((x) => (x.id === id ? data : x)));
     setModal(null);
     setEditItem(null);
   };
@@ -763,9 +817,7 @@ export default function BookkeeperApp() {
     const row = { user_id: session.user.id, business_id: biz, statement_date: statementDate, opening_balance: openingBalance, closing_balance: closingBalance };
     const { ok, data: rec, error } = await sbWrite(supabase.from("bk_reconciliations").insert(row).select().single(), "save reconciliation");
     if (!ok) {
-      if (error?.message?.match(/bk_reconciliations|reconciliation/i)) {
-        alert("Bank reconciliation requires migration 0009_bank_reconciliation.sql in Supabase first.");
-      }
+      if (error?.code === "42P01") alert("Bank reconciliation needs migration 0009 applied in Supabase first.");
       return false;
     }
     const stamp = new Date().toISOString();
@@ -783,6 +835,20 @@ export default function BookkeeperApp() {
     setTxns((prev) => prev.map((t) => (txnSet.has(t.id) ? { ...t, ...patch } : t)));
     setInvoices((prev) => prev.map((i) => (invSet.has(i.id) ? { ...i, ...patch } : i)));
     setLastReconciliation(rec);
+    return true;
+  };
+
+  // Reverse a whole reconciliation/import batch: delete the expenses & income it
+  // created, clear the reconciled marks from anything it matched, and remove the
+  // reconciliation record. Invoices it marked paid stay paid (adjust in Sales).
+  const undoReconciliation = async (recId) => {
+    if (!window.confirm("Undo this reconciliation?\n\nThis deletes the expenses and income this import created, clears the reconciled marks from any matched items, and removes the reconciliation record. Any invoices it marked paid stay paid — change those in Sales if needed.")) return false;
+    const d1 = await sbWrite(supabase.from("bk_transactions").delete().eq("reconciliation_id", recId).eq("source", "bank"), "remove imported transactions");
+    if (!d1.ok) return false;
+    await sbWrite(supabase.from("bk_transactions").update({ reconciled_at: null, reconciliation_id: null }).eq("reconciliation_id", recId), "clear reconciled marks");
+    await sbWrite(supabase.from("bk_invoices").update({ reconciled_at: null, reconciliation_id: null }).eq("reconciliation_id", recId), "clear invoice marks");
+    await sbWrite(supabase.from("bk_reconciliations").delete().eq("id", recId), "delete reconciliation");
+    await loadData(biz);
     return true;
   };
 
@@ -1519,14 +1585,39 @@ export default function BookkeeperApp() {
     const initPersonalCard = existing ? derivePersonalCard(existing) : (fromReimbursements || false);
     const defaultCategory = EXPENSE_CATEGORIES.includes("Office Supplies & Stationery") ? "Office Supplies & Stationery" : EXPENSE_CATEGORIES[0];
     const init = existing
-      ? { ...existing, personal_card: initPersonalCard, business_purpose: existing.business_purpose || "" }
+      ? { ...existing, personal_card: initPersonalCard, business_purpose: existing.business_purpose || "", merchant: existing.merchant || "" }
       : ai
-        ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: EXPENSE_CATEGORIES.includes(ai.category) ? ai.category : defaultCategory, reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, business_purpose: ai.businessPurpose || "", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null }
-        : { date: today(), type: "expense", description: "", amount: "", account: defaultCategory, reference: "", job: "", personal_card: false, business_purpose: "" };
+        ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: learnedCategoryFor(ai.vendor || ai.description) || (EXPENSE_CATEGORIES.includes(ai.category) ? ai.category : defaultCategory), merchant: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, business_purpose: ai.businessPurpose || "", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null }
+        : { date: today(), type: "expense", description: "", amount: "", account: defaultCategory, merchant: "", reference: "", job: "", personal_card: false, business_purpose: "" };
     const [f, setF] = useState({ ...init, amount: String(init.amount || "") });
     const [saving, setSaving] = useState(false);
     const needsBusinessPurpose = BUSINESS_PURPOSE_CATEGORIES.has(f.account);
     const hasWarnings = ai && (ai.confidence < 0.7 || ai.warnings?.length > 0);
+    const receiptInputRef = useRef(null);
+    const [uploadingReceipt, setUploadingReceipt] = useState(false);
+    const origReceiptRef = useRef(existing?.receipt_path || null);
+    const draftPathRef = useRef(ai?.receiptPath || null);
+    const handleReceiptFile = async (e) => {
+      const file = e.target.files?.[0];
+      if (e.target) e.target.value = "";
+      if (!file) return;
+      setUploadingReceipt(true);
+      try {
+        const isPdf = (file.type || "").includes("pdf") || file.name.toLowerCase().endsWith(".pdf");
+        const ext = isPdf ? "pdf" : ((file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg");
+        const path = `${session.user.id}/${Date.now()}_receipt.${ext}`;
+        const { error } = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || "image/jpeg" });
+        if (error) { alert("Could not upload the receipt. Please try again."); return; }
+        if (draftPathRef.current && draftPathRef.current !== origReceiptRef.current) supabase.storage.from("receipts").remove([draftPathRef.current]).catch(() => {});
+        draftPathRef.current = path;
+        setF((prev) => ({ ...prev, receipt_path: path }));
+      } finally { setUploadingReceipt(false); }
+    };
+    const removeReceiptDraft = () => {
+      const cur = f.receipt_path;
+      if (cur && cur === draftPathRef.current && cur !== origReceiptRef.current) { supabase.storage.from("receipts").remove([cur]).catch(() => {}); draftPathRef.current = null; }
+      setF((prev) => ({ ...prev, receipt_path: "" }));
+    };
     const toSave = () => ({
       ...f,
       payment_source: f.personal_card ? "personal_reimburse" : "business",
@@ -1547,7 +1638,7 @@ export default function BookkeeperApp() {
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Expense</h3>
-          <button onClick={() => { if (ai?.receiptPath) supabase.storage.from("receipts").remove([ai.receiptPath]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <button onClick={() => { if (ai?.receiptPath) supabase.storage.from("receipts").remove([ai.receiptPath]).catch(() => {}); if (draftPathRef.current && draftPathRef.current !== origReceiptRef.current) supabase.storage.from("receipts").remove([draftPathRef.current]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
         {ai && (
           <div style={{ background: hasWarnings ? "#fffbeb" : "#ecfdf5", border: "1px solid " + (hasWarnings ? "#fde68a" : "#86efac"), borderRadius: 8, padding: 12, marginBottom: 16 }}>
@@ -1566,12 +1657,10 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
         </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Office supplies from Officeworks" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Merchant</label><input value={f.merchant || ""} onChange={(e) => { const m = e.target.value; const learned = learnedCategoryFor(m); setF((prev) => ({ ...prev, merchant: m, ...(learned ? { account: learned } : {}) })); }} placeholder="e.g. Bunnings Warehouse" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. 20x 90mm screws, timber battens" style={s.input} /></div>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label>{categorySelect}</div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt number" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Job</label><select value={f.job} onChange={(e) => setF({ ...f, job: e.target.value })} style={s.select}><option value="">Select job...</option>{jobNames.map(j => <option key={j} value={j}>{j}</option>)}</select></div>
-        </div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt number" style={s.input} /></div>
         {needsBusinessPurpose && (
           <div style={{ marginBottom: 12 }}><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased? (required for ATO-scrutinised categories)" style={s.input} /></div>
         )}
@@ -1584,12 +1673,20 @@ export default function BookkeeperApp() {
             <div style={{ fontSize: 11, color: "#92400e", marginTop: 10, fontWeight: 500 }}>Will appear in Reimbursements as pending — owed to Michel</div>
           )}
         </div>
+        <div style={{ marginBottom: 12, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 9 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>Receipt</span>
+            {f.receipt_path ? <span style={{ fontSize: 12, color: "#059669", fontWeight: 600 }}>✓ Attached</span> : <span style={{ fontSize: 11, color: "#94a3b8" }}>Optional</span>}
+          </div>
+          <input ref={receiptInputRef} type="file" accept="image/*,application/pdf" capture="environment" onChange={handleReceiptFile} style={{ display: "none" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button type="button" disabled={uploadingReceipt} onClick={() => receiptInputRef.current?.click()} style={{ ...s.btnOutline, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: uploadingReceipt ? 0.5 : 1 }}><Icons.Camera /> {uploadingReceipt ? "Uploading…" : (f.receipt_path ? "Replace" : "Snap / attach")}</button>
+            {f.receipt_path && <button type="button" onClick={() => openReceipt({ receipt_path: f.receipt_path })} style={{ ...s.btnOutline, gap: 6 }}>View</button>}
+            {f.receipt_path && <button type="button" onClick={removeReceiptDraft} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
+          </div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, lineHeight: 1.5 }}>{emailConn ? "Photograph or attach the receipt — it's filed to your OneDrive receipts folder as a PDF when you save." : "Photograph or attach the receipt. Connect Microsoft in Settings to also file it to OneDrive."}</div>
+        </div>
         <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); const payload = toSave(); existing ? await updateTransaction(existing.id, payload) : await addTransaction(payload); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
-        {existing && existing.receipt_path && (
-          <button onClick={() => openReceipt(existing)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6 }}>
-            <Icons.Camera /> View Receipt
-          </button>
-        )}
         {existing && !existing.receipt_path && existing.payment_source === "personal" && (
           <div style={{ marginTop: 8, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#991b1b", fontWeight: 500 }}>Missing receipt for personally paid expense</div>
         )}
@@ -1598,6 +1695,28 @@ export default function BookkeeperApp() {
             <Icons.Trash /> Delete Expense
           </button>
         )}
+      </div>
+    );
+  };
+
+  const IncomeForm = ({ existing }) => {
+    const [f, setF] = useState({ date: existing?.date || today(), amount: String(existing?.amount ?? ""), description: existing?.description || "", account: existing?.account || "Other Income" });
+    const [saving, setSaving] = useState(false);
+    return (
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Edit Income</h3>
+          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        </div>
+        {isReconciled(existing) && <div style={{ fontSize: 11, color: "#059669", fontWeight: 600, marginBottom: 14 }}>✓ Reconciled to a bank statement</div>}
+        <div style={s.grid2}>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Refund, owner deposit" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Income account</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}>{!REVENUE_ACCOUNTS.some((a) => a.name === f.account) && f.account ? <option value={f.account}>{f.account}</option> : null}{REVENUE_ACCOUNTS.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
+        <button disabled={!f.amount || saving} onClick={async () => { setSaving(true); await updateIncome(existing.id, f); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : "Save Changes"}</button>
+        <button onClick={() => deleteTransaction(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}><Icons.Trash /> Delete Income</button>
       </div>
     );
   };
@@ -2141,8 +2260,9 @@ export default function BookkeeperApp() {
     const bounds = periodBounds(periodType, periodValue);
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const incomeInvoices = realInvoices.filter((i) => i.status === "paid" && inPeriod(i.paid_date || i.date, bounds.start, bounds.end));
-    const expenseTxns = divTxns.filter((t) => t.type === "expense" && inPeriod(t.date, bounds.start, bounds.end));
-    const totalIncome = incomeInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const incomeTxns = divTxns.filter((t) => t.type === "income" && inPeriod(t.date, bounds.start, bounds.end));
+    const expenseTxns = divTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer" && inPeriod(t.date, bounds.start, bounds.end));
+    const totalIncome = incomeInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0) + incomeTxns.reduce((sum, t) => sum + Number(t.amount || 0), 0);
     const totalExpenses = expenseTxns.reduce((sum, t) => sum + Number(t.amount || 0), 0);
     const net = totalIncome - totalExpenses;
     const onTypeChange = (type) => {
@@ -2180,18 +2300,21 @@ export default function BookkeeperApp() {
           <span style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>{divInfo.name} · {bounds.label}</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Income</div><div style={{ marginTop: 8 }}><MoneyBig value={totalIncome} color="#059669" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{incomeInvoices.length} paid invoice{incomeInvoices.length !== 1 ? "s" : ""}</div></div>
+          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Income</div><div style={{ marginTop: 8 }}><MoneyBig value={totalIncome} color="#059669" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{incomeInvoices.length} paid invoice{incomeInvoices.length !== 1 ? "s" : ""}{incomeTxns.length ? ` · ${incomeTxns.length} other income` : ""}</div></div>
           <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Expenses</div><div style={{ marginTop: 8 }}><MoneyBig value={totalExpenses} color="#ef4444" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{expenseTxns.length} expense{expenseTxns.length !== 1 ? "s" : ""}</div></div>
           <div style={{ ...s.statCard(), borderColor: net >= 0 ? "#86efac" : "#fecaca" }}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Net {net >= 0 ? "Profit" : "Loss"}</div><div style={{ marginTop: 8 }}><MoneyBig value={Math.abs(net)} color={net >= 0 ? "#059669" : "#ef4444"} /></div></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div style={s.card}>
             <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Income</h4>
-            {incomeInvoices.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12, padding: "12px 0" }}>No paid invoices in this period</div> : (
+            {incomeInvoices.length === 0 && incomeTxns.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12, padding: "12px 0" }}>No income in this period</div> : (
               <div style={{ overflowX: "auto" }}>
                 <table style={s.table}><tbody>
-                  {incomeInvoices.sort((a, b) => (b.paid_date || b.date).localeCompare(a.paid_date || a.date)).map((i) => (
-                    <tr key={i.id}><td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(i.paid_date || i.date)}</td><td style={s.td}>{i.number} — {i.contact_name || i.contact_company || ""}</td><td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(i.total)}</td></tr>
+                  {[
+                    ...incomeInvoices.map((i) => ({ id: i.id, date: i.paid_date || i.date, label: `${i.number} — ${i.contact_name || i.contact_company || ""}`, amount: Number(i.total) || 0, txn: null })),
+                    ...incomeTxns.map((t) => ({ id: t.id, date: t.date, label: `${t.description || "Deposit"} · ${t.account || "Other Income"}`, amount: Number(t.amount) || 0, txn: t })),
+                  ].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r) => (
+                    <tr key={r.id} onClick={r.txn ? () => { setEditItem(r.txn); setModal("income"); } : undefined} style={r.txn ? { cursor: "pointer" } : undefined}><td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td><td style={s.td}>{r.label}{r.txn && <span style={{ fontSize: 10, color: "#94a3b8" }}> · tap to edit</span>}</td><td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(r.amount)}</td></tr>
                   ))}
                 </tbody></table>
               </div>
@@ -2217,12 +2340,12 @@ export default function BookkeeperApp() {
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
-    const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
+    const expense = monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").reduce((sum, t) => sum + Number(t.amount), 0);
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
     const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
-    const recentExpenses = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const recentExpenses = [...divTxns].filter((t) => t.type === "expense" && t.account !== "Internal transfer").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
 
     return (
@@ -2231,7 +2354,7 @@ export default function BookkeeperApp() {
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expenses This Month</div>
             <div style={{ marginTop: 8 }}><MoneyBig value={expense} /></div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense").length} transactions</div>
+            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").length} transactions</div>
           </div>
           <div style={s.statCard()}>
             <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Outstanding Invoices</div>
@@ -2314,11 +2437,9 @@ export default function BookkeeperApp() {
 
   const ExpensesPage = () => {
     const [search, setSearch] = useState("");
-    const [jobFilter, setJobFilter] = useState("");
     const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => {
-      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase())) return false;
-      if (jobFilter && t.job !== jobFilter) return false;
+      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase()) && !(t.merchant || "").toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
 
@@ -2333,25 +2454,21 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 220, flex: "1 1 160px" }} />
-          <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} style={{ ...s.select, maxWidth: 180, flex: "0 1 160px" }}>
-            <option value="">All Jobs</option>
-            {jobNames.map(j => <option key={j} value={j}>{j}</option>)}
-          </select>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 280, flex: "1 1 200px" }} />
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <EmptyState icon={Icons.Expenses} title="No expenses found" hint={search || jobFilter ? "Try clearing your search or job filter." : "Snap a receipt or add an expense to get started."} />
+            <EmptyState icon={Icons.Expenses} title="No expenses found" hint={search ? "Try clearing your search." : "Snap a receipt or add an expense to get started."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
-                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={s.th}>Job</th><th style={s.th}>Payment</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
+                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Merchant</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={s.th}>Payment</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
                 <tbody>{filtered.map((t) => (
                   <tr key={t.id} onClick={() => { setEditItem(t); setModal("expense"); }} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
+                    <td style={{ ...s.td, fontWeight: 600 }}>{t.merchant || "--"}</td>
                     <td style={{ ...s.td, fontWeight: 500 }}>{t.description}{isReconciled(t) && <ReconciledMark />}</td>
                     <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "--"}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.job || ""}</td>
                     <td style={s.td}>{paymentBadge(t)}</td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
@@ -2837,17 +2954,17 @@ export default function BookkeeperApp() {
   const MobileDashboard = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
-    const expense = monthTxns.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
+    const expense = monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").reduce((sum, t) => sum + Number(t.amount), 0);
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const recentExpenses = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    const recentExpenses = [...divTxns].filter((t) => t.type === "expense" && t.account !== "Internal transfer").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
           <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>This Month</div>
             <div style={{ marginTop: 4 }}><MoneyBig value={expense} size={22} /></div>
-            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense").length} expenses</div>
+            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").length} expenses</div>
           </div>
           <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Outstanding</div>
@@ -3013,6 +3130,12 @@ export default function BookkeeperApp() {
     const [checked, setChecked] = useState({});
     const [busy, setBusy] = useState(false);
     const [doneMeta, setDoneMeta] = useState(null);
+    const [importItems, setImportItems] = useState(null);
+    const [importInclude, setImportInclude] = useState({});
+    const [importCat, setImportCat] = useState({});
+    const [depositChoice, setDepositChoice] = useState({});
+    const [parsing, setParsing] = useState(false);
+    const fileRef = useRef(null);
 
     const openingBalance = Number(lastReconciliation?.closing_balance) || 0;
     const periodStart = lastReconciliation?.statement_date
@@ -3025,15 +3148,28 @@ export default function BookkeeperApp() {
       return true;
     };
 
-    const unreconciledExpenses = divTxns
+    // One ABN, one bank account — the account is shared across divisions, so reconcile the whole business, not just the active division.
+    const unreconciledExpenses = txns
       .filter((t) => t.type === "expense" && !isReconciled(t) && inPeriod(t.date))
       .map((t) => ({ kind: "expense", id: t.id, date: t.date, label: t.description, sub: t.account || "Expense", amount: -(Number(t.amount) || 0) }));
 
-    const unreconciledIncome = divInvoices
+    const unreconciledIncome = invoices
       .filter((i) => i.type === "invoice" && i.status === "paid" && !isReconciled(i) && inPeriod(i.paid_date || i.date))
       .map((i) => ({ kind: "invoice", id: i.id, date: i.paid_date || i.date, label: `Invoice ${i.number}`, sub: i.contact_name || i.contact_company || "Payment received", amount: Number(i.total) || 0 }));
 
     const items = [...unreconciledExpenses, ...unreconciledIncome].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+    // Invoices a statement deposit could be tied to: open (→ mark paid) or already-paid-but-unreconciled (→ just reconcile). Account-wide.
+    const matchableInvoices = invoices.filter((i) => i.type === "invoice" && !isReconciled(i) && (i.status === "sent" || i.status === "overdue" || i.status === "paid"));
+    const invoiceLabel = (i) => `${i.number} — ${i.contact_name || i.contact_company || "—"} · ${fmt(Number(i.total) || 0)}${i.status === "paid" ? " (paid)" : ""}`;
+    const findInvoiceForDeposit = (it) => {
+      const amt = Math.abs(Number(it.amount));
+      const desc = (it.description || "").toLowerCase();
+      const byNum = matchableInvoices.find((i) => i.number && desc.includes(String(i.number).toLowerCase()) && Math.abs((Number(i.total) || 0) - amt) < 0.01);
+      if (byNum) return byNum.id;
+      const byAmt = matchableInvoices.filter((i) => Math.abs((Number(i.total) || 0) - amt) < 0.01);
+      return byAmt.length === 1 ? byAmt[0].id : null;
+    };
 
     const tickedItems = items.filter((it) => checked[`${it.kind}:${it.id}`]);
     const tickedSum = tickedItems.reduce((s, it) => s + it.amount, 0);
@@ -3057,6 +3193,100 @@ export default function BookkeeperApp() {
       setPhase("setup");
       setChecked({});
       setDoneMeta(null);
+      setImportItems(null);
+      setImportInclude({});
+      setImportCat({});
+      setDepositChoice({});
+    };
+
+    // Money-out lines we can book as an expense (real expenses + any transfer the user opts to include).
+    const isBookableExpense = (it) => it.status === "expense" || (it.status === "review" && it.amount < 0);
+
+    const handleStatementFile = async (e) => {
+      const file = e.target.files?.[0];
+      if (e.target) e.target.value = "";
+      if (!file) return;
+      setParsing(true);
+      try {
+        const text = await file.text();
+        const result = processBankFile(text, file.name, { invoices, existingTxns: txns });
+        if (result.error) { alert(result.error); return; }
+        const items = result.items || [];
+        if (!items.length) { alert("No transactions found in that file."); return; }
+        const inc = {}, cat = {}, dep = {};
+        items.forEach((it) => {
+          if (it.amount > 0) {
+            // Money in: tie to an invoice if we can, otherwise record as Other Income.
+            if (it.status === "invoice" && it.invoice?.id) { dep[it._k] = it.invoice.id; inc[it._k] = true; }
+            else { const m = findInvoiceForDeposit(it); dep[it._k] = m || "income"; inc[it._k] = !!m; }
+          } else {
+            inc[it._k] = it.status === "expense" || it.status === "duplicate";
+            if (isBookableExpense(it)) cat[it._k] = learnedCategoryFor(it.description) || it.account || (it.status === "review" ? "Internal transfer" : "Office Supplies & Stationery");
+          }
+        });
+        setImportItems(items);
+        setImportInclude(inc);
+        setImportCat(cat);
+        setDepositChoice(dep);
+        if (!statementDate) setStatementDate(items.reduce((mx, it) => (it.date && it.date > mx ? it.date : mx), items[0]?.date || today()));
+        setPhase("import-review");
+      } catch {
+        alert("Could not read that file. Please upload a CSV or OFX export.");
+      } finally { setParsing(false); }
+    };
+
+    const applyBankStatement = async () => {
+      if (!importItems) return;
+      const chosen = importItems.filter((it) => importInclude[it._k]);
+      if (!chosen.length) { alert("Tick at least one transaction to apply."); return; }
+      setBusy(true);
+      try {
+        const recRow = { user_id: session.user.id, business_id: biz, statement_date: statementDate, opening_balance: openingBalance, closing_balance: closingBalance === "" ? null : Number(closingBalance) };
+        const { data: rec, error: recErr } = await supabase.from("bk_reconciliations").insert(recRow).select().single();
+        if (recErr || !rec) { alert(recErr?.code === "42P01" ? "Bank reconciliation needs migration 0009 applied in Supabase first." : `Couldn't save the reconciliation: ${recErr?.message || "unknown error"}`); setBusy(false); return; }
+        const stamp = new Date().toISOString();
+        const patch = { reconciled_at: stamp, reconciliation_id: rec.id };
+        const batchId = (crypto?.randomUUID && crypto.randomUUID()) || `imp_${Date.now()}`;
+        const baseRow = (it, type, account) => ({
+          user_id: session.user.id, business_id: biz, division: insertDivision,
+          date: it.date, type, description: it.description, amount: Math.abs(Number(it.amount)) || 0, account,
+          contact: null, merchant: null, reference: null, job: null,
+          payment_source: "business", paid_by: null, reimbursement_required: false, reimbursement_status: "not_required",
+          source: "bank", bank_ref: it.bank_ref || null, import_batch_id: batchId, dedupe_key: it.dedupe_key, imported_at: stamp,
+          reconciled_at: stamp, reconciliation_id: rec.id,
+        });
+        // Money out → new expenses; deposits marked "Other income" → income entries.
+        const expenseRows = chosen.filter((it) => it.amount < 0 && isBookableExpense(it)).map((it) => baseRow(it, "expense", importCat[it._k] || it.account || "Office Supplies & Stationery"));
+        const incomeRows = chosen.filter((it) => it.amount > 0 && depositChoice[it._k] === "income").map((it) => baseRow(it, "income", "Other Income"));
+        const newRows = [...expenseRows, ...incomeRows];
+        let insertedTxns = [];
+        if (newRows.length) {
+          const { ok, data } = await sbWrite(supabase.from("bk_transactions").insert(newRows).select(), "import transactions");
+          if (!ok) { setBusy(false); return; }
+          insertedTxns = data || [];
+        }
+        for (const r of expenseRows) learnCategory(null, r.description, r.account);
+        // Deposits tied to an invoice → mark it paid (if still open) and reconcile.
+        const invItems = chosen.filter((it) => it.amount > 0 && depositChoice[it._k] && depositChoice[it._k] !== "income");
+        const invUpdates = [];
+        for (const it of invItems) {
+          const inv = invoices.find((i) => i.id === depositChoice[it._k]);
+          if (!inv) continue;
+          const upd = inv.status === "paid" ? { ...patch } : { status: "paid", paid_date: it.date || statementDate, ...patch };
+          const r = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "reconcile invoice");
+          if (r.ok) invUpdates.push({ id: inv.id, upd });
+        }
+        // Money out already in the books → reconcile the existing entry (no duplicate created).
+        const dupIds = chosen.filter((it) => it.amount < 0 && it.status === "duplicate" && it.duplicateOf).map((it) => it.duplicateOf);
+        if (dupIds.length) await sbWrite(supabase.from("bk_transactions").update(patch).in("id", dupIds), "reconcile matched");
+        if (insertedTxns.length) setTxns((prev) => [...insertedTxns, ...prev]);
+        const dupSet = new Set(dupIds);
+        if (dupSet.size) setTxns((prev) => prev.map((t) => dupSet.has(t.id) ? { ...t, ...patch } : t));
+        if (invUpdates.length) setInvoices((prev) => prev.map((i) => { const u = invUpdates.find((x) => x.id === i.id); return u ? { ...i, ...u.upd } : i; }));
+        setLastReconciliation(rec);
+        setDoneMeta({ count: chosen.length, statementDate, closingBalance: Number(closingBalance) || 0, created: insertedTxns.length, matchedInv: invUpdates.length, matchedExp: dupSet.size });
+        setPhase("done");
+      } finally { setBusy(false); }
     };
 
     const finish = async () => {
@@ -3110,12 +3340,116 @@ export default function BookkeeperApp() {
               <input type="number" step="0.01" value={closingBalance} onChange={(e) => setClosingBalance(e.target.value)} placeholder="e.g. 12450.00" style={s.input} />
             </div>
           </div>
-          {lastReconciliation && (
-            <div style={{ marginTop: 14, fontSize: 12, color: "#64748b" }}>
-              Last reconciled {fmtDate(lastReconciliation.statement_date)} · opening balance {fmt(openingBalance)}
+          {reconciliations.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Recent reconciliations</div>
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 9, overflow: "hidden" }}>
+                {reconciliations.slice(0, 8).map((rec, idx) => (
+                  <div key={rec.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "9px 12px", borderTop: idx ? "1px solid #f1f5f9" : "none" }}>
+                    <div style={{ fontSize: 12, color: "#334155" }}>
+                      <span style={{ fontWeight: 600 }}>{fmtDate(rec.statement_date)}</span>
+                      <span style={{ color: "#94a3b8" }}> · closing {rec.closing_balance == null ? "—" : fmt(rec.closing_balance)}</span>
+                    </div>
+                    <button onClick={() => undoReconciliation(rec.id)} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", padding: "4px 10px", fontSize: 12 }}>Undo</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.5 }}>Undo deletes the expenses/income an import created and clears its reconciled marks (invoices it paid stay paid). Opening balance for a new reconcile: {fmt(openingBalance)}.</div>
             </div>
           )}
           <button onClick={startMatching} style={{ ...s.btn(accent), marginTop: 18 }}><Icons.Reconcile /> Start matching</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "22px 0 14px", color: "#94a3b8", fontSize: 11, fontWeight: 600, letterSpacing: "0.05em" }}>
+            <div style={{ flex: 1, height: 1, background: "#e2e8f0" }} /> OR IMPORT A STATEMENT <div style={{ flex: 1, height: 1, background: "#e2e8f0" }} />
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5, maxWidth: 520 }}>Upload a CSV or OFX/QFX export from your bank. We'll match deposits to your invoices, auto-categorise expenses, skip duplicates, and create anything new — then reconcile against the closing balance above.</div>
+          <input ref={fileRef} type="file" accept=".csv,.ofx,.qfx,text/csv,text/plain,application/x-ofx" onChange={handleStatementFile} style={{ display: "none" }} />
+          <button onClick={() => fileRef.current?.click()} disabled={parsing} style={{ ...s.btnOutline, marginTop: 12, color: "#3b82f6", borderColor: "#3b82f640", gap: 6, opacity: parsing ? 0.5 : 1 }}><Icons.Cloud /> {parsing ? "Reading…" : "Upload CSV / OFX"}</button>
+        </div>
+      );
+    }
+
+    if (phase === "import-review" && importItems) {
+      const chosen = importItems.filter((it) => importInclude[it._k]);
+      const moneyIn = chosen.filter((it) => it.amount > 0).reduce((sum, it) => sum + it.amount, 0);
+      const moneyOut = chosen.filter((it) => it.amount < 0).reduce((sum, it) => sum + Math.abs(it.amount), 0);
+      const net = moneyIn - moneyOut;
+      const target = closingBalance === "" ? null : Number(closingBalance);
+      const diff = target == null ? 0 : openingBalance + net - target;
+      const reconBalanced = target != null && Math.abs(diff) < 0.01;
+      const chip = (it) => {
+        const map = { invoice: ["#3b82f6", `Match invoice ${it.invoice?.number || ""}`.trim()], expense: ["#10b981", "New expense"], duplicate: ["#64748b", "Already booked"], review: ["#f59e0b", it.amount > 0 ? "Unmatched deposit" : (it.reviewReason || "Review")] };
+        const [c, label] = map[it.status] || ["#64748b", it.status];
+        return <span style={s.badge(c)}>{label}</span>;
+      };
+      return (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#64748b" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", fontWeight: 600, color: "#0f172a" }}><Icons.Reconcile /> {importItems.length} line{importItems.length === 1 ? "" : "s"} imported</span>
+            <button onClick={resetReconcile} style={{ ...s.btnOutline, marginLeft: "auto" }}>Start over</button>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <ListStat label="Money in" value={fmt(moneyIn)} color="#059669" />
+            <ListStat label="Money out" value={fmt(moneyOut)} color="#0f172a" />
+            <ListStat label="Selected" value={`${chosen.length}/${importItems.length}`} color="#059669" />
+            {target != null && <ListStat label={reconBalanced ? "Balanced ✓" : "Difference"} value={reconBalanced ? fmt(target) : fmt(diff)} color={reconBalanced ? "#059669" : "#92400e"} />}
+          </div>
+          {target != null && !reconBalanced && (
+            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 12 }}>Selected lines net to {fmt(net)}. Opening {fmt(openingBalance)} + selected ≠ closing {fmt(target)} (off by {fmt(diff)}). Tick the remaining lines — match each deposit to an invoice or mark it Other Income — to close the gap.</div>
+          )}
+          <div style={s.card}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}>
+                <thead><tr>
+                  <th style={{ ...s.th, width: 36 }}></th>
+                  <th style={s.th}>Transaction</th>
+                  <th style={s.th}>Action</th>
+                  <th style={{ ...s.th, textAlign: "right" }}>Amount</th>
+                </tr></thead>
+                <tbody>
+                  {importItems.map((it) => {
+                    const inflow = it.amount > 0;
+                    const choice = depositChoice[it._k] || "income";
+                    return (
+                      <tr key={it._k} style={importInclude[it._k] ? undefined : { opacity: 0.55 }}>
+                        <td style={{ ...s.td, textAlign: "center" }}>
+                          <input type="checkbox" checked={!!importInclude[it._k]} onChange={() => setImportInclude((p) => ({ ...p, [it._k]: !p[it._k] }))} style={{ width: 16, height: 16, accentColor: accent, cursor: "pointer" }} />
+                        </td>
+                        <td style={s.td}>
+                          <div style={{ fontWeight: 500 }}>{it.description}</div>
+                          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{fmtDate(it.date)}</div>
+                        </td>
+                        <td style={s.td}>
+                          {inflow ? (
+                            <>
+                              <span style={s.badge(choice === "income" ? "#8b5cf6" : "#3b82f6")}>{choice === "income" ? "Other income" : "Match invoice"}</span>
+                              <select value={choice} onChange={(e) => setDepositChoice((p) => ({ ...p, [it._k]: e.target.value }))} style={{ ...s.select, marginTop: 6, padding: "4px 8px", fontSize: 11, maxWidth: 280 }}>
+                                <option value="income">Other income (record deposit)</option>
+                                {matchableInvoices.map((i) => <option key={i.id} value={i.id}>{invoiceLabel(i)}</option>)}
+                              </select>
+                            </>
+                          ) : (
+                            <>
+                              {chip(it)}
+                              {isBookableExpense(it) && (
+                                <select value={importCat[it._k] || it.account || ""} onChange={(e) => setImportCat((p) => ({ ...p, [it._k]: e.target.value }))} style={{ ...s.select, marginTop: 6, padding: "4px 8px", fontSize: 11, maxWidth: 220 }}>
+                                  {EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.label} label={g.label}>{g.categories.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}
+                                </select>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: it.amount >= 0 ? "#059669" : "#0f172a" }}>{it.amount >= 0 ? "+" : "-"}{fmt(Math.abs(it.amount))}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12, ...s.card, marginBottom: 0 }}>
+            <div style={{ fontSize: 12, color: "#64748b" }}>{chosen.length} of {importItems.length} will be applied{target != null ? (reconBalanced ? " · Balanced ✓" : ` · off by ${fmt(diff)}`) : ""}</div>
+            <button disabled={busy || !chosen.length} onClick={applyBankStatement} style={{ ...s.btn(accent), opacity: busy || !chosen.length ? 0.5 : 1 }}>{busy ? "Applying…" : "Apply & reconcile"}</button>
+          </div>
         </div>
       );
     }
@@ -3268,6 +3602,7 @@ export default function BookkeeperApp() {
           <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
             <div className="bk-modal" style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
+              {modal === "income" && <IncomeForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "project" && <ProjectForm existing={editItem} />}
@@ -3314,6 +3649,7 @@ export default function BookkeeperApp() {
           <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
             <div className="bk-modal" style={s.modalContent}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
+              {modal === "income" && <IncomeForm existing={editItem} />}
               {modal === "contact" && <ContactForm existing={editItem} />}
               {modal === "invoice" && <InvoiceForm existing={editItem} />}
               {modal === "project" && <ProjectForm existing={editItem} />}

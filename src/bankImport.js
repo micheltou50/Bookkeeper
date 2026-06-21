@@ -35,6 +35,10 @@ export const EXPENSE_CATEGORY_GROUPS = [
     label: "Industry Specific",
     categories: ["Council & Government Fees", "Platform Fees", "Professional Memberships", "Drafting & CAD Software", "Plotting & Printing"],
   },
+  {
+    label: "Transfers (not an expense)",
+    categories: ["Internal transfer"],
+  },
 ];
 
 export const EXPENSE_CATEGORIES = EXPENSE_CATEGORY_GROUPS.flatMap((g) => g.categories);

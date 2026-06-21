@@ -132,7 +132,7 @@ async function imageToPdf(imageBuffer, ext) {
 
 function receiptPdfName(tx) {
   const date = tx.date || "undated";
-  const vendor = sanitizePart(tx.contact || tx.description || "receipt") || "receipt";
+  const vendor = sanitizePart(tx.merchant || tx.contact || tx.description || "receipt") || "receipt";
   const amount = Number(tx.amount || 0).toFixed(2);
   const category = sanitizePart(tx.account || "Uncategorised") || "Uncategorised";
   return `${date}_${vendor}_${amount}_${category}.pdf`.slice(0, 200);
