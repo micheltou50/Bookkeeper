@@ -6,8 +6,10 @@ workflows:
 
     environment:
       # Code signing — set up in Codemagic UI:
-      # Team > Integrations > App Store Connect API key (named "bookkeeper")
-      # + add a Distribution certificate + App Store provisioning profile for com.micho.bookkeeper
+      # Team > Integrations > App Store Connect API key (named "Bookkeeper")
+      # + add a Distribution certificate + App Store provisioning profile for com.mtmanagement.bookkeeper
+      integrations:
+        app_store_connect: Bookkeeper
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.mtmanagement.bookkeeper
