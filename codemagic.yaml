@@ -8,6 +8,8 @@ workflows:
       # Code signing — set up in Codemagic UI:
       # Team > Integrations > App Store Connect API key (named "Bookkeeper")
       # + add a Distribution certificate + App Store provisioning profile for com.mtmanagement.bookkeeper
+      groups:
+        - supabase   # must contain VITE_SUPABASE_ANON_KEY (add in Codemagic UI → Environment variables)
       integrations:
         app_store_connect: Bookkeeper
       ios_signing:
