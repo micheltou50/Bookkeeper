@@ -41,28 +41,14 @@ workflows:
       - name: Set up code signing
         script: xcode-project use-profiles
 
-      - name: Build & archive
+      - name: Build IPA
         script: |
-          xcodebuild \
-            -project "$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -archivePath "$CM_BUILD_DIR/App.xcarchive" \
-            clean archive \
-            CODE_SIGN_STYLE=Manual \
-            | xcpretty
-
-      - name: Export IPA
-        script: |
-          xcodebuild \
-            -exportArchive \
-            -archivePath "$CM_BUILD_DIR/App.xcarchive" \
-            -exportPath "$CM_EXPORT_DIR" \
-            -exportOptionsPlist /usr/local/bin/export_options.plist \
-            | xcpretty
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
 
     artifacts:
-      - $CM_EXPORT_DIR/*.ipa
+      - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
 
     publishing:
