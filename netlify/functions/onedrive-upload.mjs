@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { PDFDocument } from "pdf-lib";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
+import { wrapCors } from './lib/cors.mjs';
 
 // Save an invoice PDF or expense receipt into the user's OneDrive. Invoices go
 // into the matching job folder under onedrive_folder. Receipts are converted to
@@ -138,7 +139,7 @@ function receiptPdfName(tx) {
   return `${date}_${vendor}_${amount}_${category}.pdf`.slice(0, 200);
 }
 
-export default async (req) => {
+const handler = async (req) => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
   const authHeader = req.headers.get("authorization");
@@ -279,3 +280,5 @@ export default async (req) => {
   if (res.error) { console.error("OneDrive save failed:", res.error, res.detail || ""); return json({ error: res.error }, 502); }
   return json({ success: true, webUrl: res.webUrl, savedTo: res.savedTo }, 200);
 };
+
+export default wrapCors(handler);

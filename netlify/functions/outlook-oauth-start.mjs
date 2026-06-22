@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
+import { wrapCors } from './lib/cors.mjs';
 
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const REDIRECT_URI = process.env.MICROSOFT_REDIRECT_URI;
@@ -9,7 +10,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY
 );
 
-export default async (req) => {
+const handler = async (req) => {
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { "Content-Type": "application/json" } });
   }
@@ -68,3 +69,5 @@ export default async (req) => {
 
   return new Response(JSON.stringify({ url: authUrl.toString() }), { status: 200, headers: { "Content-Type": "application/json" } });
 };
+
+export default wrapCors(handler);

@@ -1,0 +1,69 @@
+workflows:
+  ios-testflight:
+    name: Bookkeeper iOS → TestFlight
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      # Code signing — set up in Codemagic UI:
+      # Team > Integrations > App Store Connect API key (named "bookkeeper")
+      # + add a Distribution certificate + App Store provisioning profile for com.micho.bookkeeper
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.mtmanagement.bookkeeper
+      node: latest
+      xcode: latest
+      vars:
+        BUNDLE_ID: com.mtmanagement.bookkeeper
+        XCODE_PROJECT: ios/App/App.xcodeproj
+        XCODE_SCHEME: App
+        # Set VITE_SUPABASE_ANON_KEY in Codemagic UI → Environment variables (mark as secret)
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: Install npm dependencies
+        script: npm install
+
+      - name: Build web assets
+        script: npm run build
+
+      - name: Sync Capacitor iOS
+        script: npx cap sync ios
+
+      - name: Set up code signing
+        script: xcode-project use-profiles
+
+      - name: Build & archive
+        script: |
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -archivePath "$CM_BUILD_DIR/App.xcarchive" \
+            clean archive \
+            CODE_SIGN_STYLE=Manual \
+            | xcpretty
+
+      - name: Export IPA
+        script: |
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$CM_BUILD_DIR/App.xcarchive" \
+            -exportPath "$CM_EXPORT_DIR" \
+            -exportOptionsPlist /usr/local/bin/export_options.plist \
+            | xcpretty
+
+    artifacts:
+      - $CM_EXPORT_DIR/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration        # uses the API key configured in Codemagic UI
+        submit_to_testflight: true

@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { wrapCors } from './lib/cors.mjs';
 
 // Resolve ALL configuration from environment at request time. No hardcoded
 // secret/URL fallbacks: committing those values can trip Netlify secret
@@ -458,7 +459,7 @@ function buildEnvDiagnostic() {
   };
 }
 
-export default async (req) => {
+const handler = async (req) => {
   // Wrap everything: an unhandled throw returns an empty body, which Netlify
   // surfaces as "error decoding lambda response: unexpected end of JSON input".
   // Catching it guarantees a JSON response with the real cause.
@@ -534,6 +535,8 @@ export default async (req) => {
     return isManual ? json({ error: msg }, 500) : new Response(msg, { status: 500 });
   }
 };
+
+export default wrapCors(handler);
 
 export const config = {
   schedule: "@daily",

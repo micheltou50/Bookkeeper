@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
+import { wrapCors } from './lib/cors.mjs';
 
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
@@ -83,7 +84,7 @@ function renderTemplate(template, vars) {
   return out;
 }
 
-export default async (req) => {
+const handler = async (req) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
@@ -270,3 +271,5 @@ export default async (req) => {
 
   return new Response(JSON.stringify({ success: true, sent_to: inv.contact_email }), { status: 200, headers: { "Content-Type": "application/json" } });
 };
+
+export default wrapCors(handler);

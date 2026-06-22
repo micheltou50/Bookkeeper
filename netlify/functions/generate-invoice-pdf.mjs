@@ -1,6 +1,7 @@
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { createClient } from "@supabase/supabase-js";
+import { wrapCors } from './lib/cors.mjs';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
@@ -268,7 +269,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 </html>`;
 }
 
-export default async (req) => {
+const handler = async (req) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
@@ -392,3 +393,5 @@ export default async (req) => {
     if (browser) await browser.close();
   }
 };
+
+export default wrapCors(handler);

@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES, processBankFile } from "./bankImport";
+
+const API_BASE = Capacitor.isNativePlatform() ? "https://bkeeper.netlify.app" : "";
 
 const REVENUE_ACCOUNTS = [
   { code: "4000", name: "Sales Revenue", type: "Revenue" },
@@ -1105,7 +1108,7 @@ export default function BookkeeperApp() {
     setPdfLoading(inv.id);
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const resp = await fetch("/.netlify/functions/generate-invoice-pdf", {
+      const resp = await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
@@ -1215,7 +1218,7 @@ export default function BookkeeperApp() {
       if (!token) throw new Error("Not authenticated");
       // Always (re)generate the PDF so the attachment reflects the latest edits.
       // Fail hard if it doesn't succeed — never create a draft without the PDF.
-      const pdfResp = await fetch("/.netlify/functions/generate-invoice-pdf", {
+      const pdfResp = await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
@@ -1225,7 +1228,7 @@ export default function BookkeeperApp() {
         try { detail = (await pdfResp.json()).error || ""; } catch { /* ignore */ }
         throw new Error("Could not generate the invoice PDF, so the Outlook draft was not created. " + (detail || "Please try again."));
       }
-      const resp = await fetch("/.netlify/functions/send-invoice-outlook", {
+      const resp = await fetch(`${API_BASE}/.netlify/functions/send-invoice-outlook`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ invoice_id: inv.id, draft: true }),
@@ -1263,7 +1266,7 @@ export default function BookkeeperApp() {
     if (!window.confirm(`Email a payment reminder to ${inv.contact_name || inv.contact_email} now?`)) return;
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const resp = await fetch("/.netlify/functions/send-reminders", {
+      const resp = await fetch(`${API_BASE}/.netlify/functions/send-reminders`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ invoice_id: inv.id, business_id: biz }),
@@ -1309,7 +1312,7 @@ export default function BookkeeperApp() {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) return false;
-      const resp = await fetch("/.netlify/functions/onedrive-upload", {
+      const resp = await fetch(`${API_BASE}/.netlify/functions/onedrive-upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ kind, id }),
@@ -1328,7 +1331,7 @@ export default function BookkeeperApp() {
     const token = (await supabase.auth.getSession()).data.session?.access_token;
     if (!token) return;
     try {
-      const resp = await fetch("/.netlify/functions/outlook-oauth-start", {
+      const resp = await fetch(`${API_BASE}/.netlify/functions/outlook-oauth-start`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ business_id: biz }),
@@ -1525,7 +1528,7 @@ export default function BookkeeperApp() {
         filePath = `${session.user.id}/${Date.now()}_receipt.jpg`;
         await supabase.storage.from("receipts").upload(filePath, blob, { contentType: "image/jpeg" });
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
+        const resp = await fetch(`${API_BASE}/.netlify/functions/extract-receipt`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
         if (!resp.ok) throw new Error("Failed to process receipt");
         const result = await resp.json();
         const fromReimbursements = page === "reimbursements";
@@ -1646,7 +1649,7 @@ export default function BookkeeperApp() {
           try {
             const base64 = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(",")[1]); fr.onerror = reject; fr.readAsDataURL(file); });
             const token = (await supabase.auth.getSession()).data.session?.access_token;
-            const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
+            const resp = await fetch(`${API_BASE}/.netlify/functions/extract-receipt`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
             if (resp.ok) {
               const r = await resp.json();
               setF((prev) => ({
@@ -1781,7 +1784,7 @@ export default function BookkeeperApp() {
         const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(file); });
         if (!isPdf) base.scannedUrl = dataUrl;
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch("/.netlify/functions/extract-receipt", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
+        const resp = await fetch(`${API_BASE}/.netlify/functions/extract-receipt`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
         if (!resp.ok) return { ...base, status: "scanfail" };
         const r = await resp.json();
         return { ...base, merchant: r.vendor || "", description: r.description || r.vendor || "", amount: r.total != null ? String(r.total) : "", date: r.date || base.date, account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : defCat), business_purpose: r.businessPurpose || "", reference: r.reference || "", confidence: r.confidence, warnings: r.warnings || [] };
@@ -2271,7 +2274,7 @@ export default function BookkeeperApp() {
       setReminderResult(null);
       try {
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch(`/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}&business_id=${encodeURIComponent(biz)}`, {
+        const resp = await fetch(`${API_BASE}/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}&business_id=${encodeURIComponent(biz)}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         });
