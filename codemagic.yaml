@@ -44,6 +44,14 @@ workflows:
       - name: Sync Capacitor iOS
         script: npx cap sync ios
 
+      - name: Set build number
+        script: |
+          # Give every CI build a unique, increasing build number so TestFlight
+          # accepts re-uploads. $BUILD_NUMBER is Codemagic's auto-incrementing
+          # counter. (macOS sed needs the empty '' after -i.)
+          sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" "$XCODE_PROJECT/project.pbxproj"
+          echo "Set CURRENT_PROJECT_VERSION to $BUILD_NUMBER"
+
       - name: Set up code signing
         script: |
           keychain initialize

@@ -11,9 +11,20 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* don't let iOS auto-inflate text — keeps the native app sizing exact */
+  -webkit-text-size-adjust: 100%;
 }
 
-body { overflow: hidden; background: var(--bk-bg); }
+body {
+  overflow: hidden;
+  background: var(--bk-bg);
+  /* kill the grey tap flash and rubber-band scroll that scream "web page" */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+/* but keep text genuinely selectable inside real inputs */
+input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
 
 /* Currency/number alignment: tabular figures so digits line up in columns. */
 table, input, .bk-num { font-variant-numeric: tabular-nums; }

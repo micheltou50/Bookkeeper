@@ -3030,7 +3030,7 @@ export default function BookkeeperApp() {
   // ═══ MOBILE COMPONENTS ═══
 
   const MobileTabBar = () => (
-    <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 28px", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
+    <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 calc(env(safe-area-inset-bottom) + 10px)", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
       {navItems.map(({ id, label, icon: Icon }) => (
         <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px", color: activeNav === id ? accent : "#94a3b8" }}>
           <Icon />
@@ -3041,7 +3041,7 @@ export default function BookkeeperApp() {
   );
 
   const MobileHeader = () => (
-    <div style={{ padding: "52px 20px 12px", background: "#ffffff" }}>
+    <div style={{ padding: "calc(env(safe-area-inset-top) + 14px) 20px 12px", background: "#ffffff" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
         <div style={{ position: "relative" }}>
           <button type="button" onClick={() => setDivMenuOpen((v) => !v)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
@@ -3709,7 +3709,7 @@ export default function BookkeeperApp() {
   };
 
   const MobileLayout = () => (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100dvh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
