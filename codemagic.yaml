@@ -74,4 +74,8 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration        # uses the API key configured in Codemagic UI
-        submit_to_testflight: true
+        # Upload the build only. Internal testers automatically get access to
+        # every processed build with no beta review. Set this to true (and add
+        # beta_groups) only if you later want EXTERNAL testers, which requires
+        # filling in Beta App Review info in App Store Connect.
+        submit_to_testflight: false
