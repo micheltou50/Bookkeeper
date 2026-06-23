@@ -11,7 +11,8 @@ workflows:
 
     environment:
       groups:
-        - supabase   # must contain VITE_SUPABASE_ANON_KEY (add in Codemagic UI → Environment variables)
+        - supabase    # must contain VITE_SUPABASE_ANON_KEY (add in Codemagic UI → Environment variables)
+        - appstore    # must contain CERTIFICATE_PRIVATE_KEY (RSA key paired with the iOS distribution cert)
       # NOTE: no ios_signing block here on purpose. That block makes Codemagic
       # try to fetch an EXISTING profile at build init and fail. Signing is done
       # manually in the "Set up code signing" script, which creates the cert +
@@ -49,6 +50,7 @@ workflows:
           # App Store Connect API key configured in Codemagic.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
+            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
             --create
           keychain add-certificates
           xcode-project use-profiles
