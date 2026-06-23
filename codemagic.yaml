@@ -47,12 +47,16 @@ workflows:
       - name: Set up code signing
         script: |
           keychain initialize
+          # CERTIFICATE_PRIVATE_KEY holds the RSA key BASE64-encoded on a single
+          # line, so it survives env-var storage without newline corruption.
+          # Decode it back to a real PEM file and pass that to the CLI.
+          echo "$CERTIFICATE_PRIVATE_KEY" | openssl base64 -d -A | tr -d '\r' > /tmp/cert_key.pem
           # Fetch (or create, if missing) the distribution certificate and
           # App Store provisioning profile for this bundle ID via the
           # App Store Connect API key configured in Codemagic.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
+            --certificate-key @file:/tmp/cert_key.pem \
             --create
           keychain add-certificates
           xcode-project use-profiles
