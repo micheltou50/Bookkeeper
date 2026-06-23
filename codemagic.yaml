@@ -11,8 +11,10 @@ workflows:
 
     environment:
       groups:
-        - supabase    # must contain VITE_SUPABASE_ANON_KEY (add in Codemagic UI → Environment variables)
-        - appstore    # must contain CERTIFICATE_PRIVATE_KEY (RSA key paired with the iOS distribution cert)
+        # One group holds all secrets for this workflow:
+        #   VITE_SUPABASE_ANON_KEY  — Supabase anon key (web build)
+        #   CERTIFICATE_PRIVATE_KEY — RSA key paired with the iOS distribution cert
+        - supabase
       # NOTE: no ios_signing block here on purpose. That block makes Codemagic
       # try to fetch an EXISTING profile at build init and fail. Signing is done
       # manually in the "Set up code signing" script, which creates the cert +
