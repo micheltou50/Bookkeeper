@@ -12,9 +12,10 @@ workflows:
     environment:
       groups:
         - supabase   # must contain VITE_SUPABASE_ANON_KEY (add in Codemagic UI → Environment variables)
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.mtmanagement.bookkeeper
+      # NOTE: no ios_signing block here on purpose. That block makes Codemagic
+      # try to fetch an EXISTING profile at build init and fail. Signing is done
+      # manually in the "Set up code signing" script, which creates the cert +
+      # profile on the fly with `--create`.
       node: latest
       xcode: latest
       vars:
