@@ -297,6 +297,23 @@ const Icons = {
   ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>,
 };
 
+// Mworx brand mark — two green triangles meeting at the centre on a black tile,
+// rebuilt as crisp vector art so it stays sharp from a 16px favicon up to the app
+// header. MWORX_GREEN is the single source of truth for the brand colour; the same
+// values mirror the static /favicon.svg (browser tab). Tweak the hex here to recolour
+// the mark everywhere inside the app.
+const MWORX_GREEN = "#2ECC71";
+const MWORX_BLACK = "#0d0d0d";
+function MworxLogo({ size = 32, radius = 22 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{ display: "block", flexShrink: 0 }} role="img" aria-label="Mworx">
+      <rect width="100" height="100" rx={radius} fill={MWORX_BLACK} />
+      <polygon points="15,9 50,51 15,92" fill={MWORX_GREEN} />
+      <polygon points="85,9 50,51 85,92" fill={MWORX_GREEN} />
+    </svg>
+  );
+}
+
 function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -324,6 +341,7 @@ function LoginScreen() {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "radial-gradient(120% 120% at 50% 0%, #ecfdf5 0%, #f7f9f8 46%)", fontFamily: "'DM Sans', system-ui, sans-serif", padding: 20 }}>
       <div style={{ background: "#ffffff", borderRadius: 20, border: "1px solid #eef1f0", padding: 40, width: "100%", maxWidth: 400, textAlign: "center", boxShadow: "0 24px 50px -16px rgba(16,24,40,0.18), 0 2px 6px rgba(16,24,40,0.05)" }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><MworxLogo size={68} radius={20} /></div>
         <div style={{ fontSize: 28, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em", marginBottom: 4 }}>BookKeeper</div>
         <div style={{ fontSize: 12, color: "#10b981", marginBottom: 32, textTransform: "uppercase", letterSpacing: "0.08em" }}>{COMPANY.name}</div>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
@@ -483,6 +501,94 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
     </div>
   </div>`;
+}
+
+// Full-screen, in-app viewer for an invoice/quote. Renders the same HTML the PDF is
+// built from inside an isolated <iframe srcDoc>, so there is no window.open()/new tab
+// and the mobile/Safari/in-app pop-up blocker can never get in the way (that blocker
+// is what produced the old "Allow pop-ups to view the document" message). Defined at
+// the top level — not nested in BookkeeperApp — so a parent re-render (e.g. the PDF
+// download toggling pdfLoading) doesn't unmount it and reload the iframe.
+function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, fetchLogoBase64 }) {
+  const [html, setHtml] = useState(null);
+  const frameRef = useRef(null);
+  const docType = inv.type === "quote" ? "Quote" : "Invoice";
+  const title = `${docType} ${inv.number || ""}`.trim();
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const logoDataUrl = await fetchLogoBase64();
+      const content = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
+      const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>
+        html,body{margin:0;background:#eef2f5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .bk-sheet{max-width:820px;margin:16px auto;background:#fff;box-shadow:0 2px 14px rgba(16,24,40,.14)}
+        .bk-sheet>div{width:100%!important;box-sizing:border-box}
+        @media print{body{background:#fff}.bk-sheet{box-shadow:none;margin:0;max-width:none}}
+      </style></head><body><div class="bk-sheet">${content}</div></body></html>`;
+      if (alive) setHtml(full);
+    })();
+    return () => { alive = false; };
+  }, [inv, profile, accent, fetchLogoBase64]);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const printDoc = () => { try { const w = frameRef.current?.contentWindow; if (w) { w.focus(); w.print(); } } catch { /* print unsupported (e.g. iOS WebView) — use Download instead */ } };
+
+  const btn = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9, cursor: "pointer", whiteSpace: "nowrap" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#eef2f5", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
+        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 4 }}><Icons.X /></button>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+        {!isMobile && <button onClick={printDoc} style={{ ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
+        <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {pdfLoading === inv.id ? "..." : "Download PDF"}</button>
+      </div>
+      {html ? (
+        <iframe ref={frameRef} srcDoc={html} title={title} style={{ flex: 1, width: "100%", border: "none" }} />
+      ) : (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 14 }}>Loading {docType.toLowerCase()}…</div>
+      )}
+    </div>
+  );
+}
+
+// Full-screen, in-app viewer for a receipt image or PDF. Like DocViewer, this exists
+// so receipts never need window.open()/a new tab. The signed URL is rendered inline:
+// PDFs in an <iframe>, images in an <img>. Top-level so a parent re-render doesn't
+// reload it.
+function ReceiptViewer({ receipt, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const ext = (receipt.name || "").split(".").pop().toLowerCase();
+  const isPdf = ext === "pdf";
+  const btn = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9, cursor: "pointer", whiteSpace: "nowrap", textDecoration: "none" };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#1e293b", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
+        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 4 }}><Icons.X /></button>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Receipt</div>
+        {receipt.url && <a href={receipt.url} target="_blank" rel="noopener noreferrer" style={{ ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" }}><Icons.Download /> Open original</a>}
+      </div>
+      {!receipt.url ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#cbd5e1", fontSize: 14 }}>Loading receipt…</div>
+      ) : isPdf ? (
+        <iframe src={receipt.url} title="Receipt" style={{ flex: 1, width: "100%", border: "none", background: "#fff" }} />
+      ) : (
+        <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <img src={receipt.url} alt="Receipt" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 6 }} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function BookkeeperApp() {
@@ -707,11 +813,17 @@ export default function BookkeeperApp() {
     return res;
   };
 
+  // View a receipt image/PDF *inside* the app (see the ReceiptViewer component).
+  // Previously this did window.open(signedUrl, "_blank") AFTER awaiting the signed
+  // URL — and because the tap gesture is already spent by the time the await
+  // resolves, mobile/Safari reliably blocked it as a pop-up. Rendering it in-app
+  // sidesteps that entirely. The bucket is private, so we still mint a short-lived
+  // signed URL first, then hand it to the in-app viewer.
   const openReceipt = async (t) => {
     if (!t?.receipt_path) { alert("No receipt attached to this expense."); return; }
     const { data, error } = await supabase.storage.from("receipts").createSignedUrl(t.receipt_path, 600);
     if (error || !data?.signedUrl) { alert("Could not load receipt. Please try again."); return; }
-    window.open(data.signedUrl, "_blank");
+    setViewReceipt({ url: data.signedUrl, name: t.receipt_path.split("/").pop() });
   };
 
   // ---- Learned categorisation -------------------------------------------------
@@ -1102,6 +1214,8 @@ export default function BookkeeperApp() {
   };
 
   const [pdfLoading, setPdfLoading] = useState(null);
+  const [viewDoc, setViewDoc] = useState(null);
+  const [viewReceipt, setViewReceipt] = useState(null);
 
   const downloadPDF = async (inv) => {
     const pdfName = safeFileName([inv.number || "draft", inv.contact_name || "Client", inv.job, inv.date].filter(Boolean), "pdf");
@@ -1151,26 +1265,12 @@ export default function BookkeeperApp() {
     }
   };
 
-  // Open a read-only view of a document in a new tab (no editing). Reuses the same
-  // HTML the PDF is built from. The window is opened synchronously so the tap
-  // gesture isn't lost to the async logo fetch (mobile pop-up blockers).
-  const viewInvoice = async (inv) => {
-    const w = window.open("", "_blank");
-    const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    if (!w) { alert("Allow pop-ups to view the document."); return; }
-    try { w.document.write(`<!doctype html><meta charset="utf-8"><title>${docType} ${inv.number || ""}</title><body style="margin:0;font-family:system-ui,sans-serif;color:#64748b;padding:24px">Loading ${docType.toLowerCase()}…</body>`); } catch { /* ignore */ }
-    const logoDataUrl = await fetchLogoBase64();
-    const content = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${docType} ${inv.number || ""}</title><style>
-      html,body{margin:0;background:#eef2f5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-      .bk-sheet{max-width:820px;margin:16px auto;background:#fff;box-shadow:0 2px 14px rgba(16,24,40,.14)}
-      .bk-sheet>div{width:100%!important;box-sizing:border-box}
-      @media print{body{background:#fff}.bk-sheet{box-shadow:none;margin:0;max-width:none}}
-    </style></head><body><div class="bk-sheet">${content}</div></body></html>`;
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
-  };
+  // Open a read-only view of the document *inside* the app (see the DocViewer
+  // component). Previously this did window.open("", "_blank"), which mobile/Safari
+  // and the iOS in-app WebView block by default — that's where the "Allow pop-ups to
+  // view the document" message came from. Rendering it in-app removes the pop-up
+  // entirely, so View can never be blocked.
+  const viewInvoice = (inv) => setViewDoc(inv);
 
   const buildEmailBody = (inv) => {
     const isQuote = inv.type === "quote";
@@ -3739,10 +3839,11 @@ export default function BookkeeperApp() {
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: navCollapsed ? "center" : "left" }}
         >
           {navCollapsed ? (
-            <div style={{ width: 34, height: 34, margin: "0 auto", borderRadius: 9, background: accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>B</div>
+            <div style={{ margin: "0 auto", width: 34 }}><MworxLogo size={34} radius={9} /></div>
           ) : (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <MworxLogo size={26} radius={7} />
                 <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>BookKeeper</div>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2.5" style={{ transform: divMenuOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease" }}><path d="M6 9l6 6 6-6"/></svg>
               </div>
@@ -3795,6 +3896,8 @@ export default function BookkeeperApp() {
             </div>
           </div>
         )}
+        {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
+        {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
       </>
     );
   }
@@ -3844,6 +3947,8 @@ export default function BookkeeperApp() {
           </div>
         )}
       </div>
+      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
+      {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
     </>
   );
 }
