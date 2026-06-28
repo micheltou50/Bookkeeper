@@ -51,8 +51,8 @@ const sanitizePart = (s) => String(s || "").replace(/[\\/:*?"<>|]/g, "").replace
 
 async function listChildren(token, basePath) {
   const seg = encPath(basePath);
-  let url = seg ? `${GRAPH}/me/drive/root:/${seg}:/children?$select=id,name,folder&$top=200`
-               : `${GRAPH}/me/drive/root/children?$select=id,name,folder&$top=200`;
+  let url = seg ? `${GRAPH}/me/drive/root:/${seg}:/children?$select=id,name,folder,webUrl&$top=200`
+               : `${GRAPH}/me/drive/root/children?$select=id,name,folder,webUrl&$top=200`;
   const items = [];
   while (url) {
     const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -74,7 +74,7 @@ async function createFolder(token, basePath, name) {
   });
   if (!r.ok) return { status: r.status };
   const j = await r.json();
-  return { id: j.id, name: j.name };
+  return { id: j.id, name: j.name, webUrl: j.webUrl };
 }
 
 async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName) {
@@ -82,11 +82,11 @@ async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName)
   if (status) return { status };
   if (jobNumber) {
     const match = items.find((c) => c.folder && String(c.name).startsWith(String(jobNumber)));
-    if (match) return { id: match.id, name: match.name };
+    if (match) return { id: match.id, name: match.name, webUrl: match.webUrl };
     return createFolder(token, basePath, sanitize(jobLabel ? `${jobNumber} - ${jobLabel}` : String(jobNumber)));
   }
   const fb = items.find((c) => c.folder && c.name === fallbackName);
-  if (fb) return { id: fb.id, name: fb.name };
+  if (fb) return { id: fb.id, name: fb.name, webUrl: fb.webUrl };
   return createFolder(token, basePath, fallbackName);
 }
 
@@ -206,6 +206,14 @@ const handler = async (req) => {
     }
     contentType = "application/pdf";
     fileName = receiptPdfName(tx);
+  } else if (kind === "project") {
+    // Folder-only: create the OneDrive project folder, no file to upload.
+    const { data: job } = await supabase.from("bk_jobs").select("*").eq("id", id).single();
+    if (!job || job.user_id !== user.id) return json({ error: "Project not found" }, 404);
+    businessId = job.business_id;
+    jobNumber = job.job_number;
+    jobLabel = job.address || job.name;
+    fallbackName = sanitize(job.name || `Project ${id}`);
   } else {
     return json({ error: "Unknown kind" }, 400);
   }
@@ -234,6 +242,15 @@ const handler = async (req) => {
   }
 
   const run = async (tok) => {
+    if (kind === "project") {
+      const ensured = await ensureFolderPath(tok, projectsBase);
+      if (ensured.auth) return { auth: true };
+      if (ensured.status) return { error: `OneDrive folder error (${ensured.status})` };
+      const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
+      if (folder.status === 401) return { auth: true };
+      if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
+      return { ok: true, webUrl: folder.webUrl, savedTo: folder.name };
+    }
     if (kind === "expense") {
       const ensured = await ensureFolderPath(tok, receiptFolderPath);
       if (ensured.auth) return { auth: true };

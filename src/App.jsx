@@ -104,6 +104,17 @@ const fmtDate = (d) => { if (!d) return ""; const dt = new Date(d); return isNaN
 const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
 const today = () => new Date().toISOString().split("T")[0];
 
+// Whole calendar days an unpaid invoice is past its due date. Returns 0 for
+// quotes, drafts, paid/accepted/declined docs, undated invoices, or anything not
+// yet due. Uses the same date basis as today() so it matches the server-side
+// "overdue" status flip done on load.
+const daysOverdue = (inv) => {
+  if (!inv || inv.type === "quote" || !inv.due_date) return 0;
+  if (inv.status !== "sent" && inv.status !== "overdue") return 0;
+  const diff = Math.round((new Date(today()) - new Date(inv.due_date)) / 86400000);
+  return diff > 0 ? diff : 0;
+};
+
 // Big KPI money, MYOB-style: dollars bold, the cents de-emphasised so the eye
 // lands on the figure that matters. Falls back gracefully if there's no ".dd".
 function MoneyBig({ value, color = "#0f172a", size = 30 }) {
@@ -295,6 +306,7 @@ const Icons = {
   Reports: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>,
   ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
   ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>,
+  Filter: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
 };
 
 // Mworx brand mark — two green triangles meeting at the centre on a black tile,
@@ -1137,7 +1149,12 @@ export default function BookkeeperApp() {
     const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, insertDivision) };
     const { ok, data: inserted } = await sbInsert("bk_jobs", row, "create project");
     if (!ok) return null;
-    if (inserted) setJobs((prev) => [inserted, ...prev]);
+    if (inserted) {
+      setJobs((prev) => [inserted, ...prev]);
+      // Create the matching OneDrive folder ("26106 - 10 McPherson Road …").
+      // Best-effort: never block project creation on the Microsoft connection.
+      if (emailConn) saveToOneDrive("project", inserted.id, { silent: true });
+    }
     return inserted;
   };
 
@@ -2048,6 +2065,7 @@ export default function BookkeeperApp() {
       : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
+    const invOverdue = existing && f.type !== "quote" ? daysOverdue({ status: existing.status, due_date: f.due_date }) : 0;
     const [notesEdited, setNotesEdited] = useState(!!existing);
     const [termsEdited, setTermsEdited] = useState(!!existing);
     const updateType = (newType) => {
@@ -2113,7 +2131,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => updateDate(e.target.value)} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}{invOverdue > 0 && <span style={{ color: "#ef4444", fontWeight: 600, textTransform: "none", marginLeft: 6 }}>· {invOverdue} {invOverdue === 1 ? "day" : "days"} overdue</span>}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}>
@@ -2266,6 +2284,9 @@ export default function BookkeeperApp() {
       : { name: "", address: "", notes: "", status: "active" };
     const [f, setF] = useState(init);
     const [saving, setSaving] = useState(false);
+    // Job/project number: existing projects keep theirs; new ones preview the
+    // number that will be auto-assigned on save (same YY### scheme as the insert).
+    const projNumber = existing ? (existing.job_number || "—") : getNextJobNumber(jobs, insertDivision);
     const t = existing ? projectTotals(existing, invoices) : { contract: 0, invoiced: 0, paid: 0, remaining: 0, outstanding: 0, leftToInvoice: 0 };
     const consultants = existing ? projectConsultants(existing, invoices) : [];
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
@@ -2296,6 +2317,12 @@ export default function BookkeeperApp() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? (projectLabel(existing) || "Project") : "New Project"}</h3>
           <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <span style={{ ...s.label, margin: 0 }}>Project #</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: accent, fontVariantNumeric: "tabular-nums" }}>{projNumber}</span>
+          {!existing && <span style={{ fontSize: 11, color: "#94a3b8" }}>auto-assigned</span>}
         </div>
 
         {existing && (
@@ -2412,6 +2439,24 @@ export default function BookkeeperApp() {
       }
     };
 
+    // Collapsible settings sections — collapsed by default so the modal stays
+    // uncluttered; tap a header to expand it. (Defined as a render helper, not a
+    // nested component, so inputs keep focus while typing.)
+    const [openSections, setOpenSections] = useState({});
+    const toggleSection = (id) => setOpenSections((o) => ({ ...o, [id]: !o[id] }));
+    const panel = (id, title, subtitle, content) => (
+      <div style={{ borderTop: "1px solid #e2e8f0", marginTop: 8 }}>
+        <button type="button" onClick={() => toggleSection(id)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "16px 0 12px", textAlign: "left" }}>
+          <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ ...s.label, margin: 0 }}>{title}</span>
+            {subtitle && <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>{subtitle}</span>}
+          </span>
+          <span style={{ color: "#94a3b8", flexShrink: 0, display: "inline-flex", transform: openSections[id] ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}><Icons.ChevronRight /></span>
+        </button>
+        {openSections[id] && <div style={{ paddingBottom: 12 }}>{content}</div>}
+      </div>
+    );
+
     return (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -2436,33 +2481,38 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone || ""} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
         </div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 8 }}>
-          <label style={{ ...s.label, marginBottom: 12 }}>Bank Details (shown on invoices)</label>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Bank Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Commonwealth Bank" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="MT Management Pty Ltd" style={s.input} /></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
-        </div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
-          <label style={{ ...s.label, marginBottom: 12 }}>OneDrive</label>
-          <div style={{ marginBottom: 12 }}>
-            <label style={s.label}>Projects folder</label>
-            <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group" style={s.input} />
-            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Base folder for job/project subfolders. Invoice PDFs save into the matching &quot;26105 - …&quot; subfolder.</div>
-          </div>
-          <div>
-            <label style={s.label}>Receipts folder</label>
-            <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
-            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts saved as PDFs (e.g. 2026-06-20_Vendor_45.00_Category.pdf). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect &amp; reconnect to grant file access.</div>
-          </div>
-        </div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
-          <label style={{ ...s.label, marginBottom: 12 }}>Email Integration</label>
-          {emailConn ? (
+        {panel("bank", "Bank Details (shown on invoices)", "Tap to view or edit your bank account", (
+          <>
+            <div style={s.grid2}>
+              <div style={{ marginBottom: 12 }}><label style={s.label}>Bank Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Commonwealth Bank" style={s.input} /></div>
+              <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="MT Management Pty Ltd" style={s.input} /></div>
+            </div>
+            <div style={s.grid2}>
+              <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
+              <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
+            </div>
+          </>
+        ))}
+        {panel("saving", "Saving Locations", "Where receipts & project folders are saved in OneDrive", (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              <label style={s.label}>Projects folder</label>
+              <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group/Projects" style={s.input} />
+              <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Base OneDrive folder for job/project subfolders. New projects get their own "26106 - Address" subfolder here, and invoice PDFs save into the matching one.</div>
+            </div>
+            <div>
+              <label style={s.label}>Receipts folder</label>
+              <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
+              <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts saved as PDFs (e.g. 2026-06-20_Vendor_45.00_Category.pdf). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect & reconnect to grant file access.</div>
+            </div>
+            <div style={{ marginTop: 14, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
+              <div style={{ fontWeight: 600, color: "#475569", marginBottom: 4 }}>How to change these</div>
+              Type any OneDrive folder path — use <strong>/</strong> for subfolders (e.g. <code style={{ background: "#eef2f6", padding: "1px 4px", borderRadius: 3 }}>Mworx Group/Projects</code>) — then hit <strong>Save Settings</strong>. Folders that don&apos;t exist yet are created automatically. Changing a path doesn&apos;t move files you&apos;ve already saved — only new ones go to the new location.
+            </div>
+          </>
+        ))}
+        {panel("email_conn", "Email Integration", emailConn ? `Outlook connected${emailConn.email ? " · " + emailConn.email : ""}` : "Not connected — tap to connect Outlook", (
+          emailConn ? (
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#ecfdf5", borderRadius: 8, border: "1px solid #a7f3d0" }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -2476,10 +2526,10 @@ export default function BookkeeperApp() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>
               Connect Outlook
             </button>
-          )}
-        </div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
-          <label style={{ ...s.label, marginBottom: 12 }}>Email Templates</label>
+          )
+        ))}
+        {panel("email_tpl", "Email Templates", "Customise invoice & quote email wording", (
+          <>
           <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
             Variables: <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{contact_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{number}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{amount}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date_line}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{payment_details}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{business_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{signature}"}</code>
           </div>
@@ -2495,9 +2545,10 @@ export default function BookkeeperApp() {
             <label style={s.label}>Signature (HTML allowed)</label>
             <textarea value={f.email_signature || ""} onChange={(e) => setF({ ...f, email_signature: e.target.value })} placeholder={`${f.name || "Your name"}\n${f.email || "your@email.com"} · ${f.phone || "+61 ..."}`} rows={5} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 80 }} />
           </div>
-        </div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 8, marginBottom: 12 }}>
-          <label style={{ ...s.label, marginBottom: 8 }}>Payment Reminders</label>
+          </>
+        ))}
+        {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
+          <>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
             Overdue reminders send automatically each day from your connected Outlook, at 1, 7, 14 and 30 days overdue. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
           </div>
@@ -2526,7 +2577,8 @@ export default function BookkeeperApp() {
               )}
             </div>
           )}
-        </div>
+          </>
+        ))}
         <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
       </div>
     );
@@ -2574,6 +2626,52 @@ export default function BookkeeperApp() {
         })}
       </select>
     );
+    if (isMobile) {
+      const incomeRows = [
+        ...incomeInvoices.map((i) => ({ id: i.id, date: i.paid_date || i.date, label: `${i.number} — ${i.contact_name || i.contact_company || ""}`, amount: Number(i.total) || 0, txn: null })),
+        ...incomeTxns.map((t) => ({ id: t.id, date: t.date, label: `${t.description || "Deposit"} · ${t.account || "Other Income"}`, amount: Number(t.amount) || 0, txn: t })),
+      ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      const expRows = [...expenseTxns].sort((a, b) => b.date.localeCompare(a.date));
+      return (
+        <div style={{ paddingBottom: 20 }}>
+          <div style={{ padding: "8px 16px 0" }}>
+            <FilterPills tabs={[{ key: "month", label: "Month" }, { key: "quarter", label: "Quarter" }, { key: "year", label: "Year" }]} active={periodType} onChange={onTypeChange} />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 0", flexWrap: "wrap" }}>
+            {periodInput}
+            <span style={{ fontSize: 12, color: "#64748b" }}>{divInfo.name} · {bounds.label}</span>
+          </div>
+          <div style={{ display: "flex", gap: 10, padding: "12px 16px 0" }}>
+            <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Income</div>
+              <div style={{ marginTop: 4 }}><MoneyBig value={totalIncome} size={20} color="#059669" /></div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{incomeRows.length} item{incomeRows.length !== 1 ? "s" : ""}</div>
+            </div>
+            <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Expenses</div>
+              <div style={{ marginTop: 4 }}><MoneyBig value={totalExpenses} size={20} color="#ef4444" /></div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{expRows.length} expense{expRows.length !== 1 ? "s" : ""}</div>
+            </div>
+          </div>
+          <div style={{ padding: "10px 16px 0" }}>
+            <div style={{ background: net >= 0 ? "#ecfdf5" : "#fef2f2", border: `1px solid ${net >= 0 ? "#a7f3d0" : "#fecaca"}`, borderRadius: 14, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: net >= 0 ? "#065f46" : "#991b1b" }}>Net {net >= 0 ? "Profit" : "Loss"}</span>
+              <MoneyBig value={Math.abs(net)} size={22} color={net >= 0 ? "#059669" : "#ef4444"} />
+            </div>
+          </div>
+          <MobileSection title="Income">
+            {incomeRows.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No income in this period</div> : incomeRows.map((r, idx) => (
+              <MobileRow key={r.id} primary={r.label} secondary={fmtDate(r.date)} right={fmt(r.amount)} isLast={idx === incomeRows.length - 1} onClick={r.txn ? () => { setEditItem(r.txn); setModal("income"); } : undefined} />
+            ))}
+          </MobileSection>
+          <MobileSection title="Expenses">
+            {expRows.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses in this period</div> : expRows.map((t, idx) => (
+              <MobileRow key={t.id} primary={t.description} secondary={`${fmtDate(t.date)}${t.account ? " · " + t.account : ""}`} right={fmt(t.amount)} isLast={idx === expRows.length - 1} onClick={() => { setEditItem(t); setModal("expense"); }} />
+            ))}
+          </MobileSection>
+        </div>
+      );
+    }
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -2720,11 +2818,31 @@ export default function BookkeeperApp() {
 
   const ExpensesPage = () => {
     const [search, setSearch] = useState("");
+    const [showFilter, setShowFilter] = useState(false);
+    const [dateMode, setDateMode] = useState("all"); // "all" | "month" | "custom"
+    const [month, setMonth] = useState(() => today().slice(0, 7));
+    const [fromDate, setFromDate] = useState("");
+    const [toDate, setToDate] = useState("");
+    const monthBounds = dateMode === "month" && month ? periodBounds("month", month) : null;
+    const range = monthBounds
+      ? { start: monthBounds.start, end: monthBounds.end }
+      : dateMode === "custom"
+      ? { start: fromDate || null, end: toDate || null }
+      : { start: null, end: null };
+    const dateActive = !!(range.start || range.end);
+    const activeLabel = monthBounds
+      ? monthBounds.label
+      : dateMode === "custom" && dateActive
+      ? `${fromDate ? fmtDate(fromDate) : "start"} – ${toDate ? fmtDate(toDate) : "now"}`
+      : "";
     const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
     const filtered = sorted.filter((t) => {
       if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase()) && !(t.merchant || "").toLowerCase().includes(search.toLowerCase())) return false;
+      if (range.start && (t.date || "") < range.start) return false;
+      if (range.end && (t.date || "") > range.end) return false;
       return true;
     });
+    const filteredTotal = filtered.reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
     const paymentBadge = (t) => {
       if (t.payment_source !== "personal") return null;
@@ -2736,12 +2854,41 @@ export default function BookkeeperApp() {
 
     return (
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 280, flex: "1 1 200px" }} />
+          <button onClick={() => setShowFilter((v) => !v)} style={{ ...(dateActive ? s.btn(accent, true) : s.btnOutline), gap: 6, whiteSpace: "nowrap" }}><Icons.Filter /> {activeLabel || "Filter"}</button>
+          {dateActive && <button onClick={() => { setDateMode("all"); setFromDate(""); setToDate(""); setShowFilter(false); }} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", whiteSpace: "nowrap" }}>Clear</button>}
         </div>
+        {showFilter && (
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginBottom: 12, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div>
+              <label style={s.label}>Period</label>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {[["all", "All time"], ["month", "By month"], ["custom", "Custom range"]].map(([m, lbl]) => (
+                  <button key={m} onClick={() => setDateMode(m)} style={{ ...(dateMode === m ? s.btn(accent, true) : s.btnOutline), fontSize: 12, whiteSpace: "nowrap" }}>{lbl}</button>
+                ))}
+              </div>
+            </div>
+            {dateMode === "month" && (
+              <div>
+                <label style={s.label}>Month</label>
+                <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ ...s.input, maxWidth: 180 }} />
+              </div>
+            )}
+            {dateMode === "custom" && (
+              <>
+                <div><label style={s.label}>From</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ ...s.input, maxWidth: 160 }} /></div>
+                <div><label style={s.label}>To</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ ...s.input, maxWidth: 160 }} /></div>
+              </>
+            )}
+          </div>
+        )}
+        {dateActive && (
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>{filtered.length} expense{filtered.length === 1 ? "" : "s"}{activeLabel ? ` · ${activeLabel}` : ""} · <strong style={{ color: "#0f172a" }}>{fmt(filteredTotal)}</strong> total</div>
+        )}
         <div style={s.card}>
           {filtered.length === 0 ? (
-            <EmptyState icon={Icons.Expenses} title="No expenses found" hint={search ? "Try clearing your search." : "Snap a receipt or add an expense to get started."} />
+            <EmptyState icon={Icons.Expenses} title="No expenses found" hint={search || dateActive ? "Try adjusting your search or filter." : "Snap a receipt or add an expense to get started."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -2884,6 +3031,7 @@ export default function BookkeeperApp() {
                 </tr></thead>
                 <tbody>{rows.map((inv) => {
                   const balance = balanceOf(inv);
+                  const od = daysOverdue(inv);
                   return (
                     <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
                       <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
@@ -2892,7 +3040,7 @@ export default function BookkeeperApp() {
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(inv.total || 0)}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
-                      <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.due_date)}</td>
+                      <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.due_date)}{od > 0 && <span style={{ display: "block", color: "#ef4444", fontWeight: 600, fontSize: 10, marginTop: 2 }}>{od} {od === 1 ? "day" : "days"} overdue</span>}</td>
                       {actionsCell(inv)}
                     </tr>
                   );
@@ -3287,16 +3435,65 @@ export default function BookkeeperApp() {
 
   const MobileExpenses = () => {
     const [search, setSearch] = useState("");
+    const [showFilter, setShowFilter] = useState(false);
+    const [dateMode, setDateMode] = useState("all"); // "all" | "month" | "custom"
+    const [month, setMonth] = useState(() => today().slice(0, 7));
+    const [fromDate, setFromDate] = useState("");
+    const [toDate, setToDate] = useState("");
+    const monthBounds = dateMode === "month" && month ? periodBounds("month", month) : null;
+    const range = monthBounds
+      ? { start: monthBounds.start, end: monthBounds.end }
+      : dateMode === "custom"
+      ? { start: fromDate || null, end: toDate || null }
+      : { start: null, end: null };
+    const dateActive = !!(range.start || range.end);
+    const activeLabel = monthBounds
+      ? monthBounds.label
+      : dateMode === "custom" && dateActive
+      ? `${fromDate ? fmtDate(fromDate) : "start"} – ${toDate ? fmtDate(toDate) : "now"}`
+      : "";
     const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
-    const filtered = sorted.filter((t) => !search || t.description.toLowerCase().includes(search.toLowerCase()));
+    const filtered = sorted.filter((t) => {
+      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase()) && !(t.merchant || "").toLowerCase().includes(search.toLowerCase())) return false;
+      if (range.start && (t.date || "") < range.start) return false;
+      if (range.end && (t.date || "") > range.end) return false;
+      return true;
+    });
+    const filteredTotal = filtered.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const mInput = { width: "100%", padding: "10px 12px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", color: "#0f172a", outline: "none", boxSizing: "border-box" };
     return (
       <div style={{ paddingBottom: 20 }}>
         <MobileExpensesNav />
         <div style={{ padding: "8px 16px 12px" }}>
-          <div style={{ position: "relative" }}>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ width: "100%", padding: "10px 12px 10px 36px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 12, background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box" }} />
-            <div style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}><Icons.Expenses /></div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ position: "relative", flex: 1 }}>
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ width: "100%", padding: "10px 12px 10px 36px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 12, background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box" }} />
+              <div style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}><Icons.Expenses /></div>
+            </div>
+            <button onClick={() => setShowFilter((v) => !v)} aria-label="Filter expenses" style={{ flexShrink: 0, width: 46, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 12, border: dateActive ? "none" : "1px solid #e2e8f0", background: dateActive ? accent : "#ffffff", color: dateActive ? "#ffffff" : "#64748b", cursor: "pointer" }}><Icons.Filter /></button>
           </div>
+          {showFilter && (
+            <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: dateMode === "all" ? 0 : 10 }}>
+                {[["all", "All time"], ["month", "By month"], ["custom", "Custom"]].map(([m, lbl]) => (
+                  <button key={m} onClick={() => setDateMode(m)} style={s.pill(dateMode === m)}>{lbl}</button>
+                ))}
+              </div>
+              {dateMode === "month" && <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={mInput} />}
+              {dateMode === "custom" && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={mInput} />
+                  <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={mInput} />
+                </div>
+              )}
+            </div>
+          )}
+          {dateActive && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+              <span style={{ fontSize: 13, color: "#64748b" }}>{filtered.length} · {activeLabel} · <strong style={{ color: "#0f172a" }}>{fmt(filteredTotal)}</strong></span>
+              <button onClick={() => { setDateMode("all"); setFromDate(""); setToDate(""); }} style={{ fontSize: 13, color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontWeight: 500 }}>Clear</button>
+            </div>
+          )}
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses found</div> : filtered.map((e, i) => (
@@ -3320,7 +3517,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found</div> : filtered.map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={`${fmtDate(inv.date)} · ${inv.job || ""}`} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => viewInvoice(inv)} action={<button onClick={(e) => { e.stopPropagation(); setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 6 }}><Icons.Edit /></button>} />
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={<>{fmtDate(inv.date)}{inv.job ? ` · ${inv.job}` : ""}{daysOverdue(inv) > 0 && <span style={{ color: "#ef4444", fontWeight: 600 }}> · {daysOverdue(inv)}{daysOverdue(inv) === 1 ? " day overdue" : " days overdue"}</span>}</>} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => viewInvoice(inv)} action={<button onClick={(e) => { e.stopPropagation(); setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 6 }}><Icons.Edit /></button>} />
           ))}
         </div>
       </div>
