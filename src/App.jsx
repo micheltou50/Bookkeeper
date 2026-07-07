@@ -329,23 +329,32 @@ function MworxLogo({ size = 32, radius = 22 }) {
 function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [isSignUp, setIsSignUp] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Sign-in only — self-service sign-up is intentionally disabled so only
+  // pre-provisioned accounts can access the app. New accounts are created by an
+  // admin in the Supabase dashboard (public sign-ups are also disabled there).
   const handleSubmit = async () => {
     setLoading(true);
     setError("");
-    if (isSignUp) {
-      const { data, error } = await supabase.auth.signUp({ email, password });
-      setLoading(false);
-      if (error) { setError(error.message); return; }
-      if (!data.session) setError("Account created. Check your email to confirm, then sign in.");
-    } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      setLoading(false);
-      if (error) setError(error.message);
-    }
+    setInfo("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) setError(error.message);
+  };
+
+  // Email a password-reset link. The link returns to this app with a recovery
+  // token; onAuthStateChange fires PASSWORD_RECOVERY and shows ResetPasswordScreen.
+  const sendReset = async () => {
+    setError(""); setInfo("");
+    if (!email) { setError("Enter your email above first, then tap “Forgot password?”."); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    setInfo("If that email has an account, a reset link is on its way — check your inbox.");
   };
 
   const inputStyle = { width: "100%", padding: "12px 16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, color: "#0f172a", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
@@ -359,14 +368,122 @@ function LoginScreen() {
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" style={inputStyle} />
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && email && password && handleSubmit()} style={inputStyle} />
         {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{error}</div>}
-        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "13px", background: "linear-gradient(180deg, #10b981 0%, #059669 100%)", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 12, boxShadow: "0 6px 16px -6px rgba(16,185,129,0.6)" }}>
-          {loading ? "..." : isSignUp ? "Sign Up" : "Sign In"}
+        {info && <div style={{ color: "#059669", fontSize: 12, marginBottom: 8 }}>{info}</div>}
+        <button disabled={!email || !password || loading} onClick={handleSubmit} style={{ width: "100%", padding: "13px", background: "linear-gradient(180deg, #10b981 0%, #059669 100%)", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !email || !password || loading ? 0.5 : 1, marginBottom: 8, boxShadow: "0 6px 16px -6px rgba(16,185,129,0.6)" }}>
+          {loading ? "..." : "Sign In"}
         </button>
-        <button onClick={() => { setIsSignUp(!isSignUp); setError(""); }} style={{ background: "none", border: "none", color: "#64748b", fontSize: 12, cursor: "pointer" }}>
-          {isSignUp ? "Already have an account? Sign In" : "Need an account? Sign Up"}
+        <button type="button" onClick={sendReset} disabled={loading} style={{ background: "none", border: "none", color: "#64748b", fontSize: 12, cursor: loading ? "default" : "pointer", marginBottom: 12 }}>
+          Forgot password?
         </button>
+        <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 4 }}>
+          Access is restricted to authorised accounts.
+        </div>
       </div>
     </div>
+  );
+}
+
+// Shown when a user follows a password-reset email link — onAuthStateChange fires
+// PASSWORD_RECOVERY (see App), which flips into this screen. Sets a new password
+// via updateUser (the recovery link already established a session), then hands back.
+function ResetPasswordScreen({ onDone }) {
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [show, setShow] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  const submit = async () => {
+    setError("");
+    if (pw1.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (pw1 !== pw2) { setError("Passwords don't match."); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: pw1 });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    setDone(true);
+  };
+
+  const finish = () => {
+    // Strip the recovery token from the URL, then return control to the app.
+    try { window.history.replaceState(null, "", window.location.pathname); } catch { /* ignore */ }
+    onDone?.();
+  };
+
+  const inputStyle = { width: "100%", padding: "12px 16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, color: "#0f172a", fontSize: 15, outline: "none", boxSizing: "border-box", marginBottom: 12 };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "radial-gradient(120% 120% at 50% 0%, #ecfdf5 0%, #f7f9f8 46%)", fontFamily: "'DM Sans', system-ui, sans-serif", padding: 20 }}>
+      <div style={{ background: "#ffffff", borderRadius: 20, border: "1px solid #eef1f0", padding: 40, width: "100%", maxWidth: 400, textAlign: "center", boxShadow: "0 24px 50px -16px rgba(16,24,40,0.18), 0 2px 6px rgba(16,24,40,0.05)" }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><MworxLogo size={68} radius={20} /></div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em", marginBottom: 4 }}>Set a new password</div>
+        {done ? (
+          <>
+            <div style={{ fontSize: 13, color: "#64748b", marginTop: 8, marginBottom: 24, lineHeight: 1.5 }}>Your password has been updated and you&apos;re signed in.</div>
+            <button onClick={finish} style={{ width: "100%", padding: "13px", background: "linear-gradient(180deg, #10b981 0%, #059669 100%)", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", boxShadow: "0 6px 16px -6px rgba(16,185,129,0.6)" }}>Continue to BookKeeper</button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, marginBottom: 24 }}>Choose a strong password — at least 8 characters.</div>
+            <input type={show ? "text" : "password"} value={pw1} onChange={(e) => setPw1(e.target.value)} placeholder="New password" autoComplete="new-password" style={inputStyle} />
+            <input type={show ? "text" : "password"} value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="Confirm new password" autoComplete="new-password" onKeyDown={(e) => e.key === "Enter" && pw1 && pw2 && submit()} style={inputStyle} />
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12, color: "#64748b", marginBottom: 12, cursor: "pointer" }}>
+              <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show password
+            </label>
+            {error && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 10 }}>{error}</div>}
+            <button disabled={!pw1 || !pw2 || loading} onClick={submit} style={{ width: "100%", padding: "13px", background: "linear-gradient(180deg, #10b981 0%, #059669 100%)", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !pw1 || !pw2 || loading ? 0.5 : 1, boxShadow: "0 6px 16px -6px rgba(16,185,129,0.6)" }}>
+              {loading ? "..." : "Update Password"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Change-password form embedded in the Settings "Security" panel. The user is
+// already signed in, so updateUser applies immediately — no email round-trip.
+function ChangePasswordForm({ s, accent }) {
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const submit = async () => {
+    setMsg(null);
+    if (pw1.length < 8) { setMsg({ ok: false, text: "Password must be at least 8 characters." }); return; }
+    if (pw1 !== pw2) { setMsg({ ok: false, text: "Passwords don't match." }); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: pw1 });
+    setBusy(false);
+    if (error) { setMsg({ ok: false, text: error.message }); return; }
+    setPw1(""); setPw2("");
+    setMsg({ ok: true, text: "Password updated. Use it next time you sign in." });
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+        Set a new password for signing in. Use at least 8 characters — longer and unique is stronger.
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <label style={s.label}>New Password</label>
+        <input type={show ? "text" : "password"} value={pw1} onChange={(e) => setPw1(e.target.value)} autoComplete="new-password" placeholder="New password" style={s.input} />
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <label style={s.label}>Confirm Password</label>
+        <input type={show ? "text" : "password"} value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" placeholder="Re-enter new password" onKeyDown={(e) => e.key === "Enter" && submit()} style={s.input} />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#64748b", marginBottom: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show password
+      </label>
+      {msg && <div style={{ fontSize: 12, marginBottom: 10, color: msg.ok ? "#059669" : "#ef4444" }}>{msg.text}</div>}
+      <button onClick={submit} disabled={busy || !pw1 || !pw2} style={{ ...s.btn(accent), justifyContent: "center", opacity: busy || !pw1 || !pw2 ? 0.5 : 1 }}>
+        {busy ? "Updating…" : "Update Password"}
+      </button>
+    </>
   );
 }
 
@@ -605,6 +722,7 @@ function ReceiptViewer({ receipt, onClose }) {
 
 export default function BookkeeperApp() {
   const [session, setSession] = useState(undefined);
+  const [recovery, setRecovery] = useState(false);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
@@ -665,7 +783,10 @@ export default function BookkeeperApp() {
     // token auto-refreshes. Replacing the session object on those events re-runs
     // loadData and makes the whole page "refresh". Only update when the signed-in
     // user actually changes (real sign-in/out), so focus/refresh is a no-op.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, newSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+      // A reset-email link signs the user in with a recovery session; show the
+      // set-new-password screen instead of the app until they choose one.
+      if (event === "PASSWORD_RECOVERY") setRecovery(true);
       setSession((prev) => (prev && newSession && prev.user?.id === newSession.user?.id ? prev : newSession));
     });
     return () => subscription.unsubscribe();
@@ -1471,6 +1592,7 @@ export default function BookkeeperApp() {
 
 
   if (session === undefined) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b" }}>Loading...</div>;
+  if (recovery) return <ResetPasswordScreen onDone={() => setRecovery(false)} />;
   if (!session) return <LoginScreen />;
   if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b", fontFamily: "'DM Sans', sans-serif" }}>Loading...</div>;
 
@@ -2550,7 +2672,7 @@ export default function BookkeeperApp() {
         {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
           <>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Overdue reminders send automatically each day from your connected Outlook, at 1, 7, 14 and 30 days overdue. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
+            Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
@@ -2561,8 +2683,8 @@ export default function BookkeeperApp() {
               {reminderResult.error ? (
                 <div style={{ color: "#991b1b" }}>Error: {reminderResult.error}</div>
               ) : reminderResult.dryRun ? (() => {
-                const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_outlook_connection: "No Outlook connection", no_email_sender: "No email sender configured", token_error: "Outlook needs reconnect", skipped_not_due: "Not due yet" };
-                const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_outlook_connection: "#991b1b", no_email_sender: "#991b1b", token_error: "#991b1b", skipped_not_due: "#64748b" };
+                const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_email_sender: "No email sender configured", skipped_not_due: "Not due yet" };
+                const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_email_sender: "#991b1b", skipped_not_due: "#64748b" };
                 const willSend = reminderResult.preview.filter(p => p.status === "will_send" || p.status === "failed_retryable").length;
                 return (
                   <div>
@@ -2578,6 +2700,9 @@ export default function BookkeeperApp() {
             </div>
           )}
           </>
+        ))}
+        {panel("security", "Security", `Change the sign-in password for ${session?.user?.email || "your account"}`, (
+          <ChangePasswordForm s={s} accent={accent} />
         ))}
         <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
       </div>
