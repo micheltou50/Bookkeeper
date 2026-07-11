@@ -241,7 +241,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:24px 0 0">
           Kind regards,<br>
-          <strong>${esc(bName)}</strong>${profile.abn ? `<br>ABN: ${esc(profile.abn)}` : ""}${profile.address ? `<br>${esc(profile.address)}` : ""}${profile.email ? `<br>${esc(profile.email)}` : ""}${profile.phone ? ` · ${esc(profile.phone)}` : ""}
+          <strong>${esc(bName)}</strong>${profile.abn ? `<br>ABN: ${esc(profile.abn)}` : ""}${profile.email ? `<br>${esc(profile.email)}` : ""}${profile.phone ? ` · ${esc(profile.phone)}` : ""}
         </p>
       </div>
 

@@ -1417,7 +1417,7 @@ export default function BookkeeperApp() {
     const template = isQuote
       ? (profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE)
       : (profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE);
-    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
     const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
     const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
     return template
@@ -1491,7 +1491,7 @@ export default function BookkeeperApp() {
     const bName = profile.name || "our company";
     const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
     const overdueDays = inv.due_date ? Math.max(0, Math.floor((Date.now() - new Date(inv.due_date)) / 86400000)) : 0;
-    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.address ? `\n${profile.address}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
     const body = `Hi ${firstName(inv.contact_name)},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${sig}`;
     window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
     if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
