@@ -8,6 +8,11 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY
 );
 
+// When Stripe is configured, invoices (not quotes) get a "Pay by card" button.
+const PAY_ENABLED = !!process.env.STRIPE_SECRET_KEY;
+const PAY_BASE = process.env.URL || "https://bkeeper.netlify.app";
+const SURCHARGE_PCT = Number(process.env.STRIPE_SURCHARGE_PCT ?? "1.7") || 0;
+
 function fmtAUD(n) {
   return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
 }
@@ -174,6 +179,15 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       <div style="font-size:11px;color:#0f766e;line-height:1.6">This quote is valid for 30 days from the date of issue. Payment details will be provided upon acceptance.</div>
     </div>`;
 
+  // "Pay by card" button for invoices (not quotes) when Stripe is enabled. The
+  // link is un-guessable via pay_token; the customer is charged the total plus a
+  // disclosed surcharge.
+  const payButtonHTML = (PAY_ENABLED && !isQuote && inv.pay_token) ? `
+    <div style="text-align:center;margin-top:20px">
+      <a href="${PAY_BASE}/.netlify/functions/pay-invoice?invoice=${inv.id}&t=${inv.pay_token}" style="display:inline-block;background:${accent};color:#fff;padding:12px 30px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none">Pay ${fmtAUD(subtotal)} by card</a>
+      <div style="font-size:9px;color:#94a3b8;margin-top:6px">${SURCHARGE_PCT > 0 ? `A ${SURCHARGE_PCT}% card surcharge applies at checkout. ` : ""}Or pay by bank transfer using the details above.</div>
+    </div>` : "";
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -246,6 +260,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 
   <!-- Payment / Quote notice -->
   ${paymentSection}
+  ${payButtonHTML}
 
   <!-- Notes -->
   ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}

@@ -15,6 +15,13 @@ function getEnvConfig() {
       process.env.SERVICE_ROLE_KEY,
     resendApiKey: process.env.RESEND_API_KEY,
     reminderFromEmail: process.env.REMINDER_FROM_EMAIL || "noreply@mworxgroup.com.au",
+    // BCC a fixed monitoring inbox on every reminder so a copy of exactly what
+    // was sent (and to whom) lands somewhere reviewable. Override in Netlify, or
+    // set REMINDER_BCC_EMAIL="" to disable.
+    reminderBccEmail: process.env.REMINDER_BCC_EMAIL ?? "info@mworxgroup.com.au",
+    // When STRIPE_SECRET_KEY is set, reminder emails gain a "Pay by card" button.
+    stripeSecretKey: process.env.STRIPE_SECRET_KEY,
+    surchargePct: Number(process.env.STRIPE_SURCHARGE_PCT ?? "1.7") || 0,
   };
 }
 
@@ -24,11 +31,17 @@ function getEnvConfig() {
 let supabase = null;
 let RESEND_API_KEY = null;
 let REMINDER_FROM_EMAIL = "noreply@mworxgroup.com.au";
+let REMINDER_BCC_EMAIL = "info@mworxgroup.com.au";
+let PAY_ENABLED = false;   // true when STRIPE_SECRET_KEY is configured
+let SURCHARGE_PCT = 1.7;   // card surcharge %, for the "Pay by card" note
 
 function resolveRuntime() {
   const cfg = getEnvConfig();
   RESEND_API_KEY = cfg.resendApiKey;
   REMINDER_FROM_EMAIL = cfg.reminderFromEmail;
+  REMINDER_BCC_EMAIL = cfg.reminderBccEmail;
+  PAY_ENABLED = !!cfg.stripeSecretKey;
+  SURCHARGE_PCT = cfg.surchargePct;
   if (cfg.supabaseUrl && cfg.supabaseServiceKey) {
     try {
       supabase = createClient(cfg.supabaseUrl, cfg.supabaseServiceKey);
@@ -44,6 +57,9 @@ function resolveRuntime() {
 
 const THRESHOLDS = [1, 7, 14, 30];
 const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || "Australia/Sydney";
+// Absolute base for pay links embedded in emails (the recipient's browser has
+// no API_BASE). Netlify sets URL in production; fall back to the known domain.
+const PAY_BASE = process.env.URL || "https://bkeeper.netlify.app";
 const STALE_SENDING_MS = 30 * 60 * 1000; // a "sending" claim older than this is retryable
 
 function fmtAUD(n) {
@@ -109,6 +125,12 @@ async function sendViaResend({ to, toName, subject, html, fromName }) {
       body: JSON.stringify({
         from: `${fromName || "Accounts"} <${REMINDER_FROM_EMAIL}>`,
         to: [to],
+        // Blind-copy the monitoring inbox so there's always a reviewable record
+        // of the exact email + recipient. Skip it when the recipient IS the BCC
+        // address (avoids a pointless duplicate), or when BCC is disabled ("").
+        ...(REMINDER_BCC_EMAIL && REMINDER_BCC_EMAIL.toLowerCase() !== String(to).toLowerCase()
+          ? { bcc: [REMINDER_BCC_EMAIL] }
+          : {}),
         subject,
         html,
       }),
@@ -161,6 +183,15 @@ function buildReminderHTML(inv, profile, daysOverdue) {
       </table>
     </div>` : "";
 
+  // Card-payment button — only for real invoices when Stripe is configured and
+  // the invoice has a pay token. The customer is charged the total plus a
+  // surcharge (disclosed here and itemised at checkout).
+  const payHTML = (PAY_ENABLED && inv.type !== "quote" && inv.pay_token) ? `
+    <div style="text-align:center;margin:24px 0">
+      <a href="${PAY_BASE}/.netlify/functions/pay-invoice?invoice=${esc(inv.id)}&t=${esc(inv.pay_token)}" style="display:inline-block;background:${accent};color:#fff;padding:14px 32px;border-radius:8px;font-size:15px;font-weight:700;text-decoration:none">Pay ${total} by card</a>
+      <div style="font-size:11px;color:#94a3b8;margin-top:8px">${SURCHARGE_PCT > 0 ? `A ${SURCHARGE_PCT}% card surcharge applies at checkout. ` : ""}Prefer bank transfer? Use the details below.</div>
+    </div>` : "";
+
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
@@ -202,6 +233,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
           This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> ${daysOverdue > 0 ? `was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago)` : `is due on <strong>${fmtDate(inv.due_date)}</strong>`}. We'd appreciate prompt payment at your earliest convenience.
         </p>
 
+        ${payHTML}
         ${bankHTML}
 
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 4px">

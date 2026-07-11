@@ -299,6 +299,7 @@ const Icons = {
   Reconcile: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>,
   More: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>,
   Bell: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>,
+  Link: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>,
   Eye: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
   Cloud: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>,
   Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
@@ -2701,6 +2702,11 @@ export default function BookkeeperApp() {
           )}
           </>
         ))}
+        {panel("stripe", "Card Payments", "Let customers pay invoices by card", (
+          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
+            When <code>STRIPE_SECRET_KEY</code> is set in Netlify, every invoice gets a secure <strong>Pay by card</strong> button in its PDF and in overdue reminder emails, plus a <strong>Copy pay link</strong> action in each invoice's menu (⋯). Paid invoices are marked <strong>paid</strong> automatically once Stripe confirms — no manual step. A card surcharge (default 1.7%, configurable via <code>STRIPE_SURCHARGE_PCT</code>) is added at checkout so the processing fee is passed to the customer. Cards plus Apple&nbsp;Pay / Google&nbsp;Pay are offered.
+          </div>
+        ))}
         {panel("security", "Security", `Change the sign-in password for ${session?.user?.email || "your account"}`, (
           <ChangePasswordForm s={s} accent={accent} />
         ))}
@@ -3161,7 +3167,7 @@ export default function BookkeeperApp() {
                     <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
                       <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
                       <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.date)}</td>
-                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.status === "paid" && isReconciled(inv) && <ReconciledMark />}</td>
+                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.status === "paid" && isReconciled(inv) && <ReconciledMark />}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(inv.total || 0)}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
@@ -3191,6 +3197,11 @@ export default function BookkeeperApp() {
                 {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
                 {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
                 {!isQuoteList && (mi.status === "sent" || mi.status === "overdue") && item("Send payment reminder", <Icons.Bell />, () => sendReminderViaResend(mi))}
+                {!isQuoteList && mi.pay_token && item("Copy pay link", <Icons.Link />, () => {
+                  const url = `${API_BASE || "https://bkeeper.netlify.app"}/.netlify/functions/pay-invoice?invoice=${mi.id}&t=${mi.pay_token}`;
+                  navigator.clipboard?.writeText(url);
+                  alert("Card payment link copied to clipboard.");
+                })}
                 {item(isQuoteList ? "Delete quote" : "Delete invoice", <Icons.Trash />, () => deleteInvoice(mi.id), true)}
               </div>
             </>
