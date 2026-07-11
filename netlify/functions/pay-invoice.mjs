@@ -66,6 +66,20 @@ const handler = async (req) => {
     return page({ heading: "Invalid link", sub: "This payment link is malformed.", tone: "error" }, 400);
   }
 
+  // Safe env diagnostic (booleans/counts only, never values). Temporary — used
+  // to confirm the Stripe env vars reach the function runtime.
+  if (params.get("diag") === "1") {
+    return new Response(JSON.stringify({
+      has_stripe_secret_key: !!cfg.stripeKey,
+      has_webhook_secret: !!process.env.STRIPE_WEBHOOK_SECRET,
+      has_supabase_service: !!cfg.serviceKey,
+      surcharge_pct: cfg.surchargePct,
+      env_count: Object.keys(process.env).length,
+      netlify: !!process.env.NETLIFY,
+      context: process.env.CONTEXT || null,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
   // ---- Result mode (Stripe redirected the customer back here) ----
   const result = params.get("result");
   if (result === "success") {
