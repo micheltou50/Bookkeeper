@@ -695,6 +695,64 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
   );
 }
 
+// In-app "compose email" window for sending a quote/invoice. The user reviews and
+// edits the recipient, subject, and body (signature shown separately, toggleable)
+// before hitting Send — nothing goes out automatically. Top-level so a parent
+// re-render can't remount it and lose the user's edits mid-compose. The PDF is
+// generated + attached and the status flips to Sent inside onSend.
+function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
+  const [to, setTo] = useState(defaults.to);
+  const [subject, setSubject] = useState(defaults.subject);
+  const [body, setBody] = useState(defaults.body);
+  const [includeSig, setIncludeSig] = useState(true);
+  const [sending, setSending] = useState(false);
+  const docType = inv.type === "quote" ? "Quote" : "Invoice";
+  const attachName = `${docType} ${inv.number || "draft"}.pdf`;
+
+  const send = async () => {
+    if (!to.trim()) { alert("Add a recipient email address."); return; }
+    // Escape the user's plain-text message, then nl2br. The signature is HTML
+    // (per Settings — "HTML allowed"), appended as-is, matching the server.
+    const esc = (x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const html = esc(body).replace(/\n/g, "<br>") + (includeSig && defaults.signatureHtml ? `<br><br>${defaults.signatureHtml}` : "");
+    setSending(true);
+    await onSend({ to: to.trim(), subject: subject.trim(), html });
+    setSending(false); // onSend closes the window on success
+  };
+
+  const lbl = { display: "block", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8", marginBottom: 5 };
+  const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "inherit", color: "#1e293b", background: "#fff" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", padding: isMobile ? 0 : 16 }} onClick={(e) => { if (e.target === e.currentTarget && !sending) onClose(); }}>
+      <div style={{ background: "#fff", width: isMobile ? "100%" : 560, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", borderRadius: isMobile ? "16px 16px 0 0" : 14, boxShadow: "0 20px 60px -15px rgba(16,24,40,0.4)", padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Send {docType} {inv.number}</h3>
+          <button onClick={onClose} disabled={sending} style={{ background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>To</label><input value={to} onChange={(e) => setTo(e.target.value)} style={inp} placeholder="client@example.com" /></div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>Subject</label><input value={subject} onChange={(e) => setSubject(e.target.value)} style={inp} /></div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>Message</label><textarea value={body} onChange={(e) => setBody(e.target.value)} style={{ ...inp, minHeight: 170, resize: "vertical", lineHeight: 1.6 }} /></div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155", marginBottom: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={includeSig} onChange={(e) => setIncludeSig(e.target.checked)} /> Include my signature
+        </label>
+        {includeSig && defaults.signatureHtml && (
+          <div style={{ border: "1px solid #eef2f6", background: "#f8fafc", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: "#475569", marginBottom: 12 }} dangerouslySetInnerHTML={{ __html: defaults.signatureHtml }} />
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f0fdfa", border: "1px solid #99f6e4", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, color: "#0f766e", marginBottom: 16 }}>
+          <span style={{ fontSize: 15 }}>📎</span> {attachName} <span style={{ color: "#5e7d78" }}>will be attached</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} disabled={sending} style={{ border: "1px solid #e2e8f0", background: "#fff", color: "#475569", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: sending ? "default" : "pointer" }}>Cancel</button>
+          <button onClick={send} disabled={sending} style={{ border: "none", background: accent, color: "#fff", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: sending ? "wait" : "pointer", opacity: sending ? 0.6 : 1, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {sending ? "Sending…" : <><Icons.Send /> Send</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Full-screen, in-app viewer for a receipt image or PDF. Like DocViewer, this exists
 // so receipts never need window.open()/a new tab. The signed URL is rendered inline:
 // PDFs in an <iframe>, images in an <img>. Top-level so a parent re-render doesn't
@@ -1543,13 +1601,22 @@ export default function BookkeeperApp() {
   // entirely, so View can never be blocked.
   const viewInvoice = (inv) => setViewDoc(inv);
 
-  const buildEmailBody = (inv) => {
+  // Plain-text default signature, used by the mailto fallback and as the base for
+  // the compose window's signature preview.
+  const defaultSignatureText = () => {
+    const bName = profile.name || "our company";
+    return profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+  };
+
+  // withSignature:false strips the {signature} placeholder so the compose window
+  // can prefill the message body and show/append the signature separately.
+  const buildEmailBody = (inv, { withSignature = true } = {}) => {
     const isQuote = inv.type === "quote";
     const bName = profile.name || "our company";
     const template = isQuote
       ? (profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE)
       : (profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE);
-    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const sig = withSignature ? defaultSignatureText() : "";
     const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
     const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
     return template
@@ -1580,6 +1647,17 @@ export default function BookkeeperApp() {
   };
 
   const [outlookDraftLoading, setOutlookDraftLoading] = useState(null);
+  // The doc currently open in the compose-email window (null = closed). Set by
+  // openComposeFor after a save; the ComposeEmail component prefills from it.
+  const [composeDoc, setComposeDoc] = useState(null);
+  const openComposeFor = (inv) => { if (inv?.id) setComposeDoc(inv); };
+  // Send the composed email (edited subject/body/recipient) via Outlook, PDF
+  // attached. Closes the window only on success so a failure keeps the edits.
+  const handleComposeSend = async ({ to, subject, html }) => {
+    const ok = await sendInvoiceNow(composeDoc, { skipConfirm: true, subjectOverride: subject, htmlOverride: html, toOverride: to });
+    if (ok) setComposeDoc(null);
+    return ok;
+  };
 
   const createOutlookDraft = async (inv) => {
     if (!emailConn) { alert("Connect Outlook in Settings first."); return; }
@@ -1645,10 +1723,15 @@ export default function BookkeeperApp() {
         try { detail = (await pdfResp.json()).error || ""; } catch { /* ignore */ }
         throw new Error("Could not generate the PDF, so nothing was sent. " + (detail || "Please try again."));
       }
+      // Overrides come from the compose window (edited subject/body/recipient).
+      const sendBody = { invoice_id: inv.id };
+      if (opts.subjectOverride != null) sendBody.subject_override = opts.subjectOverride;
+      if (opts.htmlOverride != null) sendBody.html_override = opts.htmlOverride;
+      if (opts.toOverride != null) sendBody.to_override = opts.toOverride;
       const resp = await fetch(`${API_BASE}/.netlify/functions/send-invoice-outlook`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice_id: inv.id }),
+        body: JSON.stringify(sendBody),
       });
       const result = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(result.error || "Send failed");
@@ -1657,7 +1740,7 @@ export default function BookkeeperApp() {
       setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: i.status === "draft" ? "sent" : i.status, sent_at: i.sent_at || sentAt } : i)));
       // Re-file the fresh PDF to OneDrive (Admin/Quotes|Invoices) quietly.
       saveToOneDrive("invoice", inv.id, { silent: true });
-      alert(`${docType} ${inv.number} sent to ${result.sent_to || inv.contact_email}.`);
+      if (!opts.silentSuccess) alert(`${docType} ${inv.number} sent to ${opts.toOverride || result.sent_to || inv.contact_email}.`);
       return true;
     } catch (err) {
       console.error("Send error:", err);
@@ -2413,17 +2496,13 @@ export default function BookkeeperApp() {
       if (saved && !inv.project_id) upsertJob(inv.job, inv.contact_name);
       return saved;
     };
-    // Save, then really send (PDF attached, from the user's Outlook). The button
-    // label already names the recipient, so no extra confirm dialog.
-    const saveAndSend = async () => {
+    // Save, then open the compose window so the user reviews/edits the email and
+    // hits Send themselves — nothing goes out automatically.
+    const saveAndCompose = async () => {
       const saved = await saveInv();
-      if (saved?.id) await sendInvoiceNow(saved, { skipConfirm: true });
+      if (saved?.id) openComposeFor(saved);
     };
-    // Offer the one-click send-primary only for drafts (and new docs, which start
-    // as drafts). Re-sending an already sent/paid/declined doc must go through the
-    // row paper-plane or ⋯ menu, which confirm first — no silent re-email.
-    const isDraftDoc = !existing || (existing.status || "draft") === "draft";
-    const canSendNow = !!emailConn && !!(f.contact_email || "").trim() && isDraftDoc;
+    const canCompose = !!emailConn && !!(f.contact_email || "").trim();
 
     // Contacts attached to the selected project (bk_job_parties) — offered first
     // in the "Addressed to" dropdown, consultants included.
@@ -2615,9 +2694,9 @@ export default function BookkeeperApp() {
           <label style={s.label}>Terms &amp; Conditions {f.terms ? "(prints on its own page at the end)" : "(optional)"}</label>
           <textarea value={f.terms || ""} onChange={(e) => { setTermsEdited(true); setF({ ...f, terms: e.target.value }); }} placeholder="Full terms & conditions — printed on a separate page at the end of the PDF. Leave blank for none." style={{ ...s.input, minHeight: 120, resize: "vertical", lineHeight: 1.5 }} />
         </div>
-        {canSendNow ? (<>
-          <button disabled={saving} onClick={async () => { setSaving(true); await saveAndSend(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Sending…" : `${existing ? "Update" : "Create"} & Send to ${f.contact_email.trim()}`}</button>
-          <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} only (send later)`}</button>
+        {canCompose ? (<>
+          <button disabled={saving} onClick={async () => { setSaving(true); await saveAndCompose(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Send /> {existing ? "Save" : "Create"} &amp; Email…</>}</button>
+          <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Save" : "Create"} only (email later)`}</button>
         </>) : (
           <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
         )}
@@ -3560,7 +3639,7 @@ export default function BookkeeperApp() {
         <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
           <div style={{ display: "inline-flex", gap: 2, alignItems: "center", justifyContent: "flex-end" }}>
             <button onClick={() => viewInvoice(inv)} title="View" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4 }}><Icons.Eye /></button>
-            <button onClick={async () => { if (emailConn) { await sendInvoiceNow(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } }} disabled={outlookDraftLoading === inv.id} title={emailConn ? "Send now (PDF attached, via Outlook)" : "Send via email app"} style={{ background: "none", border: "none", color: "#3b82f6", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 4 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Send />}</button>
+            <button onClick={async () => { if (emailConn) { openComposeFor(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } }} disabled={outlookDraftLoading === inv.id} title={emailConn ? "Compose email (PDF attached)" : "Send via email app"} style={{ background: "none", border: "none", color: "#3b82f6", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 4 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Send />}</button>
             {!primaryDone && <button onClick={async () => { if (isQuoteList) { const proj = await acceptQuote(inv); if (proj) await offerDepositInvoice(inv, proj); } else { markPaid(inv); } }} title={isQuoteList ? "Accept quote" : "Mark paid"} style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 4 }}><Icons.Check /></button>}
             <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu((m) => m?.id === inv.id ? null : { id: inv.id, x: r.right, y: r.bottom }); }} title="More actions" style={{ background: menu?.id === inv.id ? "#eef2f6" : "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
           </div>
@@ -4632,6 +4711,15 @@ export default function BookkeeperApp() {
   const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reconcile: ReconcilePage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, pnl: PnlPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
+  // Prefill for the compose-email window: recipient + subject + message (signature
+  // stripped from the body; shown/appended separately) + the HTML signature.
+  const composeDefaults = composeDoc ? {
+    to: composeDoc.contact_email || "",
+    subject: `${composeDoc.type === "quote" ? "Quote" : "Invoice"} ${composeDoc.number || ""} from ${profile.name || "Our company"}`.trim(),
+    body: buildEmailBody(composeDoc, { withSignature: false }).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd(),
+    signatureHtml: defaultSignatureText().replace(/\n/g, "<br>"),
+  } : null;
+
   const SidebarContent = () => (
     <>
       <div style={{ ...s.logo, position: "relative", padding: navCollapsed ? "16px 6px 12px" : "20px 16px 12px", textAlign: navCollapsed ? "center" : "left" }}>
@@ -4701,6 +4789,7 @@ export default function BookkeeperApp() {
         )}
         {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
         {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
+        {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
       </>
     );
   }
@@ -4752,6 +4841,7 @@ export default function BookkeeperApp() {
       </div>
       {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
       {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
+      {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );
 }

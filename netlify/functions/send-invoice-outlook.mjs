@@ -97,7 +97,11 @@ const handler = async (req) => {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
-  const { invoice_id, draft } = body;
+  // subject_override / html_override / to_override come from the in-app compose
+  // window, where the user has edited the email before sending. When present they
+  // replace the template-rendered subject/body/recipient (PDF attachment, status
+  // flip, and everything else stay the same).
+  const { invoice_id, draft, subject_override, html_override, to_override } = body;
   if (!invoice_id || !authToken) {
     return new Response(JSON.stringify({ error: "invoice_id and Authorization header required" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
@@ -203,14 +207,19 @@ const handler = async (req) => {
   const customTemplate = inv.type === "quote" ? profile?.email_template_quote : profile?.email_template_invoice;
   const template = customTemplate?.trim() || (inv.type === "quote" ? DEFAULT_QUOTE_TEMPLATE : DEFAULT_INVOICE_TEMPLATE);
 
-  const subject = `${docType} ${inv.number} from ${bName}`;
-  const rawBody = renderTemplate(template, templateVars);
+  const subject = (typeof subject_override === "string" && subject_override.trim())
+    ? subject_override.trim()
+    : `${docType} ${inv.number} from ${bName}`;
+  const rawBody = (typeof html_override === "string" && html_override.trim())
+    ? html_override
+    : renderTemplate(template, templateVars);
   const htmlBody = `<div style="font-family: 'Century Gothic', CenturyGothic, AppleGothic, sans-serif; font-size: 11pt;">${rawBody}</div>`;
 
+  const recipient = (typeof to_override === "string" && to_override.trim()) ? to_override.trim() : inv.contact_email;
   const message = {
     subject,
     body: { contentType: "HTML", content: htmlBody },
-    toRecipients: [{ emailAddress: { address: inv.contact_email, name: inv.contact_name || "" } }],
+    toRecipients: [{ emailAddress: { address: recipient, name: inv.contact_name || "" } }],
   };
   if (pdfAttachment) message.attachments = [pdfAttachment];
 
