@@ -90,6 +90,43 @@ async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName)
   return createFolder(token, basePath, fallbackName);
 }
 
+// Find-or-create a folder directly under a parent ITEM ID. Case-insensitive
+// match (OneDrive names are case-insensitive; a === check would duplicate a
+// user-made "admin" as "Admin 1" thanks to conflictBehavior "rename").
+async function ensureChildFolder(token, parentId, name) {
+  let url = `${GRAPH}/me/drive/items/${parentId}/children?$select=id,name,folder,webUrl&$top=200`;
+  const items = [];
+  while (url) {
+    const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return { status: r.status };
+    const j = await r.json();
+    items.push(...(j.value || []));
+    url = j["@odata.nextLink"] || null;
+  }
+  const existing = items.find((c) => c.folder && String(c.name).toLowerCase() === String(name).toLowerCase());
+  if (existing) return { id: existing.id, name: existing.name, webUrl: existing.webUrl };
+  const r = await fetchWithTimeout(`${GRAPH}/me/drive/items/${parentId}/children`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name, folder: {}, "@microsoft.graph.conflictBehavior": "rename" }),
+  });
+  if (!r.ok) return { status: r.status };
+  const j = await r.json();
+  return { id: j.id, name: j.name, webUrl: j.webUrl };
+}
+
+// Ensure the "<job folder>/Admin/<Quotes|Invoices>" chain exists; returns the
+// leaf folder. Propagates {auth:true} on 401 so run()'s token-refresh retry works.
+async function ensureAdminSubfolder(token, jobFolderId, leafName) {
+  const admin = await ensureChildFolder(token, jobFolderId, "Admin");
+  if (admin.status === 401) return { auth: true };
+  if (admin.status || !admin.id) return { status: admin.status || 500 };
+  const leaf = await ensureChildFolder(token, admin.id, leafName);
+  if (leaf.status === 401) return { auth: true };
+  if (leaf.status || !leaf.id) return { status: leaf.status || 500 };
+  return leaf;
+}
+
 async function ensureFolderPath(token, fullPath) {
   const parts = String(fullPath || "").split("/").filter(Boolean);
   if (!parts.length) return { status: 400 };
@@ -158,6 +195,7 @@ const handler = async (req) => {
 
   let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
   let receiptFolderPath = null;
+  let docSubfolder = null; // "Quotes" | "Invoices" — Admin subfolder for kind "invoice"
 
   if (kind === "invoice") {
     let { data: inv } = await supabase.from("bk_invoices").select("*").eq("id", id).single();
@@ -179,6 +217,7 @@ const handler = async (req) => {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     fileName = sanitize(`${docType} ${inv.number || id}`) + ".pdf";
     fallbackName = "Unfiled Invoices";
+    docSubfolder = inv.type === "quote" ? "Quotes" : "Invoices";
     const { data: jobsList } = await supabase.from("bk_jobs").select("id,job_number,name,address").eq("business_id", businessId);
     let job = inv.project_id ? (jobsList || []).find((j) => j.id === inv.project_id) : null;
     if (!job && inv.job) job = (jobsList || []).find((j) => j.address === inv.job || j.name === inv.job);
@@ -249,6 +288,12 @@ const handler = async (req) => {
       const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
       if (folder.status === 401) return { auth: true };
       if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
+      // Seed the Admin/Quotes + Admin/Invoices skeleton so documents have a home
+      // from day one. Best-effort: a skeleton hiccup shouldn't fail project creation.
+      for (const leaf of ["Quotes", "Invoices"]) {
+        const seeded = await ensureAdminSubfolder(tok, folder.id, leaf);
+        if (seeded.auth) return { auth: true };
+      }
       return { ok: true, webUrl: folder.webUrl, savedTo: folder.name };
     }
     if (kind === "expense") {
@@ -274,10 +319,27 @@ const handler = async (req) => {
       return { ok: true, webUrl: item.webUrl, savedTo: `${receiptFolderPath}/${fileName}` };
     }
 
+    // kind === "invoice" (covers quotes too). Ensure the base exists first — the
+    // project branch always did this, but invoices previously 404'd when the base
+    // folder was missing.
+    const ensuredBase = await ensureFolderPath(tok, projectsBase);
+    if (ensuredBase.auth) return { auth: true };
+    if (ensuredBase.status) return { error: `OneDrive folder error (${ensuredBase.status})` };
     const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
     if (folder.status === 401) return { auth: true };
     if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
-    const up = await uploadToFolder(tok, folder.id, fileName, fileBuffer, contentType);
+    // Real project folder → file under Admin/Quotes|Invoices. "Unfiled Invoices"
+    // (no matched project) deliberately stays flat.
+    let destId = folder.id;
+    let savedPrefix = folder.name;
+    if (jobNumber && docSubfolder) {
+      const sub = await ensureAdminSubfolder(tok, folder.id, docSubfolder);
+      if (sub.auth) return { auth: true };
+      if (sub.status || !sub.id) return { error: `OneDrive folder error (${sub.status || "unknown"})` };
+      destId = sub.id;
+      savedPrefix = `${folder.name}/Admin/${docSubfolder}`;
+    }
+    const up = await uploadToFolder(tok, destId, fileName, fileBuffer, contentType);
     if (up.status === 401) return { auth: true };
     if (!up.ok) {
       let e = "";
@@ -285,7 +347,7 @@ const handler = async (req) => {
       return { error: `OneDrive upload failed (${up.status})`, detail: e };
     }
     const item = await up.json();
-    return { ok: true, webUrl: item.webUrl, savedTo: `${folder.name}/${fileName}` };
+    return { ok: true, webUrl: item.webUrl, savedTo: `${savedPrefix}/${fileName}` };
   };
 
   let res = await run(accessToken);
