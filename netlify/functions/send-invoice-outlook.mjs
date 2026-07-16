@@ -65,9 +65,9 @@ function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
 }
 
-const DEFAULT_INVOICE_TEMPLATE = `<p>Hi {contact_name},</p><p>Please find attached invoice {number} for {amount}.</p>{due_date_line}{payment_details}<p>Kind regards,<br>{signature}</p>`;
+const DEFAULT_INVOICE_TEMPLATE = `<p>Hi {first_name},</p><p>Please find attached invoice {number} for {amount}.</p>{due_date_line}{payment_details}<p>Kind regards,<br>{signature}</p>`;
 
-const DEFAULT_QUOTE_TEMPLATE = `<p>Hi {contact_name},</p><p>Please find attached quote {number} for {amount}.</p><p>This quote is valid until {due_date}.</p><p>Kind regards,<br>{signature}</p>`;
+const DEFAULT_QUOTE_TEMPLATE = `<p>Hi {first_name},</p><p>Please find attached quote {number} for {amount}.</p><p>This quote is valid until {due_date}.</p><p>Kind regards,<br>{signature}</p>`;
 
 const HTML_VARS = new Set(["payment_details", "signature", "due_date_line"]);
 
@@ -193,7 +193,10 @@ const handler = async (req) => {
     ? profile.email_signature.replace(/\n/g, "<br>")
     : `<strong>${escapeHtml(bName)}</strong>${profile?.abn ? `<br>ABN: ${escapeHtml(profile.abn)}` : ""}${profile?.email ? `<br>${escapeHtml(profile.email)}` : ""}${profile?.phone ? ` · ${escapeHtml(profile.phone)}` : ""}`;
 
+  const nameParts = String(inv.contact_name || "").trim().split(/\s+/).filter(Boolean);
   const templateVars = {
+    first_name: nameParts[0] || "there",
+    last_name: nameParts.slice(1).join(" "),
     contact_name: inv.contact_name || "there",
     number: inv.number || "",
     amount: fmtAUD(inv.total || 0),

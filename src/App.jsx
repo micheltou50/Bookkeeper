@@ -102,6 +102,9 @@ const fmtNum = (n) => new Intl.NumberFormat("en-AU", { minimumFractionDigits: 2,
 const fmtDate = (d) => { if (!d) return ""; const dt = new Date(d); return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }); };
 // First word of a name, for friendly email greetings ("Hi John,").
 const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
+// Everything after the first word ("Cameron Mawson" → "Mawson"; "Mary Jane Watson"
+// → "Jane Watson"). Empty for single-word names.
+const lastName = (n) => (n || "").trim().split(/\s+/).slice(1).join(" ");
 const today = () => new Date().toISOString().split("T")[0];
 
 // Whole calendar days an unpaid invoice is past its due date. Returns 0 for
@@ -1635,11 +1638,11 @@ export default function BookkeeperApp() {
     const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
     const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
     return template
-      // Greeting uses the first name only ("Hi John,"). {first_name} is the
-      // preferred placeholder; {contact_name} resolves the same way since it's
-      // only ever used in the greeting line.
+      // {first_name} → "Cameron", {last_name} → "Mawson", {contact_name} → full name.
+      // Replace last_name before contact_name so the substrings don't collide.
       .replace(/\{first_name\}/g, firstName(inv.contact_name))
-      .replace(/\{contact_name\}/g, firstName(inv.contact_name))
+      .replace(/\{last_name\}/g, lastName(inv.contact_name))
+      .replace(/\{contact_name\}/g, inv.contact_name || "there")
       .replace(/\{number\}/g, inv.number || "")
       .replace(/\{amount\}/g, fmt(inv.total || 0))
       .replace(/\{due_date\}/g, inv.due_date ? fmtDate(inv.due_date) : "")
@@ -3213,8 +3216,11 @@ export default function BookkeeperApp() {
         ))}
         {panel("email_tpl", "Email Templates", "Customise invoice & quote email wording", (
           <>
-          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Variables: <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{contact_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{number}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{amount}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date_line}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{payment_details}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{business_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{signature}"}</code>
+          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.8 }}>
+            Variables: {["{first_name}", "{last_name}", "{contact_name}", "{number}", "{amount}", "{due_date}", "{due_date_line}", "{payment_details}", "{business_name}", "{signature}"].map((v) => (
+              <code key={v} style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b", marginRight: 4, whiteSpace: "nowrap" }}>{v}</code>
+            ))}
+            <div style={{ marginTop: 4, color: "#94a3b8" }}><code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{first_name}"}</code> = Cameron · <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{contact_name}"}</code> = Cameron Mawson (full name)</div>
           </div>
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Invoice Email</label>
