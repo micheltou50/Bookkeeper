@@ -3084,6 +3084,7 @@ export default function BookkeeperApp() {
     const fileRef = useRef(null);
     const [reminderRunning, setReminderRunning] = useState(false);
     const [reminderResult, setReminderResult] = useState(null);
+    const SHOW_MANUAL_REMINDER_CONTROLS = false; // manual Preview/Send Now buttons hidden; daily auto-reminders unaffected
 
     const runReminderJob = async (dryRun) => {
       if (!dryRun && !window.confirm("Send overdue payment reminders now? Emails will go out to clients whose invoices are 1, 7, 14 or 30 days overdue.")) return;
@@ -3260,12 +3261,16 @@ export default function BookkeeperApp() {
         {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
           <>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
+            Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once — nothing for you to do.
           </div>
+          {/* Manual Preview / Send Now controls hidden per preference; the daily
+              automatic reminders still run. Flip to true to bring them back. */}
+          {SHOW_MANUAL_REMINDER_CONTROLS && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
             <button onClick={() => runReminderJob(false)} disabled={reminderRunning} style={{ ...s.btn("#f59e0b"), opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Send Reminders Now"}</button>
           </div>
+          )}
           {reminderResult && (
             <div style={{ marginTop: 10, padding: 12, background: reminderResult.error ? "#fef2f2" : "#f8fafc", border: `1px solid ${reminderResult.error ? "#fecaca" : "#e2e8f0"}`, borderRadius: 8, fontSize: 12, color: "#334155" }}>
               {reminderResult.error ? (
