@@ -1674,43 +1674,6 @@ export default function BookkeeperApp() {
     return ok;
   };
 
-  const createOutlookDraft = async (inv) => {
-    if (!emailConn) { alert("Connect Outlook in Settings first."); return; }
-    setOutlookDraftLoading(inv.id);
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-      if (!token) throw new Error("Not authenticated");
-      // Always (re)generate the PDF so the attachment reflects the latest edits.
-      // Fail hard if it doesn't succeed — never create a draft without the PDF.
-      const pdfResp = await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
-      });
-      if (!pdfResp.ok) {
-        let detail = "";
-        try { detail = (await pdfResp.json()).error || ""; } catch { /* ignore */ }
-        throw new Error("Could not generate the invoice PDF, so the Outlook draft was not created. " + (detail || "Please try again."));
-      }
-      const resp = await fetch(`${API_BASE}/.netlify/functions/send-invoice-outlook`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice_id: inv.id, draft: true }),
-      });
-      const result = await resp.json();
-      if (!resp.ok) throw new Error(result.error || "Draft creation failed");
-      if (result.webLink && !isMobile) window.open(result.webLink, "_blank");
-      alert("Draft created in Outlook with PDF attached. Open Outlook to review and send.");
-      return true;
-    } catch (err) {
-      console.error("Outlook draft error:", err);
-      alert("Failed to create Outlook draft: " + err.message);
-      return false;
-    } finally {
-      setOutlookDraftLoading(null);
-    }
-  };
-
   // One-click REAL send: fresh PDF, then send-invoice-outlook WITHOUT the draft
   // flag — the server attaches the PDF, applies the email template, sends from
   // the user's Outlook, and flips draft→sent + sent_at. We mirror that status
@@ -3813,7 +3776,6 @@ export default function BookkeeperApp() {
               <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
               <div style={{ position: "fixed", top: menu.y + 4, left: Math.max(8, menu.x - 212), width: 212, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
                 {emailConn && item("Compose email…", <Icons.Send />, () => openComposeFor(mi))}
-                {emailConn && item("Create Outlook draft (review first)", <Icons.Outlook />, async () => { const ok = await createOutlookDraft(mi); if (ok) await offerMarkSent(mi); })}
                 {!emailConn && item("Email via default app", <Icons.Send />, async () => { sendInvoice(mi); await offerMarkSent(mi); })}
                 {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
                 {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
