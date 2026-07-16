@@ -3812,8 +3812,9 @@ export default function BookkeeperApp() {
             <>
               <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
               <div style={{ position: "fixed", top: menu.y + 4, left: Math.max(8, menu.x - 212), width: 212, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
+                {emailConn && item("Compose email…", <Icons.Send />, () => openComposeFor(mi))}
                 {emailConn && item("Create Outlook draft (review first)", <Icons.Outlook />, async () => { const ok = await createOutlookDraft(mi); if (ok) await offerMarkSent(mi); })}
-                {item("Email via default app", <Icons.Send />, async () => { sendInvoice(mi); await offerMarkSent(mi); })}
+                {!emailConn && item("Email via default app", <Icons.Send />, async () => { sendInvoice(mi); await offerMarkSent(mi); })}
                 {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
                 {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
                 {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
