@@ -355,25 +355,32 @@ const handler = async (req) => {
     }
 
     // kind === "invoice"/"quote": two-stage filing.
-    //   Draft (or sent-with-no-project) → central "<base>/Admin/<Quotes|Invoices>".
-    //   Sent + has a project        → "<project>/Admin/<Quotes|Invoices>", and the
-    //                                  central pending copy is removed (a move).
+    //   Draft (or sent-with-no-project) → central pending "<centralBase>/Admin/<Quotes|Invoices>".
+    //   Sent + has a project           → "<project>/Admin/<Quotes|Invoices>", pending copy removed.
+    // The central pending Admin sits at the PARENT of the projects base, e.g.
+    // projectsBase "Mworx Group/Projects" → central "Mworx Group/Admin/..." (a
+    // sibling of Projects, reusing any existing Admin). Falls back to projectsBase
+    // itself when it has no parent segment.
     const ensuredBase = await ensureFolderPath(tok, projectsBase);
     if (ensuredBase.auth) return { auth: true };
     if (ensuredBase.status) return { error: `OneDrive folder error (${ensuredBase.status})` };
-    const baseItem = await getItemByPath(tok, projectsBase);
-    if (baseItem.status === 401) return { auth: true };
-    if (baseItem.status || !baseItem.id) return { error: `OneDrive folder error (${baseItem.status || "unknown"})` };
+
+    const centralBase = projectsBase.includes("/") ? projectsBase.split("/").slice(0, -1).join("/") : projectsBase;
+    const ensuredCentral = await ensureFolderPath(tok, centralBase);
+    if (ensuredCentral.auth) return { auth: true };
+    if (ensuredCentral.status) return { error: `OneDrive folder error (${ensuredCentral.status})` };
+    const centralBaseItem = await getItemByPath(tok, centralBase);
+    if (centralBaseItem.status === 401) return { auth: true };
+    if (centralBaseItem.status || !centralBaseItem.id) return { error: `OneDrive folder error (${centralBaseItem.status || "unknown"})` };
 
     const isMove = docIsSent && jobNumber && docSubfolder; // sent + project → project folder
 
-    // Resolve the central "<base>/Admin/<sub>" folder. For a MOVE it's only used to
-    // clean up the pending copy (best-effort — a hiccup here must NOT block the
-    // project upload). For a draft / sent-no-project it IS the upload target, so a
-    // failure there is fatal.
+    // Resolve the central "<centralBase>/Admin/<sub>" folder. For a MOVE it's only
+    // used to clean up the pending copy (best-effort — a hiccup here must NOT block
+    // the project upload). For a draft / sent-no-project it IS the upload target.
     let central = null;
     if (docSubfolder) {
-      const c = await ensureAdminSubfolder(tok, baseItem.id, docSubfolder);
+      const c = await ensureAdminSubfolder(tok, centralBaseItem.id, docSubfolder);
       if (c.auth) return { auth: true };
       if (!isMove && (c.status || !c.id)) return { error: `OneDrive folder error (${c.status || "unknown"})` };
       central = (c.status || !c.id) ? null : c;
@@ -383,7 +390,7 @@ const handler = async (req) => {
       if (!prev_name) return;
       if (prev_subfolder && central && prev_subfolder === docSubfolder) { await deleteChildByName(tok, central.id, prev_name); return; }
       // Different subfolder (type changed): locate that central subfolder without creating.
-      const admin = await ensureChildFolder(tok, baseItem.id, "Admin");
+      const admin = await ensureChildFolder(tok, centralBaseItem.id, "Admin");
       if (admin.id) { const alt = await ensureChildFolder(tok, admin.id, prev_subfolder || docSubfolder); if (alt.id) await deleteChildByName(tok, alt.id, prev_name); }
     };
 
@@ -408,8 +415,8 @@ const handler = async (req) => {
     }
 
     // Draft, or sent with no matched project → central pending area.
-    const destId = central ? central.id : baseItem.id;
-    const savedPrefix = central ? `Admin/${docSubfolder}` : projectsBase;
+    const destId = central ? central.id : centralBaseItem.id;
+    const savedPrefix = central ? `${centralBase}/Admin/${docSubfolder}` : centralBase;
     const up = await uploadToFolder(tok, destId, fileName, fileBuffer, contentType);
     if (up.status === 401) return { auth: true };
     if (!up.ok) {

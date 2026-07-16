@@ -2789,15 +2789,9 @@ export default function BookkeeperApp() {
           <button onClick={saveAsTemplate} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, gap: 6 }}>☆ Save as Template</button>
         )}
         {existing && (<>
+          {/* Emailing goes through "Save & Email…" (the compose window) above.
+              An Outlook-draft handoff still lives in the list ⋯ menu for power users. */}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); await offerMarkSent({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
-              <Icons.Send /> Open Email + PDF
-            </button>
-            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); const ok = await createOutlookDraft({ ...existing, ...inv }); if (ok) await offerMarkSent({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
-              <Icons.Outlook /> {outlookDraftLoading === existing.id ? "Creating…" : "Open in Outlook"}
-            </button>
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button onClick={() => downloadPDF(existing)} disabled={pdfLoading === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: pdfLoading === existing.id ? "#94a3b8" : "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: pdfLoading === existing.id ? 0.5 : 1 }}>
               <Icons.Download /> {pdfLoading === existing.id ? "Generating…" : "Download PDF"}
             </button>
