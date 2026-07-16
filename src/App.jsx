@@ -1306,11 +1306,25 @@ export default function BookkeeperApp() {
     } else {
       setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates } : i)));
     }
+    // Keep a DRAFT's pending OneDrive copy in sync after a content edit. Issued
+    // docs (sent/overdue/paid) are left alone here so their filed record isn't
+    // silently overwritten — they only update on an explicit re-send. If the
+    // number/type changed, tell the server the old name so it drops that stale copy.
+    const oldRow = invoices.find((i) => i.id === id);
+    const finalStatus = "status" in dbUpdates ? dbUpdates.status : oldRow?.status;
+    if ("items" in updates && emailConn && finalStatus === "draft") {
+      const newName = oneDriveDocName(dbUpdates.type || oldRow?.type, dbUpdates.number ?? oldRow?.number, id);
+      const oldName = oldRow ? oneDriveDocName(oldRow.type, oldRow.number, id) : null;
+      const prev = oldName && oldName !== newName
+        ? { name: oldName, subfolder: (oldRow?.type === "quote" ? "Quotes" : "Invoices") }
+        : {};
+      regenAndFileOneDrive(id, prev);
+    }
     formDirtyRef.current = false;
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
-    return true; // callers (saveAndSend) gate the real send on a successful save
+    return true; // callers (saveAndCompose) gate the compose step on a successful save
   };
 
   const deleteInvoice = async (id) => {
@@ -1446,6 +1460,7 @@ export default function BookkeeperApp() {
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(invUpd).eq("id", quote.id), "accept quote");
     if (!ok) return null;
     setInvoices((prev) => prev.map((i) => (i.id === quote.id ? { ...i, ...invUpd } : i)));
+    fileIssuedToOneDrive(quote.id); // accepted quote → move from pending into the project folder
     // A signed-up job is no longer a lead.
     if ((project.status || "active") === "lead") { await updateProject(projectId, { status: "active" }); return { ...project, status: "active" }; }
     return project;
@@ -1789,6 +1804,7 @@ export default function BookkeeperApp() {
 
   const markPaid = (inv) => {
     updateInvoice(inv.id, { status: "paid", paid_date: today() });
+    fileIssuedToOneDrive(inv.id);
   };
 
   // Close the draft→sent loop after a document is emailed: offer to flip a still
@@ -1802,6 +1818,7 @@ export default function BookkeeperApp() {
       : `Mark quote ${inv.number} as Sent?`;
     if (!window.confirm(msg)) return false;
     await updateInvoice(inv.id, { status: "sent" });
+    fileIssuedToOneDrive(inv.id); // now issued → move into the project folder
     return true;
   };
 
@@ -1811,10 +1828,14 @@ export default function BookkeeperApp() {
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark paid");
     if (!ok) return;
     setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
+    fileIssuedToOneDrive(inv.id);
   };
 
   // Save an invoice PDF or expense receipt to OneDrive via the Netlify function
   // (reuses the Microsoft connection). silent=true for auto-save (no popups).
+  // The OneDrive filename for a doc — must match the server's (sanitize + prefix).
+  const oneDriveDocName = (type, number, id) => String(`${type === "quote" ? "Quote" : "Invoice"} ${number || id}`).replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim() + ".pdf";
+
   const saveToOneDrive = async (kind, id, opts = {}) => {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -1822,7 +1843,8 @@ export default function BookkeeperApp() {
       const resp = await fetch(`${API_BASE}/.netlify/functions/onedrive-upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ kind, id }),
+        // prev_name/prev_subfolder let the server clear a stale central copy after a rename.
+        body: JSON.stringify({ kind, id, prev_name: opts.prevName || null, prev_subfolder: opts.prevSubfolder || null }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) { if (!opts.silent) alert(data.error || "Could not save to OneDrive."); return false; }
@@ -1833,6 +1855,30 @@ export default function BookkeeperApp() {
       return false;
     }
   };
+
+  // Regenerate the PDF (so it reflects the latest edits — onedrive-upload only
+  // rebuilds when there's no stored PDF, and there always is one after create),
+  // then re-file it. Fire-and-forget; used when a DRAFT is edited so its pending
+  // OneDrive copy stays current. Issued docs are never auto-refiled — they only
+  // move/update on an explicit send, preserving the sent record.
+  const regenAndFileOneDrive = async (invId, prev = {}) => {
+    if (!emailConn) return;
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) return;
+      await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: invId, auth_token: token }),
+      });
+    } catch { /* best-effort */ }
+    saveToOneDrive("invoice", invId, { silent: true, prevName: prev.name, prevSubfolder: prev.subfolder });
+  };
+
+  // A draft that becomes issued (sent/accepted/paid) outside the compose flow —
+  // "mark sent", accept a quote, mark paid — must still move from the central
+  // pending area into its project folder. Best-effort, silent. (The compose send
+  // already re-files itself.)
+  const fileIssuedToOneDrive = (invId) => { if (emailConn) saveToOneDrive("invoice", invId, { silent: true }); };
 
   const connectOutlook = async () => {
     const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -2453,7 +2499,7 @@ export default function BookkeeperApp() {
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
+      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
     const invOverdue = existing && f.type !== "quote" ? daysOverdue({ status: existing.status, due_date: f.due_date }) : 0;
@@ -2486,7 +2532,35 @@ export default function BookkeeperApp() {
     const total = isLump ? (Number(f.lump_amount) || 0) : f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
     const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
     const sortedJobs = [...divJobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
+    // An issued invoice is a record. Editing its figures is discouraged — offer a
+    // "revised invoice" (a fresh draft copy) instead, which keeps the original.
+    const isIssued = !!existing && f.type !== "quote" && ["sent", "overdue", "paid"].includes(existing.status);
+    // "Figures changed" also covers line-item edits that net to the same total
+    // (swapped amounts, changed descriptions/qty) — those still alter the record.
+    const itemsSig = (arr) => JSON.stringify((arr || []).map((i) => ({ d: i.description || "", n: i.note || "", q: Number(i.qty) || 0, r: Number(i.rate) || 0 })));
+    const figuresChanged = isIssued && (
+      Number(existing.total || 0) !== total ||
+      String(existing.number || "") !== String(f.number || "") ||
+      itemsSig(existing.items) !== itemsSig(f.items)
+    );
+    const reviseInvoice = () => {
+      setInvoiceSeed({
+        type: "invoice",
+        contact_name: f.contact_name,
+        project_id: f.project_id || "",
+        projectName: f.job,
+        pricing_mode: f.pricing_mode || "itemised",
+        lump_amount: isLump ? String(total) : "",
+        items: f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
+        notes: f.notes,   // carry the original's notes + T&Cs onto the revised copy
+        terms: f.terms,
+      });
+      setEditItem(null);
+      setModal("invoice");
+    };
     const saveInv = async () => {
+      // Guard editing a sent invoice's figures: warn before overwriting the record.
+      if (figuresChanged && !window.confirm(`Invoice ${existing.number} was already sent to the client${existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}, and you've changed its figures.\n\nSaving overwrites your record of what was billed. Normally you'd issue a REVISED invoice instead — Cancel, then "Create revised invoice".\n\nSave over the original anyway?`)) return null;
       const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items };
       let saved;
       // Gate on success: updateInvoice/addInvoice return falsy on failure, so a
@@ -2564,6 +2638,17 @@ export default function BookkeeperApp() {
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} {f.type === "quote" ? "Quote" : "Invoice"}</h3>
           <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
+        {isIssued && (
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+            <span style={{ fontSize: 16, lineHeight: 1 }}>⚠️</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12.5, color: "#92400e", lineHeight: 1.5 }}>
+                This invoice was already sent to the client{existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}. It's a record of what you billed — to change the amount, issue a <strong>revised invoice</strong> instead of editing this one.
+              </div>
+              <button type="button" onClick={reviseInvoice} style={{ ...s.btn(accent, true), fontSize: 11, marginTop: 8 }}><Icons.Plus /> Create revised invoice</button>
+            </div>
+          </div>
+        )}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>

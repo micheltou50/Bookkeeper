@@ -115,6 +115,34 @@ async function ensureChildFolder(token, parentId, name) {
   return { id: j.id, name: j.name, webUrl: j.webUrl };
 }
 
+// Resolve a folder path to its drive item (for its id). Returns { id } or { status }.
+async function getItemByPath(token, path) {
+  const seg = encPath(path);
+  const url = seg ? `${GRAPH}/me/drive/root:/${seg}` : `${GRAPH}/me/drive/root`;
+  const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) return { status: r.status };
+  const j = await r.json();
+  return { id: j.id, name: j.name, webUrl: j.webUrl };
+}
+
+// Best-effort delete of a named file directly under a parent folder id. Used to
+// remove the central "pending" copy once a document is filed into its project.
+// Never throws; a missing file (already moved/renamed) is a no-op.
+async function deleteChildByName(token, parentId, name) {
+  let url = `${GRAPH}/me/drive/items/${parentId}/children?$select=id,name&$top=200`;
+  const items = [];
+  while (url) {
+    const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return; // can't list — give up quietly
+    const j = await r.json();
+    items.push(...(j.value || []));
+    url = j["@odata.nextLink"] || null;
+  }
+  const hit = items.find((c) => String(c.name).toLowerCase() === String(name).toLowerCase());
+  if (!hit) return;
+  await fetchWithTimeout(`${GRAPH}/me/drive/items/${hit.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+}
+
 // Ensure the "<job folder>/Admin/<Quotes|Invoices>" chain exists; returns the
 // leaf folder. Propagates {auth:true} on 401 so run()'s token-refresh retry works.
 async function ensureAdminSubfolder(token, jobFolderId, leafName) {
@@ -183,7 +211,9 @@ const handler = async (req) => {
   const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   let body;
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
-  const { kind, id } = body;
+  // prev_name/prev_subfolder: when a draft was renamed (or its type changed), the
+  // client passes the previously-filed name so its stale central copy is removed.
+  const { kind, id, prev_name, prev_subfolder } = body;
   if (!authToken || !kind || !id) return json({ error: "kind, id and Authorization required" }, 400);
 
   const userClient = createClient(
@@ -196,6 +226,7 @@ const handler = async (req) => {
   let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
   let receiptFolderPath = null;
   let docSubfolder = null; // "Quotes" | "Invoices" — Admin subfolder for kind "invoice"
+  let docIsSent = false;   // sent docs file into the project folder; drafts stay central
 
   if (kind === "invoice") {
     let { data: inv } = await supabase.from("bk_invoices").select("*").eq("id", id).single();
@@ -218,6 +249,10 @@ const handler = async (req) => {
     fileName = sanitize(`${docType} ${inv.number || id}`) + ".pdf";
     fallbackName = "Unfiled Invoices";
     docSubfolder = inv.type === "quote" ? "Quotes" : "Invoices";
+    // "Sent" = anything past draft (sent/overdue/paid for invoices; sent/accepted
+    // for quotes). Drafts live in the central pending area; sent docs move into
+    // the project folder.
+    docIsSent = !!inv.status && inv.status !== "draft";
     const { data: jobsList } = await supabase.from("bk_jobs").select("id,job_number,name,address").eq("business_id", businessId);
     let job = inv.project_id ? (jobsList || []).find((j) => j.id === inv.project_id) : null;
     if (!job && inv.job) job = (jobsList || []).find((j) => j.address === inv.job || j.name === inv.job);
@@ -319,26 +354,62 @@ const handler = async (req) => {
       return { ok: true, webUrl: item.webUrl, savedTo: `${receiptFolderPath}/${fileName}` };
     }
 
-    // kind === "invoice" (covers quotes too). Ensure the base exists first — the
-    // project branch always did this, but invoices previously 404'd when the base
-    // folder was missing.
+    // kind === "invoice"/"quote": two-stage filing.
+    //   Draft (or sent-with-no-project) → central "<base>/Admin/<Quotes|Invoices>".
+    //   Sent + has a project        → "<project>/Admin/<Quotes|Invoices>", and the
+    //                                  central pending copy is removed (a move).
     const ensuredBase = await ensureFolderPath(tok, projectsBase);
     if (ensuredBase.auth) return { auth: true };
     if (ensuredBase.status) return { error: `OneDrive folder error (${ensuredBase.status})` };
-    const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
-    if (folder.status === 401) return { auth: true };
-    if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
-    // Real project folder → file under Admin/Quotes|Invoices. "Unfiled Invoices"
-    // (no matched project) deliberately stays flat.
-    let destId = folder.id;
-    let savedPrefix = folder.name;
-    if (jobNumber && docSubfolder) {
+    const baseItem = await getItemByPath(tok, projectsBase);
+    if (baseItem.status === 401) return { auth: true };
+    if (baseItem.status || !baseItem.id) return { error: `OneDrive folder error (${baseItem.status || "unknown"})` };
+
+    const isMove = docIsSent && jobNumber && docSubfolder; // sent + project → project folder
+
+    // Resolve the central "<base>/Admin/<sub>" folder. For a MOVE it's only used to
+    // clean up the pending copy (best-effort — a hiccup here must NOT block the
+    // project upload). For a draft / sent-no-project it IS the upload target, so a
+    // failure there is fatal.
+    let central = null;
+    if (docSubfolder) {
+      const c = await ensureAdminSubfolder(tok, baseItem.id, docSubfolder);
+      if (c.auth) return { auth: true };
+      if (!isMove && (c.status || !c.id)) return { error: `OneDrive folder error (${c.status || "unknown"})` };
+      central = (c.status || !c.id) ? null : c;
+    }
+    // Remove a stale central copy left by a rename/type-change before this filing.
+    const cleanupPrev = async () => {
+      if (!prev_name) return;
+      if (prev_subfolder && central && prev_subfolder === docSubfolder) { await deleteChildByName(tok, central.id, prev_name); return; }
+      // Different subfolder (type changed): locate that central subfolder without creating.
+      const admin = await ensureChildFolder(tok, baseItem.id, "Admin");
+      if (admin.id) { const alt = await ensureChildFolder(tok, admin.id, prev_subfolder || docSubfolder); if (alt.id) await deleteChildByName(tok, alt.id, prev_name); }
+    };
+
+    if (isMove) {
+      // File into the project's Admin/<sub>, then remove central pending copies.
+      const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
+      if (folder.status === 401) return { auth: true };
+      if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
       const sub = await ensureAdminSubfolder(tok, folder.id, docSubfolder);
       if (sub.auth) return { auth: true };
       if (sub.status || !sub.id) return { error: `OneDrive folder error (${sub.status || "unknown"})` };
-      destId = sub.id;
-      savedPrefix = `${folder.name}/Admin/${docSubfolder}`;
+      const up = await uploadToFolder(tok, sub.id, fileName, fileBuffer, contentType);
+      if (up.status === 401) return { auth: true };
+      if (!up.ok) {
+        let e = ""; try { e = JSON.stringify(await up.json()); } catch { /* ignore */ }
+        return { error: `OneDrive upload failed (${up.status})`, detail: e };
+      }
+      const item = await up.json();
+      if (central?.id) await deleteChildByName(tok, central.id, fileName); // current-name pending copy
+      await cleanupPrev();                                                  // renamed pending copy
+      return { ok: true, webUrl: item.webUrl, savedTo: `${folder.name}/Admin/${docSubfolder}/${fileName}` };
     }
+
+    // Draft, or sent with no matched project → central pending area.
+    const destId = central ? central.id : baseItem.id;
+    const savedPrefix = central ? `Admin/${docSubfolder}` : projectsBase;
     const up = await uploadToFolder(tok, destId, fileName, fileBuffer, contentType);
     if (up.status === 401) return { auth: true };
     if (!up.ok) {
@@ -347,6 +418,7 @@ const handler = async (req) => {
       return { error: `OneDrive upload failed (${up.status})`, detail: e };
     }
     const item = await up.json();
+    await cleanupPrev(); // drop the pre-rename central copy
     return { ok: true, webUrl: item.webUrl, savedTo: `${savedPrefix}/${fileName}` };
   };
 
