@@ -189,8 +189,11 @@ const handler = async (req) => {
         : `<p>Payment is due by <strong>${fmtDate(inv.due_date)}</strong>.</p>`)
     : "";
 
-  const signatureHtml = profile?.email_signature
-    ? profile.email_signature.replace(/\n/g, "<br>")
+  // A saved signature may be plain text or full HTML (logo, disclaimer, etc.).
+  // HTML is used verbatim; plain text gets nl2br. Whitespace-only → fallback.
+  const sigSaved = (profile?.email_signature || "").trim() ? profile.email_signature : "";
+  const signatureHtml = sigSaved
+    ? (/<[a-z][\s\S]*>/i.test(sigSaved) ? sigSaved : sigSaved.replace(/\n/g, "<br>"))
     : `<strong>${escapeHtml(bName)}</strong>${profile?.abn ? `<br>ABN: ${escapeHtml(profile.abn)}` : ""}${profile?.email ? `<br>${escapeHtml(profile.email)}` : ""}${profile?.phone ? ` · ${escapeHtml(profile.phone)}` : ""}`;
 
   const nameParts = String(inv.contact_name || "").trim().split(/\s+/).filter(Boolean);

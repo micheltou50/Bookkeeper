@@ -105,6 +105,9 @@ const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
 // Everything after the first word ("Cameron Mawson" → "Mawson"; "Mary Jane Watson"
 // → "Jane Watson"). Empty for single-word names.
 const lastName = (n) => (n || "").trim().split(/\s+/).slice(1).join(" ");
+// A signature can be plain text or full HTML. Plain text gets nl2br; HTML is
+// used verbatim (nl2br would inject stray <br>s between its tags and break it).
+const signatureToHtml = (s) => { const t = String(s || ""); return /<[a-z][\s\S]*>/i.test(t) ? t : t.replace(/\n/g, "<br>"); };
 const today = () => new Date().toISOString().split("T")[0];
 
 // Whole calendar days an unpaid invoice is past its due date. Returns 0 for
@@ -1623,7 +1626,8 @@ export default function BookkeeperApp() {
   // the compose window's signature preview.
   const defaultSignatureText = () => {
     const bName = profile.name || "our company";
-    return profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    // Treat a whitespace-only signature as empty so the fallback still applies.
+    return (profile.email_signature || "").trim() ? profile.email_signature : `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
   };
 
   // withSignature:false strips the {signature} placeholder so the compose window
@@ -4765,7 +4769,7 @@ export default function BookkeeperApp() {
     to: composeDoc.contact_email || "",
     subject: `${composeDoc.type === "quote" ? "Quote" : "Invoice"} ${composeDoc.number || ""} from ${profile.name || "Our company"}`.trim(),
     body: buildEmailBody(composeDoc, { withSignature: false }).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd(),
-    signatureHtml: defaultSignatureText().replace(/\n/g, "<br>"),
+    signatureHtml: signatureToHtml(defaultSignatureText()),
   } : null;
 
   const SidebarContent = () => (
