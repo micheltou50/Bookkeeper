@@ -18,6 +18,7 @@ function getConfig() {
       process.env.SERVICE_ROLE_KEY,
     stripeKey: process.env.STRIPE_SECRET_KEY,
     surchargePct: Number(process.env.STRIPE_SURCHARGE_PCT ?? "1.7") || 0,
+    surchargeFixed: Number(process.env.STRIPE_SURCHARGE_FIXED ?? "0.30") || 0,
     siteUrl: process.env.URL || "https://bkeeper.netlify.app",
   };
 }
@@ -113,7 +114,20 @@ const handler = async (req) => {
   }
 
   const baseCents = Math.round(base * 100);
-  const surchargeCents = cfg.surchargePct > 0 ? Math.round(baseCents * (cfg.surchargePct / 100)) : 0;
+  // Gross up the surcharge so the customer covers Stripe's FULL fee, leaving the
+  // business the exact base. Stripe charges (rate % of the total) + a fixed fee,
+  // and its % applies to the surcharge itself — so a flat "base * rate" always
+  // falls short. Solve total for: total - (total*rate + fixed) = base
+  //   => total = (base + fixed) / (1 - rate),  surcharge = total - base
+  // rate/fixed come from STRIPE_SURCHARGE_PCT / STRIPE_SURCHARGE_FIXED so they can
+  // be tuned to the real Stripe rate without a code change.
+  const rate = cfg.surchargePct / 100;
+  const fixedCents = Math.round(cfg.surchargeFixed * 100);
+  let surchargeCents = 0;
+  if ((rate > 0 || fixedCents > 0) && rate < 1) {
+    const totalCents = Math.round((baseCents + fixedCents) / (1 - rate));
+    surchargeCents = totalCents - baseCents;
+  }
 
   const form = new URLSearchParams();
   form.set("mode", "payment");
