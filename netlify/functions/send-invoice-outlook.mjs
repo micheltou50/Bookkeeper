@@ -65,9 +65,9 @@ function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
 }
 
-const DEFAULT_INVOICE_TEMPLATE = `<p>Hi {contact_name},</p><p>Please find attached invoice {number} for {amount}.</p>{due_date_line}{payment_details}<p>Kind regards,<br>{signature}</p>`;
+const DEFAULT_INVOICE_TEMPLATE = `<p>Hi {first_name},</p><p>Please find attached invoice {number} for {amount}.</p>{due_date_line}{payment_details}<p>Kind regards,<br>{signature}</p>`;
 
-const DEFAULT_QUOTE_TEMPLATE = `<p>Hi {contact_name},</p><p>Please find attached quote {number} for {amount}.</p><p>This quote is valid until {due_date}.</p><p>Kind regards,<br>{signature}</p>`;
+const DEFAULT_QUOTE_TEMPLATE = `<p>Hi {first_name},</p><p>Please find attached quote {number} for {amount}.</p><p>This quote is valid until {due_date}.</p><p>Kind regards,<br>{signature}</p>`;
 
 const HTML_VARS = new Set(["payment_details", "signature", "due_date_line"]);
 
@@ -97,7 +97,11 @@ const handler = async (req) => {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
-  const { invoice_id, draft } = body;
+  // subject_override / html_override / to_override come from the in-app compose
+  // window, where the user has edited the email before sending. When present they
+  // replace the template-rendered subject/body/recipient (PDF attachment, status
+  // flip, and everything else stay the same).
+  const { invoice_id, draft, subject_override, html_override, to_override } = body;
   if (!invoice_id || !authToken) {
     return new Response(JSON.stringify({ error: "invoice_id and Authorization header required" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
@@ -185,11 +189,17 @@ const handler = async (req) => {
         : `<p>Payment is due by <strong>${fmtDate(inv.due_date)}</strong>.</p>`)
     : "";
 
-  const signatureHtml = profile?.email_signature
-    ? profile.email_signature.replace(/\n/g, "<br>")
+  // A saved signature may be plain text or full HTML (logo, disclaimer, etc.).
+  // HTML is used verbatim; plain text gets nl2br. Whitespace-only → fallback.
+  const sigSaved = (profile?.email_signature || "").trim() ? profile.email_signature : "";
+  const signatureHtml = sigSaved
+    ? (/<[a-z][\s\S]*>/i.test(sigSaved) ? sigSaved : sigSaved.replace(/\n/g, "<br>"))
     : `<strong>${escapeHtml(bName)}</strong>${profile?.abn ? `<br>ABN: ${escapeHtml(profile.abn)}` : ""}${profile?.email ? `<br>${escapeHtml(profile.email)}` : ""}${profile?.phone ? ` · ${escapeHtml(profile.phone)}` : ""}`;
 
+  const nameParts = String(inv.contact_name || "").trim().split(/\s+/).filter(Boolean);
   const templateVars = {
+    first_name: nameParts[0] || "there",
+    last_name: nameParts.slice(1).join(" "),
     contact_name: inv.contact_name || "there",
     number: inv.number || "",
     amount: fmtAUD(inv.total || 0),
@@ -203,14 +213,19 @@ const handler = async (req) => {
   const customTemplate = inv.type === "quote" ? profile?.email_template_quote : profile?.email_template_invoice;
   const template = customTemplate?.trim() || (inv.type === "quote" ? DEFAULT_QUOTE_TEMPLATE : DEFAULT_INVOICE_TEMPLATE);
 
-  const subject = `${docType} ${inv.number} from ${bName}`;
-  const rawBody = renderTemplate(template, templateVars);
+  const subject = (typeof subject_override === "string" && subject_override.trim())
+    ? subject_override.trim()
+    : `${docType} ${inv.number} from ${bName}`;
+  const rawBody = (typeof html_override === "string" && html_override.trim())
+    ? html_override
+    : renderTemplate(template, templateVars);
   const htmlBody = `<div style="font-family: 'Century Gothic', CenturyGothic, AppleGothic, sans-serif; font-size: 11pt;">${rawBody}</div>`;
 
+  const recipient = (typeof to_override === "string" && to_override.trim()) ? to_override.trim() : inv.contact_email;
   const message = {
     subject,
     body: { contentType: "HTML", content: htmlBody },
-    toRecipients: [{ emailAddress: { address: inv.contact_email, name: inv.contact_name || "" } }],
+    toRecipients: [{ emailAddress: { address: recipient, name: inv.contact_name || "" } }],
   };
   if (pdfAttachment) message.attachments = [pdfAttachment];
 

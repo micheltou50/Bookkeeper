@@ -102,6 +102,12 @@ const fmtNum = (n) => new Intl.NumberFormat("en-AU", { minimumFractionDigits: 2,
 const fmtDate = (d) => { if (!d) return ""; const dt = new Date(d); return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }); };
 // First word of a name, for friendly email greetings ("Hi John,").
 const firstName = (n) => (n || "").trim().split(/\s+/)[0] || "";
+// Everything after the first word ("Cameron Mawson" → "Mawson"; "Mary Jane Watson"
+// → "Jane Watson"). Empty for single-word names.
+const lastName = (n) => (n || "").trim().split(/\s+/).slice(1).join(" ");
+// A signature can be plain text or full HTML. Plain text gets nl2br; HTML is
+// used verbatim (nl2br would inject stray <br>s between its tags and break it).
+const signatureToHtml = (s) => { const t = String(s || ""); return /<[a-z][\s\S]*>/i.test(t) ? t : t.replace(/\n/g, "<br>"); };
 const today = () => new Date().toISOString().split("T")[0];
 
 // Whole calendar days an unpaid invoice is past its due date. Returns 0 for
@@ -184,15 +190,22 @@ function getNextDocumentNumber(invoices, divisionId, type) {
 // Per-division job/project number in the YY### scheme (e.g. 26106 = 6th job of
 // 2026). Continues from the highest existing number for the current year; if
 // there are none yet, starts the year at YY101.
-function getNextJobNumber(jobs, divisionId) {
+// Project numbers are a single sequence for the whole business — NOT per
+// division (unlike quote/invoice numbers, which carry a division prefix). A
+// per-division count made each new division restart at YY101 and collide with
+// another division's existing numbers, so we count across all jobs here.
+function getNextJobNumber(jobs) {
   const yy = String(new Date().getFullYear()).slice(-2);
   const nums = (jobs || [])
-    .filter((j) => recordDivision(j) === divisionId)
     .map((j) => { const m = String(j.job_number || "").match(/^(\d{4,})$/); return m ? Number(m[1]) : 0; })
     .filter((n) => n > 0 && String(n).startsWith(yy));
   const next = nums.length ? Math.max(...nums) + 1 : Number(`${yy}101`);
   return String(next);
 }
+
+// Built-in application types for projects. The dropdown also offers any custom
+// types already saved on other projects, plus an "Add new…" free-text option.
+const APPLICATION_TYPES = ["DA", "CC", "CDC", "S4.55", "Drafting Only"];
 
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function getDefaultDueDate(type, date) { return addDays(date || today(), type === "quote" ? 30 : 7); }
@@ -688,6 +701,64 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
   );
 }
 
+// In-app "compose email" window for sending a quote/invoice. The user reviews and
+// edits the recipient, subject, and body (signature shown separately, toggleable)
+// before hitting Send — nothing goes out automatically. Top-level so a parent
+// re-render can't remount it and lose the user's edits mid-compose. The PDF is
+// generated + attached and the status flips to Sent inside onSend.
+function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
+  const [to, setTo] = useState(defaults.to);
+  const [subject, setSubject] = useState(defaults.subject);
+  const [body, setBody] = useState(defaults.body);
+  const [includeSig, setIncludeSig] = useState(true);
+  const [sending, setSending] = useState(false);
+  const docType = inv.type === "quote" ? "Quote" : "Invoice";
+  const attachName = `${docType} ${inv.number || "draft"}.pdf`;
+
+  const send = async () => {
+    if (!to.trim()) { alert("Add a recipient email address."); return; }
+    // Escape the user's plain-text message, then nl2br. The signature is HTML
+    // (per Settings — "HTML allowed"), appended as-is, matching the server.
+    const esc = (x) => String(x).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const html = esc(body).replace(/\n/g, "<br>") + (includeSig && defaults.signatureHtml ? `<br><br>${defaults.signatureHtml}` : "");
+    setSending(true);
+    await onSend({ to: to.trim(), subject: subject.trim(), html });
+    setSending(false); // onSend closes the window on success
+  };
+
+  const lbl = { display: "block", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8", marginBottom: 5 };
+  const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "inherit", color: "#1e293b", background: "#fff" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", padding: isMobile ? 0 : 16 }} onClick={(e) => { if (e.target === e.currentTarget && !sending) onClose(); }}>
+      <div style={{ background: "#fff", width: isMobile ? "100%" : 560, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", borderRadius: isMobile ? "16px 16px 0 0" : 14, boxShadow: "0 20px 60px -15px rgba(16,24,40,0.4)", padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Send {docType} {inv.number}</h3>
+          <button onClick={onClose} disabled={sending} style={{ background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>To</label><input value={to} onChange={(e) => setTo(e.target.value)} style={inp} placeholder="client@example.com" /></div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>Subject</label><input value={subject} onChange={(e) => setSubject(e.target.value)} style={inp} /></div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>Message</label><textarea value={body} onChange={(e) => setBody(e.target.value)} style={{ ...inp, minHeight: 170, resize: "vertical", lineHeight: 1.6 }} /></div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155", marginBottom: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={includeSig} onChange={(e) => setIncludeSig(e.target.checked)} /> Include my signature
+        </label>
+        {includeSig && defaults.signatureHtml && (
+          <div style={{ border: "1px solid #eef2f6", background: "#f8fafc", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: "#475569", marginBottom: 12 }} dangerouslySetInnerHTML={{ __html: defaults.signatureHtml }} />
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f0fdfa", border: "1px solid #99f6e4", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, color: "#0f766e", marginBottom: 16 }}>
+          <span style={{ fontSize: 15 }}>📎</span> {attachName} <span style={{ color: "#5e7d78" }}>will be attached</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} disabled={sending} style={{ border: "1px solid #e2e8f0", background: "#fff", color: "#475569", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: sending ? "default" : "pointer" }}>Cancel</button>
+          <button onClick={send} disabled={sending} style={{ border: "none", background: accent, color: "#fff", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: sending ? "wait" : "pointer", opacity: sending ? 0.6 : 1, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {sending ? "Sending…" : <><Icons.Send /> Send</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Full-screen, in-app viewer for a receipt image or PDF. Like DocViewer, this exists
 // so receipts never need window.open()/a new tab. The signed URL is rendered inline:
 // PDFs in an <iframe>, images in an <img>. Top-level so a parent re-render doesn't
@@ -752,8 +823,28 @@ export default function BookkeeperApp() {
   };
   const [contacts, setContacts] = useState([]);
   const [invoices, setInvoices] = useState([]);
+  // Live mirror of `invoices` for async handlers that must read the latest rows
+  // rather than a render-time closure (deposit dedup + doc numbering under rapid
+  // clicks). Kept in sync by an effect; the deposit path also prepends to it
+  // synchronously so a second click sees the just-created row immediately.
+  const invoicesRef = useRef([]);
+  useEffect(() => { invoicesRef.current = invoices; }, [invoices]);
+  // In-flight guards keyed by id — prevent a double-click from creating two
+  // deposits for one quote, or firing two concurrent sends of one invoice.
+  const depositHandledRef = useRef(new Set());
+  const sendInFlightRef = useRef(new Set());
+  // DocList view state (filter/search/sort) lives here, not inside DocList,
+  // because pageMap rebuilds every render so <PageComponent/> is a fresh type →
+  // the page remounts on any action and local state would snap back to defaults
+  // (that was the "Draft tab jumps back to Outstanding" bug).
+  const [docView, setDocView] = useState({
+    invoice: { filter: "outstanding", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
+    quote: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
+  });
   const [txns, setTxns] = useState([]);
   const [jobs, setJobs] = useState([]);
+  const [jobParties, setJobParties] = useState([]); // bk_job_parties rows for this business's projects
+  const [quoteTemplates, setQuoteTemplates] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
   const [categoryRules, setCategoryRules] = useState([]);
@@ -814,7 +905,7 @@ export default function BookkeeperApp() {
     if (!session) return;
     setLoading(true);
     try {
-    const [cRes, iRes, tRes, pRes, jRes, eRes, rRes] = await Promise.all([
+    const [cRes, iRes, tRes, pRes, jRes, eRes, rRes, qtRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_transactions").select("*").eq("business_id", businessId).order("date", { ascending: false }),
@@ -822,6 +913,7 @@ export default function BookkeeperApp() {
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
       supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
       supabase.from("bk_category_rules").select("*").eq("business_id", businessId),
+      supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
     ]);
 
     const loadedInvoices = iRes.data || [];
@@ -837,10 +929,20 @@ export default function BookkeeperApp() {
       }
     }
 
+    // Parties are keyed by job (no business_id column) — fetch for the loaded jobs.
+    const loadedJobs = jRes.data || [];
+    let loadedParties = [];
+    if (loadedJobs.length) {
+      const { data: parties } = await supabase.from("bk_job_parties").select("*").in("job_id", loadedJobs.map((j) => j.id));
+      loadedParties = parties || [];
+    }
+
     setContacts(cRes.data || []);
     setInvoices(loadedInvoices);
     setTxns(tRes.data || []);
-    setJobs(jRes.data || []);
+    setJobs(loadedJobs);
+    setJobParties(loadedParties);
+    setQuoteTemplates(qtRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group", onedrive_receipts_folder: "Mworx Group/Receipts" });
     setEmailConn(eRes.data || null);
     setCategoryRules(rRes.data || []);
@@ -1175,6 +1277,7 @@ export default function BookkeeperApp() {
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
+    return inserted;
   };
 
   const updateInvoice = async (id, updates) => {
@@ -1209,10 +1312,25 @@ export default function BookkeeperApp() {
     } else {
       setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...dbUpdates } : i)));
     }
+    // Keep a DRAFT's pending OneDrive copy in sync after a content edit. Issued
+    // docs (sent/overdue/paid) are left alone here so their filed record isn't
+    // silently overwritten — they only update on an explicit re-send. If the
+    // number/type changed, tell the server the old name so it drops that stale copy.
+    const oldRow = invoices.find((i) => i.id === id);
+    const finalStatus = "status" in dbUpdates ? dbUpdates.status : oldRow?.status;
+    if ("items" in updates && emailConn && finalStatus === "draft") {
+      const newName = oneDriveDocName(dbUpdates.type || oldRow?.type, dbUpdates.number ?? oldRow?.number, id);
+      const oldName = oldRow ? oneDriveDocName(oldRow.type, oldRow.number, id) : null;
+      const prev = oldName && oldName !== newName
+        ? { name: oldName, subfolder: (oldRow?.type === "quote" ? "Quotes" : "Invoices") }
+        : {};
+      regenAndFileOneDrive(id, prev);
+    }
     formDirtyRef.current = false;
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
+    return true; // callers (saveAndCompose) gate the compose step on a successful save
   };
 
   const deleteInvoice = async (id) => {
@@ -1258,7 +1376,7 @@ export default function BookkeeperApp() {
       setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
     } else {
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
-      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, insertDivision) };
+      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs) };
       const { data: inserted } = await sbInsert("bk_jobs", row, "save job");
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
@@ -1268,16 +1386,51 @@ export default function BookkeeperApp() {
 
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
-    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", job_number: getNextJobNumber(jobs, insertDivision) };
+    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", application_type: p.application_type || null, job_number: (p.job_number || "").trim() || getNextJobNumber(jobs) };
     const { ok, data: inserted } = await sbInsert("bk_jobs", row, "create project");
     if (!ok) return null;
     if (inserted) {
       setJobs((prev) => [inserted, ...prev]);
+      // Attach the clients/consultants picked in the form (bk_job_parties).
+      const partyRows = (p.parties || []).map((x) => ({ job_id: inserted.id, contact_id: x.contact_id, role: x.role || "client" }));
+      if (partyRows.length) {
+        const { data: insParties } = await supabase.from("bk_job_parties").insert(partyRows).select();
+        if (insParties) setJobParties((prev) => [...prev, ...insParties]);
+      }
       // Create the matching OneDrive folder ("26106 - 10 McPherson Road …").
       // Best-effort: never block project creation on the Microsoft connection.
       if (emailConn) saveToOneDrive("project", inserted.id, { silent: true });
     }
     return inserted;
+  };
+
+  // --- Project parties (bk_job_parties) ---
+
+  const addJobParty = async (jobId, contactId, role) => {
+    const { ok, data } = await sbWrite(supabase.from("bk_job_parties").insert({ job_id: jobId, contact_id: contactId, role: role || "client" }).select().single(), "add project contact");
+    if (ok && data) setJobParties((prev) => [...prev, data]);
+    return ok ? data : null;
+  };
+
+  const removeJobParty = async (partyId) => {
+    const { ok } = await sbWrite(supabase.from("bk_job_parties").delete().eq("id", partyId), "remove project contact");
+    if (ok) setJobParties((prev) => prev.filter((p) => p.id !== partyId));
+    return ok;
+  };
+
+  // --- Quote templates (bk_quote_templates) ---
+
+  const renameQuoteTemplate = async (t) => {
+    const name = window.prompt("Template name:", t.name);
+    if (!name || !name.trim() || name.trim() === t.name) return;
+    const { ok, data } = await sbWrite(supabase.from("bk_quote_templates").update({ name: name.trim(), updated_at: new Date().toISOString() }).eq("id", t.id).select().single(), "rename template");
+    if (ok && data) setQuoteTemplates((prev) => prev.map((x) => (x.id === t.id ? data : x)).sort((a, b) => a.name.localeCompare(b.name)));
+  };
+
+  const deleteQuoteTemplate = async (t) => {
+    if (!window.confirm(`Delete template "${t.name}"? Quotes already created from it are not affected.`)) return;
+    const { ok } = await sbWrite(supabase.from("bk_quote_templates").delete().eq("id", t.id), "delete template");
+    if (ok) setQuoteTemplates((prev) => prev.filter((x) => x.id !== t.id));
   };
 
   const updateProject = async (id, p) => {
@@ -1288,6 +1441,9 @@ export default function BookkeeperApp() {
     if ("notes" in p) row.notes = p.notes || null;
     if ("contract_value" in p) row.contract_value = Number(p.contract_value) || 0;
     if ("status" in p) row.status = p.status;
+    if ("application_type" in p) row.application_type = p.application_type || null;
+    // Only overwrite the number when a non-empty value is supplied; never blank it.
+    if ("job_number" in p && (p.job_number || "").trim()) row.job_number = p.job_number.trim();
     if ("accepted_quote_id" in p) row.accepted_quote_id = p.accepted_quote_id;
     const { ok, data: updated } = await sbWrite(supabase.from("bk_jobs").update(row).eq("id", id).select().single(), "update project");
     if (!ok) return null;
@@ -1310,9 +1466,64 @@ export default function BookkeeperApp() {
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(invUpd).eq("id", quote.id), "accept quote");
     if (!ok) return null;
     setInvoices((prev) => prev.map((i) => (i.id === quote.id ? { ...i, ...invUpd } : i)));
+    fileIssuedToOneDrive(quote.id); // accepted quote → move from pending into the project folder
     // A signed-up job is no longer a lead.
     if ((project.status || "active") === "lead") { await updateProject(projectId, { status: "active" }); return { ...project, status: "active" }; }
     return project;
+  };
+
+  // --- Deposit invoice on quote acceptance ---
+
+  // Create a draft "stage 1 deposit" invoice for an accepted quote. Quiet insert
+  // (no modal side effects). division/number derive from the QUOTE row, not the
+  // currently viewed division, so a quote accepted from the "All divisions" view
+  // still numbers correctly. converted_from_quote_id links it back to the quote
+  // and is the idempotency lock — one deposit per quote, ever.
+  const createDepositInvoice = async (quote, project, pct) => {
+    const division = recordDivision(quote);
+    // Number off the live ref, not the render-time closure, so a deposit created
+    // moments after another insert can't reuse a number.
+    const number = getNextDocumentNumber(invoicesRef.current.filter((i) => recordDivision(i) === division), division, "invoice");
+    const amount = Math.round((Number(quote.total) || 0) * pct) / 100; // pct% of total, exact to the cent
+    const description = `Deposit — ${pct}% of accepted quote ${quote.number}`;
+    const row = {
+      user_id: session.user.id, business_id: biz, division, number, type: "invoice",
+      date: today(), due_date: getDefaultDueDate("invoice", today()),
+      contact_name: quote.contact_name, contact_email: quote.contact_email, contact_company: quote.contact_company,
+      contact_abn: quote.contact_abn, contact_address: quote.contact_address, contact_phone: quote.contact_phone,
+      job: projectLabel(project), project_id: project.id,
+      notes: getDefaultTerms("invoice"), terms: null, status: "draft",
+      total: amount, pricing_mode: "lump_sum", converted_from_quote_id: quote.id,
+    };
+    const { ok, data: inserted } = await sbInsert("bk_invoices", row, "create deposit invoice");
+    if (!ok || !inserted) return null;
+    const itemsRes = await sbWrite(supabase.from("bk_invoice_items").insert({ invoice_id: inserted.id, description, note: "", qty: 1, rate: 0, sort_order: 0 }).select(), "save deposit item");
+    inserted.items = itemsRes.ok ? (itemsRes.data || []) : [];
+    invoicesRef.current = [inserted, ...invoicesRef.current]; // synchronous, so an immediate re-check/renumber sees it
+    setInvoices((prev) => [inserted, ...prev]);
+    if (emailConn) saveToOneDrive("invoice", inserted.id, { silent: true });
+    return inserted;
+  };
+
+  // Ask (every time, no default) whether to raise the deposit invoice for a
+  // freshly accepted quote, then open the draft for review. Skips silently if
+  // this quote already has one. depositHandledRef is claimed synchronously up
+  // front so a double-click (whose closure still sees a deposit-free invoices
+  // array) can't slip a second deposit through before the first row exists.
+  const offerDepositInvoice = async (quote, project) => {
+    if (!project || !quote?.id || !(Number(quote.total) > 0)) return null;
+    if (depositHandledRef.current.has(quote.id)) return null;
+    if (invoicesRef.current.some((i) => i.converted_from_quote_id === quote.id)) return null;
+    depositHandledRef.current.add(quote.id);
+    const release = () => depositHandledRef.current.delete(quote.id); // re-allow on skip/cancel/failure
+    const raw = window.prompt(`Quote ${quote.number} accepted (${fmt(quote.total)}).\n\nCreate the deposit invoice now? Enter the deposit percentage (e.g. 30) — or Cancel to skip.`, "");
+    if (raw == null || String(raw).trim() === "") { release(); return null; }
+    const pct = Number(String(raw).replace("%", "").trim());
+    if (!isFinite(pct) || pct <= 0 || pct > 100) { release(); alert("Deposit skipped — the percentage must be a number between 1 and 100."); return null; }
+    const inserted = await createDepositInvoice(quote, project, pct);
+    if (inserted) { setInvoiceSeed(null); setEditItem(inserted); setModal("invoice"); }
+    else release();
+    return inserted;
   };
 
   const deleteProject = async (id) => {
@@ -1411,21 +1622,31 @@ export default function BookkeeperApp() {
   // entirely, so View can never be blocked.
   const viewInvoice = (inv) => setViewDoc(inv);
 
-  const buildEmailBody = (inv) => {
+  // Plain-text default signature, used by the mailto fallback and as the base for
+  // the compose window's signature preview.
+  const defaultSignatureText = () => {
+    const bName = profile.name || "our company";
+    // Treat a whitespace-only signature as empty so the fallback still applies.
+    return (profile.email_signature || "").trim() ? profile.email_signature : `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+  };
+
+  // withSignature:false strips the {signature} placeholder so the compose window
+  // can prefill the message body and show/append the signature separately.
+  const buildEmailBody = (inv, { withSignature = true } = {}) => {
     const isQuote = inv.type === "quote";
     const bName = profile.name || "our company";
     const template = isQuote
       ? (profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE)
       : (profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE);
-    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
+    const sig = withSignature ? defaultSignatureText() : "";
     const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
     const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
     return template
-      // Greeting uses the first name only ("Hi John,"). {first_name} is the
-      // preferred placeholder; {contact_name} resolves the same way since it's
-      // only ever used in the greeting line.
+      // {first_name} → "Cameron", {last_name} → "Mawson", {contact_name} → full name.
+      // Replace last_name before contact_name so the substrings don't collide.
       .replace(/\{first_name\}/g, firstName(inv.contact_name))
-      .replace(/\{contact_name\}/g, firstName(inv.contact_name))
+      .replace(/\{last_name\}/g, lastName(inv.contact_name))
+      .replace(/\{contact_name\}/g, inv.contact_name || "there")
       .replace(/\{number\}/g, inv.number || "")
       .replace(/\{amount\}/g, fmt(inv.total || 0))
       .replace(/\{due_date\}/g, inv.due_date ? fmtDate(inv.due_date) : "")
@@ -1448,15 +1669,35 @@ export default function BookkeeperApp() {
   };
 
   const [outlookDraftLoading, setOutlookDraftLoading] = useState(null);
+  // The doc currently open in the compose-email window (null = closed). Set by
+  // openComposeFor after a save; the ComposeEmail component prefills from it.
+  const [composeDoc, setComposeDoc] = useState(null);
+  const openComposeFor = (inv) => { if (inv?.id) setComposeDoc(inv); };
+  // Send the composed email (edited subject/body/recipient) via Outlook, PDF
+  // attached. Closes the window only on success so a failure keeps the edits.
+  const handleComposeSend = async ({ to, subject, html }) => {
+    const ok = await sendInvoiceNow(composeDoc, { skipConfirm: true, subjectOverride: subject, htmlOverride: html, toOverride: to });
+    if (ok) setComposeDoc(null);
+    return ok;
+  };
 
-  const createOutlookDraft = async (inv) => {
-    if (!emailConn) { alert("Connect Outlook in Settings first."); return; }
+  // One-click REAL send: fresh PDF, then send-invoice-outlook WITHOUT the draft
+  // flag — the server attaches the PDF, applies the email template, sends from
+  // the user's Outlook, and flips draft→sent + sent_at. We mirror that status
+  // locally (updateInvoice can't: sent_at isn't client-writable, and it would
+  // close whatever modal is open).
+  const sendInvoiceNow = async (inv, opts = {}) => {
+    const docType = inv.type === "quote" ? "Quote" : "Invoice";
+    if (!emailConn) { alert("Connect Outlook in Settings first."); return false; }
+    if (!inv.contact_email) { alert(`This ${docType.toLowerCase()} has no contact email — add one first.`); return false; }
+    if (sendInFlightRef.current.has(inv.id)) return false; // already sending this one
+    if (!opts.skipConfirm && !window.confirm(`Send ${docType.toLowerCase()} ${inv.number} (${fmt(inv.total || 0)}) to ${inv.contact_email} with the PDF attached?`)) return false;
+    sendInFlightRef.current.add(inv.id);
     setOutlookDraftLoading(inv.id);
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) throw new Error("Not authenticated");
       // Always (re)generate the PDF so the attachment reflects the latest edits.
-      // Fail hard if it doesn't succeed — never create a draft without the PDF.
       const pdfResp = await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1465,24 +1706,36 @@ export default function BookkeeperApp() {
       if (!pdfResp.ok) {
         let detail = "";
         try { detail = (await pdfResp.json()).error || ""; } catch { /* ignore */ }
-        throw new Error("Could not generate the invoice PDF, so the Outlook draft was not created. " + (detail || "Please try again."));
+        throw new Error("Could not generate the PDF, so nothing was sent. " + (detail || "Please try again."));
       }
+      // Overrides come from the compose window (edited subject/body/recipient).
+      const sendBody = { invoice_id: inv.id };
+      if (opts.subjectOverride != null) sendBody.subject_override = opts.subjectOverride;
+      if (opts.htmlOverride != null) sendBody.html_override = opts.htmlOverride;
+      if (opts.toOverride != null) sendBody.to_override = opts.toOverride;
       const resp = await fetch(`${API_BASE}/.netlify/functions/send-invoice-outlook`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice_id: inv.id, draft: true }),
+        body: JSON.stringify(sendBody),
       });
-      const result = await resp.json();
-      if (!resp.ok) throw new Error(result.error || "Draft creation failed");
-      if (result.webLink && !isMobile) window.open(result.webLink, "_blank");
-      alert("Draft created in Outlook with PDF attached. Open Outlook to review and send.");
+      const result = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(result.error || "Send failed");
+      // Mirror the server-side status flip (draft→sent + sent_at) into local state.
+      const sentAt = new Date().toISOString();
+      setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: i.status === "draft" ? "sent" : i.status, sent_at: i.sent_at || sentAt } : i)));
+      // Re-file the fresh PDF to OneDrive (Admin/Quotes|Invoices) quietly.
+      saveToOneDrive("invoice", inv.id, { silent: true });
+      if (!opts.silentSuccess) alert(`${docType} ${inv.number} sent to ${opts.toOverride || result.sent_to || inv.contact_email}.`);
       return true;
     } catch (err) {
-      console.error("Outlook draft error:", err);
-      alert("Failed to create Outlook draft: " + err.message);
+      console.error("Send error:", err);
+      alert(`Failed to send: ${err.message}`);
       return false;
     } finally {
-      setOutlookDraftLoading(null);
+      sendInFlightRef.current.delete(inv.id);
+      // Only clear the spinner slot if it still belongs to this invoice, so a
+      // concurrent send of a different doc doesn't get its spinner wiped.
+      setOutlookDraftLoading((cur) => (cur === inv.id ? null : cur));
     }
   };
 
@@ -1521,6 +1774,7 @@ export default function BookkeeperApp() {
 
   const markPaid = (inv) => {
     updateInvoice(inv.id, { status: "paid", paid_date: today() });
+    fileIssuedToOneDrive(inv.id);
   };
 
   // Close the draft→sent loop after a document is emailed: offer to flip a still
@@ -1534,6 +1788,7 @@ export default function BookkeeperApp() {
       : `Mark quote ${inv.number} as Sent?`;
     if (!window.confirm(msg)) return false;
     await updateInvoice(inv.id, { status: "sent" });
+    fileIssuedToOneDrive(inv.id); // now issued → move into the project folder
     return true;
   };
 
@@ -1543,10 +1798,14 @@ export default function BookkeeperApp() {
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark paid");
     if (!ok) return;
     setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
+    fileIssuedToOneDrive(inv.id);
   };
 
   // Save an invoice PDF or expense receipt to OneDrive via the Netlify function
   // (reuses the Microsoft connection). silent=true for auto-save (no popups).
+  // The OneDrive filename for a doc — must match the server's (sanitize + prefix).
+  const oneDriveDocName = (type, number, id) => String(`${type === "quote" ? "Quote" : "Invoice"} ${number || id}`).replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim() + ".pdf";
+
   const saveToOneDrive = async (kind, id, opts = {}) => {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -1554,7 +1813,8 @@ export default function BookkeeperApp() {
       const resp = await fetch(`${API_BASE}/.netlify/functions/onedrive-upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ kind, id }),
+        // prev_name/prev_subfolder let the server clear a stale central copy after a rename.
+        body: JSON.stringify({ kind, id, prev_name: opts.prevName || null, prev_subfolder: opts.prevSubfolder || null }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) { if (!opts.silent) alert(data.error || "Could not save to OneDrive."); return false; }
@@ -1565,6 +1825,30 @@ export default function BookkeeperApp() {
       return false;
     }
   };
+
+  // Regenerate the PDF (so it reflects the latest edits — onedrive-upload only
+  // rebuilds when there's no stored PDF, and there always is one after create),
+  // then re-file it. Fire-and-forget; used when a DRAFT is edited so its pending
+  // OneDrive copy stays current. Issued docs are never auto-refiled — they only
+  // move/update on an explicit send, preserving the sent record.
+  const regenAndFileOneDrive = async (invId, prev = {}) => {
+    if (!emailConn) return;
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) return;
+      await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: invId, auth_token: token }),
+      });
+    } catch { /* best-effort */ }
+    saveToOneDrive("invoice", invId, { silent: true, prevName: prev.name, prevSubfolder: prev.subfolder });
+  };
+
+  // A draft that becomes issued (sent/accepted/paid) outside the compose flow —
+  // "mark sent", accept a quote, mark paid — must still move from the central
+  // pending area into its project folder. Best-effort, silent. (The compose send
+  // already re-files itself.)
+  const fileIssuedToOneDrive = (invId) => { if (emailConn) saveToOneDrive("invoice", invId, { silent: true }); };
 
   const connectOutlook = async () => {
     const token = (await supabase.auth.getSession()).data.session?.access_token;
@@ -2154,7 +2438,7 @@ export default function BookkeeperApp() {
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="supplier">Supplier</option></select></div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="consultant">Consultant</option><option value="supplier">Supplier</option></select></div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
@@ -2185,7 +2469,7 @@ export default function BookkeeperApp() {
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: getDefaultTerms(seedType), terms: getDefaultDocTerms(seedType), status: "draft" };
+      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     const [f, setF] = useState(init);
     const [dueDateEdited, setDueDateEdited] = useState(!!existing);
     const invOverdue = existing && f.type !== "quote" ? daysOverdue({ status: existing.status, due_date: f.due_date }) : 0;
@@ -2218,7 +2502,83 @@ export default function BookkeeperApp() {
     const total = isLump ? (Number(f.lump_amount) || 0) : f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
     const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
     const sortedJobs = [...divJobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
-    const saveInv = async () => { const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items }; if (existing) { await updateInvoice(existing.id, inv); } else { await addInvoice(inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); };
+    // An issued invoice is a record. Editing its figures is discouraged — offer a
+    // "revised invoice" (a fresh draft copy) instead, which keeps the original.
+    const isIssued = !!existing && f.type !== "quote" && ["sent", "overdue", "paid"].includes(existing.status);
+    // "Figures changed" also covers line-item edits that net to the same total
+    // (swapped amounts, changed descriptions/qty) — those still alter the record.
+    const itemsSig = (arr) => JSON.stringify((arr || []).map((i) => ({ d: i.description || "", n: i.note || "", q: Number(i.qty) || 0, r: Number(i.rate) || 0 })));
+    const figuresChanged = isIssued && (
+      Number(existing.total || 0) !== total ||
+      String(existing.number || "") !== String(f.number || "") ||
+      itemsSig(existing.items) !== itemsSig(f.items)
+    );
+    const reviseInvoice = () => {
+      setInvoiceSeed({
+        type: "invoice",
+        contact_name: f.contact_name,
+        project_id: f.project_id || "",
+        projectName: f.job,
+        pricing_mode: f.pricing_mode || "itemised",
+        lump_amount: isLump ? String(total) : "",
+        items: f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
+        notes: f.notes,   // carry the original's notes + T&Cs onto the revised copy
+        terms: f.terms,
+      });
+      setEditItem(null);
+      setModal("invoice");
+    };
+    const saveInv = async () => {
+      // Guard editing a sent invoice's figures: warn before overwriting the record.
+      if (figuresChanged && !window.confirm(`Invoice ${existing.number} was already sent to the client${existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}, and you've changed its figures.\n\nSaving overwrites your record of what was billed. Normally you'd issue a REVISED invoice instead — Cancel, then "Create revised invoice".\n\nSave over the original anyway?`)) return null;
+      const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items };
+      let saved;
+      // Gate on success: updateInvoice/addInvoice return falsy on failure, so a
+      // failed save yields saved=null and saveAndSend won't email a stale doc.
+      if (existing) { const ok = await updateInvoice(existing.id, inv); saved = ok ? { ...existing, ...inv } : null; }
+      else { saved = await addInvoice(inv); }
+      if (saved && !inv.project_id) upsertJob(inv.job, inv.contact_name);
+      return saved;
+    };
+    // Save, then open the compose window so the user reviews/edits the email and
+    // hits Send themselves — nothing goes out automatically.
+    const saveAndCompose = async () => {
+      const saved = await saveInv();
+      if (saved?.id) openComposeFor(saved);
+    };
+    const canCompose = !!emailConn && !!(f.contact_email || "").trim();
+
+    // Contacts attached to the selected project (bk_job_parties) — offered first
+    // in the "Addressed to" dropdown, consultants included.
+    const projParties = f.project_id ? jobParties.filter((p) => p.job_id === f.project_id) : [];
+    const partyContacts = projParties.map((p) => { const c = contacts.find((x) => x.id === p.contact_id); return c ? { ...c, _role: p.role } : null; }).filter(Boolean);
+    const otherContacts = contacts.filter((c) => (c.type === "client" || c.type === "consultant") && !partyContacts.some((pc) => pc.id === c.id));
+
+    // Quote templates: applying one fills the editable content; saving captures it.
+    const applyTemplate = (id) => {
+      const t = quoteTemplates.find((x) => x.id === id);
+      if (!t) return;
+      const tItems = Array.isArray(t.items) && t.items.length ? t.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }];
+      setF({ ...f, pricing_mode: t.pricing_mode || "itemised", items: tItems, lump_amount: t.lump_amount != null ? String(t.lump_amount) : "", notes: t.notes != null ? t.notes : f.notes, terms: t.terms != null ? t.terms : f.terms });
+      setNotesEdited(true);
+      setTermsEdited(true);
+    };
+    const saveAsTemplate = async () => {
+      const name = window.prompt("Template name:", f.job || "");
+      if (!name || !name.trim()) return;
+      const row = {
+        user_id: session.user.id,
+        business_id: biz,
+        name: name.trim(),
+        pricing_mode: f.pricing_mode || "itemised",
+        items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
+        lump_amount: isLump ? (Number(f.lump_amount) || 0) : null,
+        notes: f.notes || null,
+        terms: f.terms || null,
+      };
+      const { ok, data } = await sbWrite(supabase.from("bk_quote_templates").insert(row).select().single(), "save template");
+      if (ok && data) { setQuoteTemplates((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name))); alert(`Template "${data.name}" saved — it's available under "Start from template" on new quotes.`); }
+    };
 
     // One-click quote → invoice (MYOB's headline action). Persists any quote edits,
     // marks the quote Accepted + linked to a project (keeping contract tracking
@@ -2248,10 +2608,31 @@ export default function BookkeeperApp() {
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} {f.type === "quote" ? "Quote" : "Invoice"}</h3>
           <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
         </div>
+        {isIssued && (
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+            <span style={{ fontSize: 16, lineHeight: 1 }}>⚠️</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12.5, color: "#92400e", lineHeight: 1.5 }}>
+                This invoice was already sent to the client{existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}. It's a record of what you billed — to change the amount, issue a <strong>revised invoice</strong> instead of editing this one.
+              </div>
+              <button type="button" onClick={reviseInvoice} style={{ ...s.btn(accent, true), fontSize: 11, marginTop: 8 }}><Icons.Plus /> Create revised invoice</button>
+            </div>
+          </div>
+        )}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
         </div>
+        {f.type === "quote" && !existing && quoteTemplates.length > 0 && (
+          <div style={{ background: `${accent}10`, border: `1px solid ${accent}40`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+            <label style={{ ...s.label, color: accent }}>Start from template</label>
+            <select value="" onChange={(e) => { if (e.target.value) applyTemplate(e.target.value); }} style={s.select}>
+              <option value="">Choose a template…</option>
+              {quoteTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>Fills the scope, price, notes and T&amp;Cs — everything stays editable. To make a new template, save any quote with “Save as Template”.</div>
+          </div>
+        )}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => updateDate(e.target.value)} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}{invOverdue > 0 && <span style={{ color: "#ef4444", fontWeight: 600, textTransform: "none", marginLeft: 6 }}>· {invOverdue} {invOverdue === 1 ? "day" : "days"} overdue</span>}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
@@ -2260,7 +2641,21 @@ export default function BookkeeperApp() {
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Contact</label>
             <div style={{ display: "flex", gap: 4 }}>
-              <select value={f.contact_name || ""} onChange={(e) => { const c = contacts.find(c => (c.name || c.company) === e.target.value); setF({ ...f, contact_name: e.target.value, contact_email: c?.email || "", contact_company: c?.company || "", contact_abn: c?.abn || "", contact_address: c?.address || "", contact_phone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}><option value="">Select...</option>{contacts.filter((c) => c.type === "client").map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)}</select>
+              <select value={f.contact_name || ""} onChange={(e) => { const c = contacts.find(c => (c.name || c.company) === e.target.value); setF({ ...f, contact_name: e.target.value, contact_email: c?.email || "", contact_company: c?.company || "", contact_abn: c?.abn || "", contact_address: c?.address || "", contact_phone: c?.phone || "" }); }} style={{ ...s.select, flex: 1 }}>
+                <option value="">Select...</option>
+                {partyContacts.length > 0 && (
+                  <optgroup label="On this project">
+                    {partyContacts.map((c) => <option key={c.id} value={c.name || c.company}>{(c.name || c.company) + (c._role === "consultant" ? " · consultant" : "")}</option>)}
+                  </optgroup>
+                )}
+                {partyContacts.length > 0 ? (
+                  <optgroup label="All contacts">
+                    {otherContacts.map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)}
+                  </optgroup>
+                ) : (
+                  otherContacts.map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)
+                )}
+              </select>
               <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
             </div>
           </div>
@@ -2354,17 +2749,19 @@ export default function BookkeeperApp() {
           <label style={s.label}>Terms &amp; Conditions {f.terms ? "(prints on its own page at the end)" : "(optional)"}</label>
           <textarea value={f.terms || ""} onChange={(e) => { setTermsEdited(true); setF({ ...f, terms: e.target.value }); }} placeholder="Full terms & conditions — printed on a separate page at the end of the PDF. Leave blank for none." style={{ ...s.input, minHeight: 120, resize: "vertical", lineHeight: 1.5 }} />
         </div>
-        <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
+        {canCompose ? (<>
+          <button disabled={saving} onClick={async () => { setSaving(true); await saveAndCompose(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Send /> {existing ? "Save" : "Create"} &amp; Email…</>}</button>
+          <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Save" : "Create"} only (email later)`}</button>
+        </>) : (
+          <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
+        )}
+        {f.type === "quote" && (
+          <button onClick={saveAsTemplate} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, gap: 6 }}>☆ Save as Template</button>
+        )}
         {existing && (<>
+          {/* Emailing goes through "Save & Email…" (the compose window) above.
+              An Outlook-draft handoff still lives in the list ⋯ menu for power users. */}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); sendInvoice({ ...existing, ...inv }); await offerMarkSent({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#3b82f6", borderColor: "#3b82f640", gap: 6 }}>
-              <Icons.Send /> Open Email + PDF
-            </button>
-            <button disabled={outlookDraftLoading === existing.id} onClick={async () => { const inv = { ...f, total }; if (existing) { await updateInvoice(existing.id, inv); } if (!inv.project_id) upsertJob(inv.job, inv.contact_name); const ok = await createOutlookDraft({ ...existing, ...inv }); if (ok) await offerMarkSent({ ...existing, ...inv }); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#0078d4", borderColor: "#0078d440", gap: 6, opacity: outlookDraftLoading === existing.id ? 0.5 : 1 }}>
-              <Icons.Outlook /> {outlookDraftLoading === existing.id ? "Creating…" : "Open in Outlook"}
-            </button>
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button onClick={() => downloadPDF(existing)} disabled={pdfLoading === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: pdfLoading === existing.id ? "#94a3b8" : "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: pdfLoading === existing.id ? 0.5 : 1 }}>
               <Icons.Download /> {pdfLoading === existing.id ? "Generating…" : "Download PDF"}
             </button>
@@ -2377,7 +2774,7 @@ export default function BookkeeperApp() {
           {f.type === "quote" && (
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               {existing.status !== "accepted" && (
-                <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) alert(`Quote accepted and added to project "${proj.name}".`); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
+                <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) { alert(`Quote accepted and added to project "${proj.name}".`); await offerDepositInvoice({ ...existing, ...inv, status: "accepted" }, proj); } }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
                   <Icons.Check /> Accept Quote
                 </button>
               )}
@@ -2403,18 +2800,73 @@ export default function BookkeeperApp() {
 
   const ProjectForm = ({ existing }) => {
     const init = existing
-      ? { name: existing.name || "", address: existing.address || "", notes: existing.notes || "", status: existing.status || "active" }
-      : { name: "", address: "", notes: "", status: "active" };
+      ? { name: existing.name || "", address: existing.address || "", notes: existing.notes || "", status: existing.status || "active", application_type: existing.application_type || "", job_number: existing.job_number || "" }
+      : { name: "", address: "", notes: "", status: "active", application_type: "", job_number: getNextJobNumber(jobs) };
     const [f, setF] = useState(init);
     const [saving, setSaving] = useState(false);
-    // Job/project number: existing projects keep theirs; new ones preview the
-    // number that will be auto-assigned on save (same YY### scheme as the insert).
-    const projNumber = existing ? (existing.job_number || "—") : getNextJobNumber(jobs, insertDivision);
+    // Existing projects open read-only; Edit unlocks the fields. New projects
+    // start straight in edit mode. Dirty tracking mirrors InvoiceForm so the
+    // backdrop/X only nag about unsaved changes when there actually are any.
+    const [editMode, setEditMode] = useState(!existing);
+    const initialSnapshot = useRef(JSON.stringify(init));
+    useEffect(() => { formDirtyRef.current = editMode && JSON.stringify(f) !== initialSnapshot.current; }, [f, editMode]);
+    // Application type options: built-ins + any custom types already in use.
+    const [appTypeCustom, setAppTypeCustom] = useState(false);
+    const appTypeOptions = [...new Set([...APPLICATION_TYPES, ...jobs.map((j) => j.application_type).filter(Boolean), ...(f.application_type ? [f.application_type] : [])])];
+    // Clients/consultants attached to this project. Existing projects edit the
+    // live bk_job_parties rows; new projects collect locally and save on create.
+    const [newParties, setNewParties] = useState([]);
+    const partyList = existing ? jobParties.filter((p) => p.job_id === existing.id) : newParties;
+    const partyContactOf = (p) => contacts.find((c) => c.id === p.contact_id);
+    const availableContacts = contacts.filter((c) => !partyList.some((p) => p.contact_id === c.id));
+    const [pickId, setPickId] = useState("");
+    const [pickRole, setPickRole] = useState("client");
+    const pickContact = (id) => { setPickId(id); const c = contacts.find((x) => x.id === id); if (c) setPickRole(c.type === "consultant" ? "consultant" : "client"); };
+    const addParty = async () => {
+      if (!pickId) return;
+      if (existing) await addJobParty(existing.id, pickId, pickRole);
+      else setNewParties((prev) => [...prev, { contact_id: pickId, role: pickRole }]);
+      setPickId("");
+    };
+    const removeParty = async (p) => {
+      if (existing) await removeJobParty(p.id);
+      else setNewParties((prev) => prev.filter((x) => x.contact_id !== p.contact_id));
+    };
+    const [pQuickAdd, setPQuickAdd] = useState(false);
+    const [pQa, setPQa] = useState({ name: "", company: "", email: "", phone: "" });
+    const quickAddParty = async () => {
+      const inserted = await addContact({ ...pQa, type: pickRole, abn: "", address: "", notes: "" }, true);
+      if (!inserted) return;
+      if (existing) await addJobParty(existing.id, inserted.id, pickRole);
+      else setNewParties((prev) => [...prev, { contact_id: inserted.id, role: pickRole }]);
+      setPQa({ name: "", company: "", email: "", phone: "" });
+      setPQuickAdd(false);
+    };
+    // Job/project number: shown read-only in view mode; editable in edit mode
+    // (new projects pre-fill the next number in the business-wide sequence).
+    const projNumber = existing ? (existing.job_number || "—") : f.job_number;
     const t = existing ? projectTotals(existing, invoices) : { contract: 0, invoiced: 0, paid: 0, remaining: 0, outstanding: 0, leftToInvoice: 0 };
     const consultants = existing ? projectConsultants(existing, invoices) : [];
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
     const pct = t.contract > 0 ? Math.min(100, Math.round((t.paid / t.contract) * 100)) : 0;
-    const save = async () => { if (existing) { await updateProject(existing.id, f); } else { await createProject(f); } setModal(null); setEditItem(null); };
+    const save = async () => {
+      // Manual number is allowed, but warn if it collides with another project.
+      const num = (f.job_number || "").trim();
+      if (num) {
+        const clash = jobs.find((j) => j.id !== existing?.id && String(j.job_number || "") === num);
+        if (clash && !window.confirm(`Project #${num} is already used by "${projectLabel(clash)}".\n\nUse it anyway?`)) return;
+      }
+      if (existing) {
+        const updated = await updateProject(existing.id, f);
+        if (updated) { initialSnapshot.current = JSON.stringify(f); formDirtyRef.current = false; setEditItem(updated); setEditMode(false); }
+      } else {
+        await createProject({ ...f, parties: newParties });
+        setModal(null);
+        setEditItem(null);
+      }
+    };
+    const cancelEdit = () => { setF(init); setAppTypeCustom(false); formDirtyRef.current = false; setEditMode(false); };
+    const projStatusMeta = { active: { label: "Active", color: "#10b981" }, lead: { label: "Lead", color: "#f59e0b" }, job_lost: { label: "Job Lost", color: "#94a3b8" }, finalised: { label: "Finalised", color: "#3b82f6" } };
     const openDoc = (inv) => { setEditItem(inv); setModal("invoice"); };
     const newDoc = (type, contactName) => { setInvoiceSeed({ type, project_id: existing.id, projectName: projectLabel(existing), contact_name: contactName || "" }); setEditItem(null); setModal("invoice"); };
 
@@ -2437,15 +2889,28 @@ export default function BookkeeperApp() {
 
     return (
       <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 16 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? (projectLabel(existing) || "Project") : "New Project"}</h3>
-          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            {existing && !editMode && (
+              <button onClick={() => setEditMode(true)} style={{ ...s.btnOutline, fontSize: 11, gap: 5 }}><Icons.Edit /> Edit</button>
+            )}
+            <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
           <span style={{ ...s.label, margin: 0 }}>Project #</span>
-          <span style={{ fontWeight: 700, fontSize: 14, color: accent, fontVariantNumeric: "tabular-nums" }}>{projNumber}</span>
-          {!existing && <span style={{ fontSize: 11, color: "#94a3b8" }}>auto-assigned</span>}
+          {editMode ? (
+            <>
+              <input value={f.job_number} onChange={(e) => setF({ ...f, job_number: e.target.value })} style={{ ...s.input, width: 110, fontWeight: 700, color: accent, fontVariantNumeric: "tabular-nums" }} />
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>{existing ? "editable" : "next in sequence — editable"}</span>
+            </>
+          ) : (
+            <span style={{ fontWeight: 700, fontSize: 14, color: accent, fontVariantNumeric: "tabular-nums" }}>{projNumber}</span>
+          )}
+          {!editMode && existing && existing.application_type && <span style={s.badge(accent)}>{existing.application_type}</span>}
+          {!editMode && existing && <span style={s.badge((projStatusMeta[existing.status || "active"] || projStatusMeta.active).color)}>{(projStatusMeta[existing.status || "active"] || projStatusMeta.active).label}</span>}
         </div>
 
         {existing && (
@@ -2463,17 +2928,114 @@ export default function BookkeeperApp() {
           </div>
         )}
 
+        {!editMode && existing && (
+          <>
+            {existing.name ? (
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>Description</label>
+                <div style={{ fontSize: 13, color: "#334155", lineHeight: 1.5 }}>{existing.name}</div>
+              </div>
+            ) : null}
+            {existing.notes ? (
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>Notes</label>
+                <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{existing.notes}</div>
+              </div>
+            ) : null}
+            <div style={{ marginBottom: 16 }}>
+              <label style={s.label}>Clients &amp; Consultants</label>
+              {partyList.length === 0 ? (
+                <div style={{ fontSize: 12, color: "#94a3b8" }}>None attached yet — hit Edit to add people.</div>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {partyList.map((p) => { const c = partyContactOf(p); if (!c) return null; return (
+                    <span key={p.contact_id} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 16, padding: "4px 10px", fontSize: 12, fontWeight: 600 }}>
+                      {c.name || c.company}
+                      <span style={s.badge(p.role === "consultant" ? "#8b5cf6" : "#34d399")}>{p.role}</span>
+                    </span>
+                  ); })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {editMode && (<>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Address (shown as the project label)</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="e.g. 10 Mcpherson Road Smeaton Grange NSW" style={s.input} /></div>
         <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Name / Description</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Construction Certificate - Gym" style={s.input} /></div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Application Type</label>
+            {appTypeCustom ? (
+              <div style={{ display: "flex", gap: 4 }}>
+                <input autoFocus value={f.application_type} onChange={(e) => setF({ ...f, application_type: e.target.value })} placeholder="e.g. OC" style={{ ...s.input, flex: 1 }} />
+                <button type="button" onClick={() => setAppTypeCustom(false)} title="Done" style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 13, fontWeight: 700 }}>✓</button>
+              </div>
+            ) : (
+              <select value={f.application_type || ""} onChange={(e) => { if (e.target.value === "__custom") { setAppTypeCustom(true); setF({ ...f, application_type: "" }); } else setF({ ...f, application_type: e.target.value }); }} style={s.select}>
+                <option value="">None</option>
+                {appTypeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+                <option value="__custom">+ Add new type…</option>
+              </select>
+            )}
+          </div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}><option value="active">Active</option><option value="job_lost">Job Lost</option><option value="lead">Lead</option><option value="finalised">Finalised</option></select></div>
         </div>
-        <div style={{ marginBottom: 16 }}><label style={s.label}>Notes</label><textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Notes (optional)" style={{ ...s.input, minHeight: 50, resize: "vertical" }} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Name / Description</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Construction Certificate - Gym" style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Notes (optional)" style={{ ...s.input, minHeight: 50, resize: "vertical" }} /></div>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={s.label}>Clients &amp; Consultants</label>
+          {partyList.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+              {partyList.map((p) => { const c = partyContactOf(p); if (!c) return null; return (
+                <span key={p.contact_id} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 16, padding: "4px 10px", fontSize: 12, fontWeight: 600 }}>
+                  {c.name || c.company}
+                  <span style={s.badge(p.role === "consultant" ? "#8b5cf6" : "#34d399")}>{p.role}</span>
+                  <button onClick={() => removeParty(p)} title="Remove from project" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 0, fontSize: 12, lineHeight: 1 }}>✕</button>
+                </span>
+              ); })}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <select value={pickId} onChange={(e) => pickContact(e.target.value)} style={{ ...s.select, flex: 1 }}>
+              <option value="">Add a contact…</option>
+              {availableContacts.map((c) => <option key={c.id} value={c.id}>{(c.name || c.company) + (c.type === "consultant" ? " · consultant" : c.type === "supplier" ? " · supplier" : "")}</option>)}
+            </select>
+            <div style={{ display: "inline-flex", border: "1px solid #e2e8f0", borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
+              {[["client", "Client"], ["consultant", "Consultant"]].map(([val, lbl]) => (
+                <button key={val} type="button" onClick={() => setPickRole(val)} style={{ background: pickRole === val ? accent : "transparent", color: pickRole === val ? "#fff" : "#64748b", border: "none", cursor: "pointer", padding: "7px 9px", fontSize: 10.5, fontWeight: 700 }}>{lbl}</button>
+              ))}
+            </div>
+            <button type="button" disabled={!pickId} onClick={addParty} title="Add to project" style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: "30px", opacity: pickId ? 1 : 0.4 }}>+</button>
+          </div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>
+            Attach one or many — quotes for this project offer these people first.{" "}
+            <button type="button" onClick={() => setPQuickAdd((v) => !v)} style={{ background: "none", border: "none", color: accent, cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 700 }}>+ New contact</button>
+          </div>
+          {pQuickAdd && (
+            <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginTop: 8, border: `1px solid ${accent}30` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Add {pickRole === "consultant" ? "Consultant" : "Client"}</div>
+              <div style={s.grid2}>
+                <div style={{ marginBottom: 8 }}><input value={pQa.name} onChange={(e) => setPQa({ ...pQa, name: e.target.value })} placeholder="Name" style={{ ...s.input, fontSize: 12 }} /></div>
+                <div style={{ marginBottom: 8 }}><input value={pQa.company} onChange={(e) => setPQa({ ...pQa, company: e.target.value })} placeholder="Company" style={{ ...s.input, fontSize: 12 }} /></div>
+              </div>
+              <div style={s.grid2}>
+                <div style={{ marginBottom: 8 }}><input value={pQa.email} onChange={(e) => setPQa({ ...pQa, email: e.target.value })} placeholder="Email" style={{ ...s.input, fontSize: 12 }} /></div>
+                <div style={{ marginBottom: 8 }}><input value={pQa.phone} onChange={(e) => setPQa({ ...pQa, phone: e.target.value })} placeholder="Phone" style={{ ...s.input, fontSize: 12 }} /></div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button disabled={!pQa.name && !pQa.company} onClick={quickAddParty} style={{ ...s.btn(accent), fontSize: 12, opacity: !pQa.name && !pQa.company ? 0.4 : 1 }}>Add & Attach</button>
+                <button onClick={() => { setPQuickAdd(false); setPQa({ name: "", company: "", email: "", phone: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+        </>)}
 
         {existing && (
           <div style={{ marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <label style={{ ...s.label, margin: 0 }}>Consultants/Clients ({consultants.length})</label>
+              <label style={{ ...s.label, margin: 0 }}>Quotes &amp; Invoices by Contact ({consultants.length})</label>
               <button onClick={() => newDoc("quote")} style={{ ...s.btn(accent, true), fontSize: 11 }}><Icons.Plus /> New Quote</button>
             </div>
             {consultants.length === 0 ? (
@@ -2485,7 +3047,7 @@ export default function BookkeeperApp() {
                   <div style={{ fontSize: 11, color: "#64748b" }}>quoted {fmt(c.contract)} · paid {fmt(c.paid)} · <span style={{ fontWeight: 700, color: c.remaining > 0 ? "#0f172a" : "#10b981" }}>{fmt(c.remaining)} left</span></div>
                 </div>
                 {c.quotes.map((q) => (
-                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={() => acceptQuote(q)} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
+                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={async () => { const proj = await acceptQuote(q); if (proj) await offerDepositInvoice(q, proj); }} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
                 ))}
                 {c.invoices.map((iv) => (
                   <DocRow key={iv.id} d={iv} action={iv.status !== "paid" ? <button onClick={() => markPaidQuiet(iv)} style={{ ...s.btnOutline, fontSize: 11, color: "#34d399", borderColor: "#34d39940" }}><Icons.Check /> Paid</button> : null} />
@@ -2499,10 +3061,15 @@ export default function BookkeeperApp() {
           </div>
         )}
 
-        <button disabled={saving || !(f.name.trim() || (f.address || "").trim())} onClick={async () => { setSaving(true); await save(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving || !(f.name.trim() || (f.address || "").trim()) ? 0.5 : 1 }}>{saving ? "Saving…" : existing ? "Update Project" : "Create Project"}</button>
-        {existing && (
-          <button onClick={() => deleteProject(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", color: "#ef4444", borderColor: "#ef444440", gap: 6, marginTop: 8 }}><Icons.Trash /> Delete Project</button>
-        )}
+        {editMode && (<>
+          <button disabled={saving || !(f.name.trim() || (f.address || "").trim())} onClick={async () => { setSaving(true); await save(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving || !(f.name.trim() || (f.address || "").trim()) ? 0.5 : 1 }}>{saving ? "Saving…" : existing ? "Save Changes" : "Create Project"}</button>
+          {existing && (
+            <button onClick={cancelEdit} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8 }}>Cancel</button>
+          )}
+          {existing && (
+            <button onClick={() => deleteProject(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", color: "#ef4444", borderColor: "#ef444440", gap: 6, marginTop: 8 }}><Icons.Trash /> Delete Project</button>
+          )}
+        </>)}
       </div>
     );
   };
@@ -2517,6 +3084,7 @@ export default function BookkeeperApp() {
     const fileRef = useRef(null);
     const [reminderRunning, setReminderRunning] = useState(false);
     const [reminderResult, setReminderResult] = useState(null);
+    const SHOW_MANUAL_REMINDER_CONTROLS = false; // manual Preview/Send Now buttons hidden; daily auto-reminders unaffected
 
     const runReminderJob = async (dryRun) => {
       if (!dryRun && !window.confirm("Send overdue payment reminders now? Emails will go out to clients whose invoices are 1, 7, 14 or 30 days overdue.")) return;
@@ -2653,8 +3221,11 @@ export default function BookkeeperApp() {
         ))}
         {panel("email_tpl", "Email Templates", "Customise invoice & quote email wording", (
           <>
-          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Variables: <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{contact_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{number}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{amount}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{due_date_line}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{payment_details}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{business_name}"}</code> <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b" }}>{"{signature}"}</code>
+          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.8 }}>
+            Variables: {["{first_name}", "{last_name}", "{contact_name}", "{number}", "{amount}", "{due_date}", "{due_date_line}", "{payment_details}", "{business_name}", "{signature}"].map((v) => (
+              <code key={v} style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b", marginRight: 4, whiteSpace: "nowrap" }}>{v}</code>
+            ))}
+            <div style={{ marginTop: 4, color: "#94a3b8" }}><code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{first_name}"}</code> = Cameron · <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{contact_name}"}</code> = Cameron Mawson (full name)</div>
           </div>
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Invoice Email</label>
@@ -2670,15 +3241,36 @@ export default function BookkeeperApp() {
           </div>
           </>
         ))}
+        {panel("quote_tpl", "Quote Templates", "Reusable quote content — rename or delete", (
+          <>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+            Templates are created from the quote editor — open any quote and hit “Save as Template”. New quotes offer them under “Start from template”.
+          </div>
+          {quoteTemplates.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#94a3b8", padding: "4px 0 8px" }}>No templates yet.</div>
+          ) : quoteTemplates.map((t) => (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
+              <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+              <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{t.pricing_mode === "lump_sum" ? `Lump sum${t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}` : "Itemised"}</span>
+              <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
+              <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+            </div>
+          ))}
+          </>
+        ))}
         {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
           <>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once. Use Preview to see who would be emailed right now, or Send Now to run immediately.
+            Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once — nothing for you to do.
           </div>
+          {/* Manual Preview / Send Now controls hidden per preference; the daily
+              automatic reminders still run. Flip to true to bring them back. */}
+          {SHOW_MANUAL_REMINDER_CONTROLS && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
             <button onClick={() => runReminderJob(false)} disabled={reminderRunning} style={{ ...s.btn("#f59e0b"), opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Send Reminders Now"}</button>
           </div>
+          )}
           {reminderResult && (
             <div style={{ marginTop: 10, padding: 12, background: reminderResult.error ? "#fef2f2" : "#f8fafc", border: `1px solid ${reminderResult.error ? "#fecaca" : "#e2e8f0"}`, borderRadius: 8, fontSize: 12, color: "#334155" }}>
               {reminderResult.error ? (
@@ -3049,14 +3641,20 @@ export default function BookkeeperApp() {
 
   const DocList = ({ docType }) => {
     const isQuoteList = docType === "quote";
-    const [filter, setFilter] = useState(isQuoteList ? "all" : "outstanding");
-    const [jobFilter, setJobFilter] = useState("");
-    const [search, setSearch] = useState("");
-    const [sortKey, setSortKey] = useState("due_date");
-    const [sortDir, setSortDir] = useState("desc");
+    // Filter/search/sort come from parent-persisted docView so they survive the
+    // page remount on every action. Selection + menu stay local (resetting those
+    // after an action is the desired behaviour).
+    const view = docView[docType];
+    const { filter, jobFilter, search, sortKey, sortDir } = view;
+    const patchView = (patch) => setDocView((prev) => ({ ...prev, [docType]: { ...prev[docType], ...patch } }));
+    const setFilter = (v) => patchView({ filter: v });
+    const setJobFilter = (v) => patchView({ jobFilter: v });
+    const setSearch = (v) => patchView({ search: v });
+    const setSortKey = (v) => patchView({ sortKey: v });
+    const setSortDir = (v) => patchView({ sortDir: typeof v === "function" ? v(view.sortDir) : v });
     const [selected, setSelected] = useState(() => new Set());
     const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
-    const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["outstanding", "paid", "overdue", "draft"];
+    const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["all", "outstanding", "paid", "overdue", "draft"];
     const sorted = [...divInvoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((i) => {
       if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; } else if (filter !== "all" && i.status !== filter) return false;
@@ -3098,8 +3696,8 @@ export default function BookkeeperApp() {
         <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
           <div style={{ display: "inline-flex", gap: 2, alignItems: "center", justifyContent: "flex-end" }}>
             <button onClick={() => viewInvoice(inv)} title="View" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4 }}><Icons.Eye /></button>
-            <button onClick={async () => { if (emailConn) { const ok = await createOutlookDraft(inv); if (ok) await offerMarkSent(inv); } else sendInvoice(inv); }} disabled={outlookDraftLoading === inv.id} title={emailConn ? "Send via Outlook" : "Send via email app"} style={{ background: "none", border: "none", color: "#3b82f6", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 4 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Send />}</button>
-            {!primaryDone && <button onClick={() => isQuoteList ? acceptQuote(inv) : markPaid(inv)} title={isQuoteList ? "Accept quote" : "Mark paid"} style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 4 }}><Icons.Check /></button>}
+            <button onClick={async () => { if (emailConn) { openComposeFor(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } }} disabled={outlookDraftLoading === inv.id} title={emailConn ? "Compose email (PDF attached)" : "Send via email app"} style={{ background: "none", border: "none", color: "#3b82f6", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 4 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Send />}</button>
+            {!primaryDone && <button onClick={async () => { if (isQuoteList) { const proj = await acceptQuote(inv); if (proj) await offerDepositInvoice(inv, proj); } else { markPaid(inv); } }} title={isQuoteList ? "Accept quote" : "Mark paid"} style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 4 }}><Icons.Check /></button>}
             <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu((m) => m?.id === inv.id ? null : { id: inv.id, x: r.right, y: r.bottom }); }} title="More actions" style={{ background: menu?.id === inv.id ? "#eef2f6" : "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
           </div>
         </td>
@@ -3192,7 +3790,8 @@ export default function BookkeeperApp() {
             <>
               <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
               <div style={{ position: "fixed", top: menu.y + 4, left: Math.max(8, menu.x - 212), width: 212, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
-                {item(emailConn ? "Email via default app" : "Open in Outlook", emailConn ? <Icons.Send /> : <Icons.Outlook />, () => emailConn ? sendInvoice(mi) : createOutlookDraft(mi))}
+                {emailConn && item("Compose email…", <Icons.Send />, () => openComposeFor(mi))}
+                {!emailConn && item("Email via default app", <Icons.Send />, async () => { sendInvoice(mi); await offerMarkSent(mi); })}
                 {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
                 {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
                 {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
@@ -3220,6 +3819,13 @@ export default function BookkeeperApp() {
     const [sortKey, setSortKey] = useState("job_number");
     const [sortDir, setSortDir] = useState("asc");
     const consultantsLabel = (parties) => parties.length === 0 ? "—" : parties.length === 1 ? parties[0].name : `${parties.length} consultants/clients`;
+    // Billing-derived contacts first; if the project has no docs yet, fall back
+    // to the clients/consultants explicitly attached via bk_job_parties.
+    const partiesFor = (p) => {
+      const derived = projectConsultants(p, divInvoices);
+      if (derived.length) return derived;
+      return jobParties.filter((x) => x.job_id === p.id).map((x) => { const c = contacts.find((cc) => cc.id === x.contact_id); return { name: c?.name || c?.company || "—" }; });
+    };
     const sortVal = (r) => {
       switch (sortKey) {
         case "project": return projectLabel(r.p).toLowerCase();
@@ -3235,7 +3841,7 @@ export default function BookkeeperApp() {
     const rows = divJobs
       .filter((p) => statusFilter === "all" || (p.status || "active") === statusFilter)
       .filter((p) => !search || (p.name || "").toLowerCase().includes(search.toLowerCase()))
-      .map((p) => ({ p, t: projectTotals(p, divInvoices), parties: projectConsultants(p, divInvoices) }))
+      .map((p) => ({ p, t: projectTotals(p, divInvoices), parties: partiesFor(p) }))
       .sort((a, b) => { const va = sortVal(a), vb = sortVal(b); const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb)); return sortDir === "asc" ? cmp : -cmp; });
     const SortTh = ({ label, k, align, width }) => (
       <th onClick={() => { if (sortKey === k) setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortKey(k); setSortDir(["contract", "invoiced", "paid", "remaining", "progress"].includes(k) ? "desc" : "asc"); } }} style={{ ...s.th, textAlign: align || "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", ...(width ? { width } : {}) }}>
@@ -3260,7 +3866,7 @@ export default function BookkeeperApp() {
                   return (
                     <tr key={p.id} onClick={() => { setEditItem(p); setModal("project"); }} style={{ cursor: "pointer" }}>
                       <td style={{ ...s.td, color: "#64748b", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{p.job_number || "—"}</td>
-                      <td style={{ ...s.td, fontWeight: 600 }}>{projectLabel(p)}{p.address && p.name && p.name !== projectLabel(p) ? <div style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>{p.name}</div> : null}</td>
+                      <td style={{ ...s.td, fontWeight: 600 }}>{projectLabel(p)}{p.application_type ? <span style={{ ...s.badge(accent), marginLeft: 6 }}>{p.application_type}</span> : null}{p.address && p.name && p.name !== projectLabel(p) ? <div style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>{p.name}</div> : null}</td>
                       <td style={{ ...s.td, color: "#64748b", fontSize: 12 }}>{consultantsLabel(parties)}</td>
                       <td style={{ ...s.td, textAlign: "right" }}>{fmt(t.contract)}</td>
                       <td style={{ ...s.td, textAlign: "right", color: "#3b82f6" }}>{fmt(t.invoiced)}</td>
@@ -3287,7 +3893,7 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-          <FilterPills tabs={[{ key: "all", label: "All", count: contacts.length }, { key: "client", label: "Clients", count: contacts.filter((c) => c.type === "client").length }, { key: "supplier", label: "Suppliers", count: contacts.filter((c) => c.type === "supplier").length }]} active={filter} onChange={setFilter} />
+          <FilterPills tabs={[{ key: "all", label: "All", count: contacts.length }, { key: "client", label: "Clients", count: contacts.filter((c) => c.type === "client").length }, { key: "consultant", label: "Consultants", count: contacts.filter((c) => c.type === "consultant").length }, { key: "supplier", label: "Suppliers", count: contacts.filter((c) => c.type === "supplier").length }]} active={filter} onChange={setFilter} />
         </div>
         <div style={s.card}>
           {filtered.length === 0 ? <EmptyState icon={Icons.Contacts} title="No contacts yet" hint="Add clients and suppliers to reuse them on quotes and invoices." /> : (
@@ -3299,7 +3905,7 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, fontWeight: 600 }}>{c.name || c.company}</td>
                     <td style={{ ...s.td, color: "#64748b" }}>{c.company || "--"}</td>
                     <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{c.email || "--"}</td>
-                    <td style={s.td}><span style={s.badge(c.type === "client" ? "#34d399" : "#f59e0b")}>{c.type}</span></td>
+                    <td style={s.td}><span style={s.badge(c.type === "client" ? "#34d399" : c.type === "consultant" ? "#8b5cf6" : "#f59e0b")}>{c.type}</span></td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
                       <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
                       <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
@@ -3684,12 +4290,12 @@ export default function BookkeeperApp() {
 
   const MobileContacts = () => {
     const [tab, setTab] = useState("All");
-    const filtered = contacts.filter((c) => { if (tab === "Clients") return c.type === "client"; if (tab === "Suppliers") return c.type === "supplier"; return true; });
-    const typeBadge = (type) => ({ color: type === "client" ? "#34d399" : "#f59e0b", label: type === "client" ? "Client" : "Supplier" });
+    const filtered = contacts.filter((c) => { if (tab === "Clients") return c.type === "client"; if (tab === "Consultants") return c.type === "consultant"; if (tab === "Suppliers") return c.type === "supplier"; return true; });
+    const typeBadge = (type) => ({ color: type === "client" ? "#34d399" : type === "consultant" ? "#8b5cf6" : "#f59e0b", label: type === "client" ? "Client" : type === "consultant" ? "Consultant" : "Supplier" });
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ paddingTop: 8, paddingBottom: 12 }}>
-          <MobileFilterTabs tabs={["All", "Clients", "Suppliers"]} active={tab} onChange={setTab} />
+          <MobileFilterTabs tabs={["All", "Clients", "Consultants", "Suppliers"]} active={tab} onChange={setTab} />
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
           {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No contacts found</div> : filtered.map((c, i) => (
@@ -4162,6 +4768,15 @@ export default function BookkeeperApp() {
   const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reconcile: ReconcilePage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, pnl: PnlPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
+  // Prefill for the compose-email window: recipient + subject + message (signature
+  // stripped from the body; shown/appended separately) + the HTML signature.
+  const composeDefaults = composeDoc ? {
+    to: composeDoc.contact_email || "",
+    subject: `${composeDoc.type === "quote" ? "Quote" : "Invoice"} ${composeDoc.number || ""} from ${profile.name || "Our company"}`.trim(),
+    body: buildEmailBody(composeDoc, { withSignature: false }).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd(),
+    signatureHtml: signatureToHtml(defaultSignatureText()),
+  } : null;
+
   const SidebarContent = () => (
     <>
       <div style={{ ...s.logo, position: "relative", padding: navCollapsed ? "16px 6px 12px" : "20px 16px 12px", textAlign: navCollapsed ? "center" : "left" }}>
@@ -4216,7 +4831,7 @@ export default function BookkeeperApp() {
       <>
         <MobileLayout />
         {modal && (
-          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
+          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
             <div className="bk-modal" style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "income" && <IncomeForm existing={editItem} />}
@@ -4231,6 +4846,7 @@ export default function BookkeeperApp() {
         )}
         {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
         {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
+        {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
       </>
     );
   }
@@ -4266,7 +4882,7 @@ export default function BookkeeperApp() {
           <div style={s.content}><PageComponent /></div>
         </div>
         {modal && (
-          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(true); }}>
+          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
             <div className="bk-modal" style={s.modalContent}>
               {modal === "expense" && <ExpenseForm existing={editItem} />}
               {modal === "income" && <IncomeForm existing={editItem} />}
@@ -4282,6 +4898,7 @@ export default function BookkeeperApp() {
       </div>
       {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
       {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
+      {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );
 }
