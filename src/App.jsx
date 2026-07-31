@@ -803,6 +803,25 @@ export default function BookkeeperApp() {
   // Tracked as a ref (not state) on purpose: forms are defined inline inside this
   // component, so a parent re-render remounts them and wipes their local state.
   const formDirtyRef = useRef(false);
+  // The modal forms are components declared inside App, so their function
+  // identity changes on every App render and React remounts them — resetting
+  // every useState inside. Any handler that mutates App state while the modal
+  // stays open (the inline "quick add contact/project" flows, saving a quote
+  // template) therefore wipes whatever the user had typed. These refs keep the
+  // in-progress draft alive across that remount. Each is keyed to the document
+  // being edited so a draft can never bleed into a different one.
+  const projectDraftRef = useRef(null);
+  const invoiceDraftRef = useRef(null);
+  // A draft belongs only to the modal that owns it. Jumping straight from one
+  // modal to another (a project's "+ New Quote", say) never passes through
+  // requestCloseModal, so without this an abandoned draft would be resurrected —
+  // and could be re-saved — the next time that document was opened. Keyed on
+  // `modal` alone, so a mid-edit remount (which leaves `modal` untouched) is
+  // unaffected and still restores.
+  useEffect(() => {
+    if (modal !== "project") projectDraftRef.current = null;
+    if (modal !== "invoice") invoiceDraftRef.current = null;
+  }, [modal]);
   const [aiData, setAiData] = useState(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("bk_navCollapsed") === "1");
@@ -895,6 +914,8 @@ export default function BookkeeperApp() {
     if ((alwaysConfirm || formDirtyRef.current) && !window.confirm("Are you sure you want to close? Any unsaved changes will be lost.")) return;
     if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {});
     formDirtyRef.current = false;
+    projectDraftRef.current = null;
+    invoiceDraftRef.current = null;
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
@@ -1274,6 +1295,7 @@ export default function BookkeeperApp() {
     }
     if (inserted && emailConn) saveToOneDrive("invoice", inserted.id, { silent: true });
     formDirtyRef.current = false;
+    invoiceDraftRef.current = null;
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
@@ -1327,6 +1349,7 @@ export default function BookkeeperApp() {
       regenAndFileOneDrive(id, prev);
     }
     formDirtyRef.current = false;
+    invoiceDraftRef.current = null;
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
@@ -2470,11 +2493,16 @@ export default function BookkeeperApp() {
     const init = existing
       ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
       : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
-    const [f, setF] = useState(init);
-    const [dueDateEdited, setDueDateEdited] = useState(!!existing);
+    // Draft survival across a remount (see invoiceDraftRef). The key ties the
+    // draft to this exact document — a saved invoice by id, a new one by its
+    // seed — so a restored draft can never land in the wrong form.
+    const draftKey = existing ? `id:${existing.id}` : `new:${JSON.stringify(invoiceSeed || {})}`;
+    const draft = invoiceDraftRef.current && invoiceDraftRef.current.key === draftKey ? invoiceDraftRef.current : null;
+    const [f, setF] = useState(() => draft?.f || init);
+    const [dueDateEdited, setDueDateEdited] = useState(() => (draft ? draft.dueDateEdited : !!existing));
     const invOverdue = existing && f.type !== "quote" ? daysOverdue({ status: existing.status, due_date: f.due_date }) : 0;
-    const [notesEdited, setNotesEdited] = useState(!!existing);
-    const [termsEdited, setTermsEdited] = useState(!!existing);
+    const [notesEdited, setNotesEdited] = useState(() => (draft ? draft.notesEdited : !!existing));
+    const [termsEdited, setTermsEdited] = useState(() => (draft ? draft.termsEdited : !!existing));
     const updateType = (newType) => {
       const autoNum = !existing && !f._numberEdited;
       const updates = { ...f, type: newType, number: autoNum ? getNextDocumentNumber(divInvoices, insertDivision, newType) : f.number };
@@ -2488,11 +2516,21 @@ export default function BookkeeperApp() {
       if (!dueDateEdited) updates.due_date = getDefaultDueDate(f.type, newDate);
       setF(updates);
     };
-    const [quickAdd, setQuickAdd] = useState(false);
-    const [qa, setQa] = useState({ name: "", email: "", company: "", phone: "", abn: "", address: "" });
-    const [projectAdd, setProjectAdd] = useState(false);
-    const [pa, setPa] = useState({ name: "", contract_value: "", address: "" });
+    // The quick-add panels hold typed text too, so they ride along in the draft.
+    const [quickAdd, setQuickAdd] = useState(() => draft?.quickAdd ?? false);
+    const [qa, setQa] = useState(() => draft?.qa || { name: "", email: "", company: "", phone: "", abn: "", address: "" });
+    const [projectAdd, setProjectAdd] = useState(() => draft?.projectAdd ?? false);
+    const [pa, setPa] = useState(() => draft?.pa || { name: "", contract_value: "", address: "" });
     const [saving, setSaving] = useState(false);
+    // Keep the draft current so a remount mid-edit restores the latest values.
+    // `saving` is deliberately NOT carried: it belongs to an in-flight save owned
+    // by the dying instance, and restoring it would strand the button disabled.
+    const liveDraft = { key: draftKey, f, dueDateEdited, notesEdited, termsEdited, quickAdd, qa, projectAdd, pa };
+    useEffect(() => { invoiceDraftRef.current = liveDraft; });
+    // Handlers that mutate App state (quick-add) must stash the *post-click*
+    // values synchronously: the remount kills this instance, so the setF right
+    // after the await never lands. This runs before React flushes the re-render.
+    const stashDraft = (nextF) => { invoiceDraftRef.current = { ...liveDraft, f: nextF }; };
     const initialSnapshot = useRef(JSON.stringify(init));
     useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f]);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
@@ -2677,7 +2715,7 @@ export default function BookkeeperApp() {
               <div style={{ marginBottom: 8 }}><input value={qa.address} onChange={(e) => setQa({ ...qa, address: e.target.value })} placeholder="Address" style={{ ...s.input, fontSize: 12 }} /></div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button disabled={!qa.name && !qa.company} onClick={async () => { const inserted = await addContact({ ...qa, type: "client", notes: "" }, true); if (inserted) setF({ ...f, contact_name: inserted.name || inserted.company || "", contact_email: inserted.email || "", contact_company: inserted.company || "", contact_abn: inserted.abn || "", contact_address: inserted.address || "", contact_phone: inserted.phone || "" }); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name && !qa.company ? 0.4 : 1 }}>Add & Select</button>
+              <button disabled={!qa.name && !qa.company} onClick={async () => { const inserted = await addContact({ ...qa, type: "client", notes: "" }, true); if (inserted) { const nextF = { ...f, contact_name: inserted.name || inserted.company || "", contact_email: inserted.email || "", contact_company: inserted.company || "", contact_abn: inserted.abn || "", contact_address: inserted.address || "", contact_phone: inserted.phone || "" }; stashDraft(nextF); setF(nextF); } setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); setQuickAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !qa.name && !qa.company ? 0.4 : 1 }}>Add & Select</button>
               <button onClick={() => { setQuickAdd(false); setQa({ name: "", email: "", company: "", phone: "", abn: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
           </div>
@@ -2699,7 +2737,7 @@ export default function BookkeeperApp() {
             <div style={{ marginBottom: 8 }}><input value={pa.address} onChange={(e) => setPa({ ...pa, address: e.target.value })} placeholder="Address (optional)" style={{ ...s.input, fontSize: 12 }} /></div>
             <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>The contract value builds up automatically from accepted quotes.</div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button disabled={!pa.name.trim()} onClick={async () => { const created = await createProject({ name: pa.name, contact_name: f.contact_name, address: pa.address }); if (created) setF({ ...f, project_id: created.id, job: projectLabel(created) }); setPa({ name: "", contract_value: "", address: "" }); setProjectAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !pa.name.trim() ? 0.4 : 1 }}>Add & Select</button>
+              <button disabled={!pa.name.trim()} onClick={async () => { const created = await createProject({ name: pa.name, contact_name: f.contact_name, address: pa.address }); if (created) { const nextF = { ...f, project_id: created.id, job: projectLabel(created) }; stashDraft(nextF); setF(nextF); } setPa({ name: "", contract_value: "", address: "" }); setProjectAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !pa.name.trim() ? 0.4 : 1 }}>Add & Select</button>
               <button onClick={() => { setProjectAdd(false); setPa({ name: "", contract_value: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
           </div>
@@ -2802,25 +2840,32 @@ export default function BookkeeperApp() {
     const init = existing
       ? { name: existing.name || "", address: existing.address || "", notes: existing.notes || "", status: existing.status || "active", application_type: existing.application_type || "", job_number: existing.job_number || "" }
       : { name: "", address: "", notes: "", status: "active", application_type: "", job_number: getNextJobNumber(jobs) };
-    const [f, setF] = useState(init);
+    // Draft survival across a remount (see projectDraftRef), keyed to this
+    // project so a draft can't bleed into another one. This also covers the
+    // saved-project edit path: attaching/removing a contact there remounts the
+    // form, which would otherwise discard unsaved edits *and* silently drop the
+    // user out of edit mode (editMode re-initialises to !existing === false).
+    const draftKey = existing ? `id:${existing.id}` : "new";
+    const pDraft = projectDraftRef.current && projectDraftRef.current.key === draftKey ? projectDraftRef.current : null;
+    const [f, setF] = useState(() => pDraft?.f || init);
     const [saving, setSaving] = useState(false);
     // Existing projects open read-only; Edit unlocks the fields. New projects
     // start straight in edit mode. Dirty tracking mirrors InvoiceForm so the
     // backdrop/X only nag about unsaved changes when there actually are any.
-    const [editMode, setEditMode] = useState(!existing);
+    const [editMode, setEditMode] = useState(() => (pDraft ? pDraft.editMode : !existing));
     const initialSnapshot = useRef(JSON.stringify(init));
     useEffect(() => { formDirtyRef.current = editMode && JSON.stringify(f) !== initialSnapshot.current; }, [f, editMode]);
     // Application type options: built-ins + any custom types already in use.
-    const [appTypeCustom, setAppTypeCustom] = useState(false);
+    const [appTypeCustom, setAppTypeCustom] = useState(() => (pDraft ? pDraft.appTypeCustom : false));
     const appTypeOptions = [...new Set([...APPLICATION_TYPES, ...jobs.map((j) => j.application_type).filter(Boolean), ...(f.application_type ? [f.application_type] : [])])];
     // Clients/consultants attached to this project. Existing projects edit the
     // live bk_job_parties rows; new projects collect locally and save on create.
-    const [newParties, setNewParties] = useState([]);
+    const [newParties, setNewParties] = useState(() => (existing ? [] : (pDraft?.newParties || [])));
     const partyList = existing ? jobParties.filter((p) => p.job_id === existing.id) : newParties;
     const partyContactOf = (p) => contacts.find((c) => c.id === p.contact_id);
     const availableContacts = contacts.filter((c) => !partyList.some((p) => p.contact_id === c.id));
-    const [pickId, setPickId] = useState("");
-    const [pickRole, setPickRole] = useState("client");
+    const [pickId, setPickId] = useState(() => pDraft?.pickId || "");
+    const [pickRole, setPickRole] = useState(() => pDraft?.pickRole || "client");
     const pickContact = (id) => { setPickId(id); const c = contacts.find((x) => x.id === id); if (c) setPickRole(c.type === "consultant" ? "consultant" : "client"); };
     const addParty = async () => {
       if (!pickId) return;
@@ -2832,13 +2877,22 @@ export default function BookkeeperApp() {
       if (existing) await removeJobParty(p.id);
       else setNewParties((prev) => prev.filter((x) => x.contact_id !== p.contact_id));
     };
-    const [pQuickAdd, setPQuickAdd] = useState(false);
-    const [pQa, setPQa] = useState({ name: "", company: "", email: "", phone: "" });
+    const [pQuickAdd, setPQuickAdd] = useState(() => pDraft?.pQuickAdd ?? false);
+    const [pQa, setPQa] = useState(() => pDraft?.pQa || { name: "", company: "", email: "", phone: "" });
+    // Keep the draft current so any remount restores the latest values.
+    const liveDraft = { key: draftKey, f, newParties, editMode, appTypeCustom, pickId, pickRole, pQuickAdd, pQa };
+    useEffect(() => { projectDraftRef.current = liveDraft; });
     const quickAddParty = async () => {
       const inserted = await addContact({ ...pQa, type: pickRole, abn: "", address: "", notes: "" }, true);
       if (!inserted) return;
       if (existing) await addJobParty(existing.id, inserted.id, pickRole);
-      else setNewParties((prev) => [...prev, { contact_id: inserted.id, role: pickRole }]);
+      else {
+        const nextParties = [...newParties, { contact_id: inserted.id, role: pickRole }];
+        // addContact() ran setContacts(), which remounts this form; persist the
+        // new party + current fields now so the fresh instance restores them.
+        projectDraftRef.current = { ...liveDraft, newParties: nextParties };
+        setNewParties(nextParties);
+      }
       setPQa({ name: "", company: "", email: "", phone: "" });
       setPQuickAdd(false);
     };
@@ -2860,9 +2914,17 @@ export default function BookkeeperApp() {
         const updated = await updateProject(existing.id, f);
         if (updated) { initialSnapshot.current = JSON.stringify(f); formDirtyRef.current = false; setEditItem(updated); setEditMode(false); }
       } else {
-        await createProject({ ...f, parties: newParties });
-        setModal(null);
-        setEditItem(null);
+        // Only tear the form down once the insert actually succeeded. createProject
+        // returns null on failure (RLS, network, missing division migration) — the
+        // user gets an error alert, so closing here would delete everything they
+        // typed with no way back. Mirrors the `if (updated)` guard above.
+        const created = await createProject({ ...f, parties: newParties });
+        if (created) {
+          projectDraftRef.current = null;
+          formDirtyRef.current = false;
+          setModal(null);
+          setEditItem(null);
+        }
       }
     };
     const cancelEdit = () => { setF(init); setAppTypeCustom(false); formDirtyRef.current = false; setEditMode(false); };
@@ -4875,7 +4937,7 @@ export default function BookkeeperApp() {
               {(page === "expenses" || page === "dashboard" || page === "reimbursements") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
               {page === "quotes" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
-              {page === "projects" && <button onClick={() => { setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
+              {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
             </div>
           </div>
