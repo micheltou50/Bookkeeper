@@ -271,8 +271,11 @@ function projectLabel(p) {
   return (p?.address && p.address.trim()) ? p.address.trim() : (p?.name || "");
 }
 
-// Group a project's quotes/invoices by consultant (keyed on contact_name, since
-// invoices store contact_name but not contact_id). Returns one entry per consultant
+// Group a project's quotes/invoices by consultant. Deliberately keyed on the
+// contact_name SNAPSHOT, not contact_id: the snapshot is what was printed on the
+// document, and regrouping on the id would change displayed per-consultant totals
+// (a row whose contact_id is null would collapse into "Unassigned"). Returns one
+// entry per consultant
 // with their own totals + their quote/invoice rows, sorted by remaining desc.
 function projectConsultants(project, invoices) {
   const linked = (invoices || []).filter((i) => i.project_id === project.id);
@@ -1040,11 +1043,14 @@ export default function BookkeeperApp() {
   // and the user's record silently vanishes. Route inserts/updates/deletes through
   // this: it surfaces the failure to the user and returns { ok } so callers can
   // bail before closing the modal or optimistically mutating local state.
-  const sbWrite = async (query, action = "save") => {
+  // `friendly` maps a Postgres error code to a plain-English message shown instead
+  // of the raw driver text (e.g. "23505" -> "that number is already used"). The raw
+  // error still goes to the console.
+  const sbWrite = async (query, action = "save", friendly = null) => {
     const { data, error } = await query;
     if (error) {
       console.error(`Supabase ${action} failed:`, error);
-      alert(`Failed to ${action}: ${error.message || "unknown error"}`);
+      alert(friendly?.[error.code] || `Failed to ${action}: ${error.message || "unknown error"}`);
       return { ok: false, data: null, error };
     }
     return { ok: true, data, error: null };
@@ -1053,11 +1059,15 @@ export default function BookkeeperApp() {
   // Insert with division when the column exists (migration 0007). Existing Mworx
   // Supabase rows keep working before migration: division is omitted and treated
   // as mworx. MT Management saves require the migration first.
-  const sbInsert = async (table, row, action, multi = false) => {
+  const sbInsert = async (table, row, action, multi = false, friendly = null) => {
     let query = supabase.from(table).insert(row);
     query = multi ? query.select() : query.select().single();
-    let res = await sbWrite(query, action);
-    if (!res.ok && res.error?.message?.match(/division/i) && "division" in row) {
+    let res = await sbWrite(query, action, friendly);
+    // The retry below is keyed on the *message* text, so any other error whose
+    // message happens to contain "division" would be misread as a missing column
+    // and silently re-inserted. A unique-violation (23505) naming an index on the
+    // division column is exactly that case, so exclude it explicitly.
+    if (!res.ok && res.error?.code !== "23505" && res.error?.message?.match(/division/i) && "division" in row) {
       if (row.division !== "mworx") {
         alert("To save MT Management records, apply supabase/migrations/0007_divisions.sql in Supabase first.");
         return res;
@@ -1065,7 +1075,7 @@ export default function BookkeeperApp() {
       const { division: _d, ...noDiv } = row;
       query = supabase.from(table).insert(noDiv);
       query = multi ? query.select() : query.select().single();
-      res = await sbWrite(query, action);
+      res = await sbWrite(query, action, friendly);
     }
     return res;
   };
@@ -1269,18 +1279,54 @@ export default function BookkeeperApp() {
   };
 
   const deleteContact = async (id) => {
-    if (!window.confirm("Delete this contact? This cannot be undone.")) return;
+    if (!window.confirm("Delete this contact? Linked quotes and invoices will be kept but unlinked. This cannot be undone.")) return;
     const { ok } = await sbWrite(supabase.from("bk_contacts").delete().eq("id", id), "delete contact");
     if (!ok) return;
     setContacts((prev) => prev.filter((c) => c.id !== id));
+    // bk_invoices.contact_id is ON DELETE SET NULL, so the DB has already cleared
+    // the link on this contact's documents. Mirror that locally — otherwise the
+    // in-memory rows keep a dangling id that a later save would write back.
+    setInvoices((prev) => prev.map((i) => (i.contact_id === id ? { ...i, contact_id: null } : i)));
     setModal(null);
     setEditItem(null);
   };
 
+  // Resolve the saved contact a document belongs to. Invoices/quotes store a
+  // contact *snapshot* (name/email/company/…) and that snapshot stays the record;
+  // contact_id is the stable link the accounting sync needs.
+  //
+  // The picker writes `c.name || c.company`, so that is the primary key. The two
+  // fallbacks recover historical rows written before the picker existed: one stored
+  // a company name ("Enspect Pty Ltd" — the contact's key is "Nick Papouttsakis"),
+  // another a shortened first name. Each step must match exactly one contact, since
+  // bk_contacts has no uniqueness on name. Returns null when nothing matches —
+  // contact_id stays nullable and the snapshot is unaffected.
+  const contactIdFor = (name, email) => {
+    const n = (name || "").trim().toLowerCase();
+    const e = (email || "").trim().toLowerCase();
+    const only = (pred) => { const hits = contacts.filter(pred); return hits.length === 1 ? hits[0].id : null; };
+    const norm = (v) => (v || "").trim().toLowerCase();
+    if (n) {
+      const byKey = only((c) => norm(c.name || c.company) === n);
+      if (byKey) return byKey;
+      const byCompany = only((c) => norm(c.company) === n);
+      if (byCompany) return byCompany;
+    }
+    if (e) return only((c) => norm(c.email) === e);
+    return null;
+  };
+
+  // A blank number is legal (an unnumbered draft) but must be stored as NULL, not
+  // "": the unique index skips NULLs, so two blank drafts would otherwise collide.
+  const normNumber = (v) => (v || "").trim() || null;
+
+  // The only constraint a user can trip by hand — the Number field is free text.
+  const DUP_NUMBER = (n) => ({ "23505": `Document number ${(n || "").trim() || "(blank)"} is already used in this division. Change the number and save again.` });
+
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: inv.number, type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
-    const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice");
+    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
+    const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice", false, DUP_NUMBER(inv.number));
     if (!ok) return;
     if (inserted) {
       if (items.length) {
@@ -1312,8 +1358,16 @@ export default function BookkeeperApp() {
     // project_id is a uuid column; the form sends "" for "No project". Postgres
     // rejects "" as a uuid, so coalesce to null (matches addInvoice).
     if ("project_id" in dbUpdates) dbUpdates.project_id = dbUpdates.project_id || null;
+    if ("number" in dbUpdates) dbUpdates.number = normNumber(dbUpdates.number);
+    // contact_id is deliberately NOT in the allow-list. The form spreads the whole
+    // DB row into its state, so a whitelisted contact_id would carry the value the
+    // document was loaded with — and the contact picker rewrites contact_name
+    // without touching it, which would save a link contradicting the snapshot.
+    // Re-derive it from the name the user actually chose (same rule as
+    // updateProject), so the link always agrees with what's printed.
+    if ("contact_name" in updates) dbUpdates.contact_id = contactIdFor(updates.contact_name, updates.contact_email);
     const items = updates.items;
-    const { ok: updOk } = await sbWrite(supabase.from("bk_invoices").update(dbUpdates).eq("id", id), "save invoice");
+    const { ok: updOk } = await sbWrite(supabase.from("bk_invoices").update(dbUpdates).eq("id", id), "save invoice", DUP_NUMBER(dbUpdates.number ?? updates.number));
     if (!updOk) return;
     if (items) {
       // Insert the replacement items FIRST, then delete the rows that aren't part of
@@ -1356,7 +1410,20 @@ export default function BookkeeperApp() {
     return true; // callers (saveAndCompose) gate the compose step on a successful save
   };
 
+  // Once a document has been handed to the accounting system it is a record there,
+  // not ours to remove. Rows that predate the myob_sync_status column (or a stale
+  // tab) have no value at all, so treat anything falsy as "not synced".
+  // A BEFORE DELETE trigger enforces the same rule in the database; this is the
+  // readable half, so the user gets an explanation instead of a driver error.
+  const myobSynced = (inv) => !!inv?.myob_sync_status && inv.myob_sync_status !== "not_synced";
+  const blockedByMyob = (inv) => {
+    alert(`${inv.type === "quote" ? "Quote" : "Invoice"} ${inv.number || ""} is recorded in MYOB and can't be deleted here.\n\nReverse or credit it in MYOB first.`);
+  };
+
   const deleteInvoice = async (id) => {
+    // Check before the confirm — never ask someone to confirm an action we refuse.
+    const existing = invoicesRef.current.find((i) => i.id === id);
+    if (myobSynced(existing)) { blockedByMyob(existing); return; }
     if (!window.confirm("Delete this invoice? This cannot be undone.")) return;
     const { ok } = await sbWrite(supabase.from("bk_invoices").delete().eq("id", id), "delete invoice");
     if (!ok) return;
@@ -1378,10 +1445,22 @@ export default function BookkeeperApp() {
 
   const bulkDeleteInvoices = async (ids) => {
     if (!ids.length) return false;
-    if (!window.confirm(`Delete ${ids.length} invoice${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) return false;
-    const { ok } = await sbWrite(supabase.from("bk_invoices").delete().in("id", ids), "delete invoices");
+    // "Select all" can pick up the whole filtered list, so a mixed selection is
+    // normal. Delete what we're allowed to and say what was skipped, rather than
+    // refusing the lot. Only the allowed ids reach the DB *and* local state, so
+    // the list can't show a row as gone while it still exists.
+    const selected = invoicesRef.current.filter((i) => ids.includes(i.id));
+    const blocked = selected.filter(myobSynced);
+    const allowed = ids.filter((id) => !blocked.some((b) => b.id === id));
+    if (!allowed.length) {
+      alert(`${blocked.length === 1 ? "That invoice is" : `All ${blocked.length} selected invoices are`} recorded in MYOB and can't be deleted here.\n\nReverse or credit ${blocked.length === 1 ? "it" : "them"} in MYOB first.`);
+      return false;
+    }
+    const skipNote = blocked.length ? `\n\n${blocked.length} synced to MYOB will be skipped: ${blocked.map((b) => b.number).filter(Boolean).join(", ")}` : "";
+    if (!window.confirm(`Delete ${allowed.length} invoice${allowed.length === 1 ? "" : "s"}? This cannot be undone.${skipNote}`)) return false;
+    const { ok } = await sbWrite(supabase.from("bk_invoices").delete().in("id", allowed), "delete invoices");
     if (!ok) return false;
-    const set = new Set(ids);
+    const set = new Set(allowed);
     setInvoices((prev) => prev.filter((i) => !set.has(i.id)));
     return true;
   };
@@ -1512,13 +1591,14 @@ export default function BookkeeperApp() {
     const row = {
       user_id: session.user.id, business_id: biz, division, number, type: "invoice",
       date: today(), due_date: getDefaultDueDate("invoice", today()),
+      contact_id: quote.contact_id || contactIdFor(quote.contact_name, quote.contact_email),
       contact_name: quote.contact_name, contact_email: quote.contact_email, contact_company: quote.contact_company,
       contact_abn: quote.contact_abn, contact_address: quote.contact_address, contact_phone: quote.contact_phone,
       job: projectLabel(project), project_id: project.id,
       notes: getDefaultTerms("invoice"), terms: null, status: "draft",
       total: amount, pricing_mode: "lump_sum", converted_from_quote_id: quote.id,
     };
-    const { ok, data: inserted } = await sbInsert("bk_invoices", row, "create deposit invoice");
+    const { ok, data: inserted } = await sbInsert("bk_invoices", row, "create deposit invoice", false, DUP_NUMBER(number));
     if (!ok || !inserted) return null;
     const itemsRes = await sbWrite(supabase.from("bk_invoice_items").insert({ invoice_id: inserted.id, description, note: "", qty: 1, rate: 0, sort_order: 0 }).select(), "save deposit item");
     inserted.items = itemsRes.ok ? (itemsRes.data || []) : [];
