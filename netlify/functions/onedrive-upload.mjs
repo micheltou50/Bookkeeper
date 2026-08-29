@@ -13,6 +13,23 @@ const SCOPES = "offline_access User.Read Mail.Send Mail.ReadWrite Files.ReadWrit
 const APP_URL = process.env.URL || "https://bkeeper.netlify.app";
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
+// The folder a new project is modelled on. Copying it (rather than creating
+// folders from a hard-coded list) means the structure is maintained in OneDrive,
+// not here: add a subfolder or drop a template document into the master and every
+// project created afterwards inherits it, with no code change and no deploy.
+const MASTER_FOLDER_NAME = "00000 - Master Folder";
+
+// Fallback skeleton, used only when the master folder is missing or the copy
+// fails. Keep in step with the master's top level.
+const PROJECT_SUBFOLDERS = [
+  "01 - Admin", "02 - Originals", "03 - Drawings",
+  "04 - Consultants", "05 - Submission", "06 - Approvals",
+];
+
+// Quotes and invoices live under the admin folder of the project.
+const ADMIN_FOLDER_NAME = "01 - Admin";
+
+
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY
@@ -77,17 +94,50 @@ async function createFolder(token, basePath, name) {
   return { id: j.id, name: j.name, webUrl: j.webUrl };
 }
 
+// Find a project's folder under basePath, creating it if absent.
+//
+// A folder created here is a COPY of the master folder, so it arrives with the
+// full numbered structure (01 - Admin … 06 - Approvals) and anything the master
+// holds. Both callers go through here — project creation and the on-the-fly
+// creation when an issued invoice is filed against a project that has no folder
+// yet — so a project can never end up with a bare folder just because its
+// documents were filed before anyone opened it.
 async function resolveFolder(token, basePath, jobNumber, jobLabel, fallbackName) {
   const { items, status } = await listChildren(token, basePath);
   if (status) return { status };
-  if (jobNumber) {
-    const match = items.find((c) => c.folder && String(c.name).startsWith(String(jobNumber)));
-    if (match) return { id: match.id, name: match.name, webUrl: match.webUrl };
-    return createFolder(token, basePath, sanitize(jobLabel ? `${jobNumber} - ${jobLabel}` : String(jobNumber)));
+
+  const wanted = jobNumber
+    ? sanitize(jobLabel ? `${jobNumber} - ${jobLabel}` : String(jobNumber))
+    : fallbackName;
+
+  // Match on the job number prefix so a folder the user has renamed
+  // ("26114 - Smith St (ON HOLD)") is still recognised as that project's.
+  const match = jobNumber
+    ? items.find((c) => c.folder && String(c.name).startsWith(String(jobNumber)))
+    : items.find((c) => c.folder && c.name === fallbackName);
+  if (match) return { id: match.id, name: match.name, webUrl: match.webUrl };
+
+  // Never copy the master onto itself, and never treat it as a project folder.
+  const master = items.find((c) => c.folder && String(c.name).toLowerCase() === MASTER_FOLDER_NAME.toLowerCase());
+  const parent = await getItemByPath(token, basePath);
+  if (master && parent.id) {
+    const copied = await copyMasterFolder(token, basePath, master.id, parent.id, wanted);
+    if (copied.status === 401) return { status: 401 };
+    if (copied.id) return copied;
+    if (copied.pending) {
+      // The copy is still running server-side. Report the folder as created —
+      // it will appear shortly — rather than racing it with a second create,
+      // which would leave two folders for one project.
+      return { id: null, name: wanted, webUrl: parent.webUrl, pending: true };
+    }
+    // Copy failed outright: fall through and build the skeleton by hand.
   }
-  const fb = items.find((c) => c.folder && c.name === fallbackName);
-  if (fb) return { id: fb.id, name: fb.name, webUrl: fb.webUrl };
-  return createFolder(token, basePath, fallbackName);
+
+  const made = await createFolder(token, basePath, wanted);
+  if (made.status || !made.id) return made;
+  const seeded = await seedProjectSkeleton(token, made.id);
+  if (seeded.auth) return { status: 401 };
+  return made;
 }
 
 // Find-or-create a folder directly under a parent ITEM ID. Case-insensitive
@@ -143,10 +193,67 @@ async function deleteChildByName(token, parentId, name) {
   await fetchWithTimeout(`${GRAPH}/me/drive/items/${hit.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
 }
 
-// Ensure the "<job folder>/Admin/<Quotes|Invoices>" chain exists; returns the
+// Copy the master folder into `parentPath` under a new name.
+//
+// Graph's copy is ASYNCHRONOUS: it answers 202 with a Location header pointing at
+// a monitor URL, and the folder does not exist yet. We poll that monitor briefly
+// so the caller can return a real folder id and webUrl. The wait is deliberately
+// bounded — a Netlify function has ~10s, and project creation must not hang on
+// OneDrive. If it is still running when we give up, the copy still completes on
+// Microsoft's side; we just report it as pending.
+async function copyMasterFolder(token, parentPath, masterId, parentId, newName) {
+  const r = await fetchWithTimeout(`${GRAPH}/me/drive/items/${masterId}/copy`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ parentReference: { id: parentId }, name: newName }),
+  });
+  if (r.status === 401) return { status: 401 };
+  if (r.status !== 202 && !r.ok) return { status: r.status };
+
+  const monitor = r.headers.get("location");
+  if (!monitor) return { pending: true };
+
+  // ~6s ceiling: 12 polls, 500ms apart.
+  for (let i = 0; i < 12; i++) {
+    await new Promise((res) => setTimeout(res, 500));
+    // The monitor URL is pre-authenticated and rejects an Authorization header.
+    const m = await fetchWithTimeout(monitor, {}, 8000).catch(() => null);
+    if (!m || !m.ok) continue;
+    const j = await m.json().catch(() => null);
+    if (!j) continue;
+    if (j.status === "completed" && j.resourceId) {
+      const item = await fetchWithTimeout(`${GRAPH}/me/drive/items/${j.resourceId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!item.ok) return { pending: true };
+      const it = await item.json();
+      return { id: it.id, name: it.name, webUrl: it.webUrl };
+    }
+    if (j.status === "failed") return { status: 500 };
+  }
+  return { pending: true };
+}
+
+// Give a project folder its standard subfolders. Used when there is no master to
+// copy, so a project is never left as a bare folder.
+async function seedProjectSkeleton(token, folderId) {
+  for (const name of PROJECT_SUBFOLDERS) {
+    const made = await ensureChildFolder(token, folderId, name);
+    if (made.status === 401) return { auth: true };
+  }
+  return { ok: true };
+}
+
+// Ensure an "<parent>/<admin folder>/<Quotes|Invoices>" chain exists; returns the
 // leaf folder. Propagates {auth:true} on 401 so run()'s token-refresh retry works.
-async function ensureAdminSubfolder(token, jobFolderId, leafName) {
-  const admin = await ensureChildFolder(token, jobFolderId, "Admin");
+//
+// adminName is a parameter because there are TWO admin folders and they are not
+// the same thing: a PROJECT's is "01 - Admin" (part of the numbered structure
+// copied from the master), while the central holding area for unsent drafts keeps
+// its plain "Admin" — it sits beside the project folders, not inside one, and
+// renaming it would strand every document already filed there.
+async function ensureAdminSubfolder(token, jobFolderId, leafName, adminName = ADMIN_FOLDER_NAME) {
+  const admin = await ensureChildFolder(token, jobFolderId, adminName);
   if (admin.status === 401) return { auth: true };
   if (admin.status || !admin.id) return { status: admin.status || 500 };
   const leaf = await ensureChildFolder(token, admin.id, leafName);
@@ -322,9 +429,12 @@ const handler = async (req) => {
       if (ensured.status) return { error: `OneDrive folder error (${ensured.status})` };
       const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
       if (folder.status === 401) return { auth: true };
+      // A copy still running on Microsoft's side is a success, not a failure —
+      // the folder appears on its own. Don't create a second one chasing it.
+      if (folder.pending) return { ok: true, savedTo: folder.name, pending: true };
       if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
-      // Seed the Admin/Quotes + Admin/Invoices skeleton so documents have a home
-      // from day one. Best-effort: a skeleton hiccup shouldn't fail project creation.
+      // Give "01 - Admin" its Quotes and Invoices subfolders so documents have a
+      // home from day one. Best-effort: a hiccup here shouldn't fail the project.
       for (const leaf of ["Quotes", "Invoices"]) {
         const seeded = await ensureAdminSubfolder(tok, folder.id, leaf);
         if (seeded.auth) return { auth: true };
@@ -380,7 +490,7 @@ const handler = async (req) => {
     // the project upload). For a draft / sent-no-project it IS the upload target.
     let central = null;
     if (docSubfolder) {
-      const c = await ensureAdminSubfolder(tok, centralBaseItem.id, docSubfolder);
+      const c = await ensureAdminSubfolder(tok, centralBaseItem.id, docSubfolder, "Admin");
       if (c.auth) return { auth: true };
       if (!isMove && (c.status || !c.id)) return { error: `OneDrive folder error (${c.status || "unknown"})` };
       central = (c.status || !c.id) ? null : c;
@@ -390,7 +500,7 @@ const handler = async (req) => {
       if (!prev_name) return;
       if (prev_subfolder && central && prev_subfolder === docSubfolder) { await deleteChildByName(tok, central.id, prev_name); return; }
       // Different subfolder (type changed): locate that central subfolder without creating.
-      const admin = await ensureChildFolder(tok, centralBaseItem.id, "Admin");
+      const admin = await ensureChildFolder(tok, centralBaseItem.id, "Admin"); // central, not a project — plain "Admin"
       if (admin.id) { const alt = await ensureChildFolder(tok, admin.id, prev_subfolder || docSubfolder); if (alt.id) await deleteChildByName(tok, alt.id, prev_name); }
     };
 
@@ -398,6 +508,10 @@ const handler = async (req) => {
       // File into the project's Admin/<sub>, then remove central pending copies.
       const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
       if (folder.status === 401) return { auth: true };
+      // The project folder is still being copied, so there is nowhere to put the
+      // file yet. Report it rather than uploading somewhere improvised — the
+      // document stays in the central pending folder and moves on the next send.
+      if (folder.pending) return { error: "The project folder is still being created in OneDrive. Try again in a moment." };
       if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
       const sub = await ensureAdminSubfolder(tok, folder.id, docSubfolder);
       if (sub.auth) return { auth: true };

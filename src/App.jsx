@@ -1921,7 +1921,12 @@ export default function BookkeeperApp() {
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) { if (!opts.silent) alert(data.error || "Could not save to OneDrive."); return false; }
-      if (!opts.silent) alert(`Saved to OneDrive → ${data.savedTo || "done"}`);
+      // `pending` means OneDrive is still copying the project folder from the
+      // master. It will finish on its own — say so rather than implying the
+      // folder is ready to open right now.
+      if (!opts.silent) alert(data.pending
+        ? `OneDrive is creating ${data.savedTo} from the master folder. It'll appear in a moment.`
+        : `Saved to OneDrive → ${data.savedTo || "done"}`);
       return true;
     } catch {
       if (!opts.silent) alert("Could not reach OneDrive. Please try again.");
