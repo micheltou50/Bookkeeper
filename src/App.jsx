@@ -176,6 +176,55 @@ const APPLICATION_TYPES = ["DA", "CC", "CDC", "S4.55", "Drafting Only"];
 
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function getDefaultDueDate(type, date) { return addDays(date || today(), type === "quote" ? 30 : 7); }
+
+// ── Australian financial year (1 Jul – 30 Jun) ─────────────────────────────
+// An FY is identified by its starting calendar year as a string: "2026" is
+// FY2026-27. ALL_FY means "don't filter". Declared as hoisted functions so the
+// order of the consts below them can never matter.
+const ALL_FY = "all";
+
+// FY containing a "YYYY-MM-DD" date.
+function fyOfDate(dateStr) {
+  const d = String(dateStr || "").slice(0, 10);
+  if (d.length < 7) return null;
+  const y = Number(d.slice(0, 4)), m = Number(d.slice(5, 7));
+  return Number.isFinite(y) && Number.isFinite(m) ? String(m >= 7 ? y : y - 1) : null;
+}
+
+// The FY we are in right now. Deliberately NOT built on today(), which is
+// toISOString() and therefore UTC: in Sydney that reads as the previous day
+// until 10am, so on the morning of 1 July the app would open on the FY that
+// ended the night before.
+function currentFY() {
+  const d = new Date();
+  return String(d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1);
+}
+
+function fyBounds(fy) { const y = Number(fy); return { start: `${y}-07-01`, end: `${y + 1}-06-30` }; }
+function fyLabel(fy) { return fy === ALL_FY ? "All time" : `FY${String(Number(fy)).slice(-2)}-${String(Number(fy) + 1).slice(-2)}`; }
+
+// A document belongs to an FY by its issue date, never paid_date (often null)
+// or created_at (when the row was typed, not the date on the PDF). The slice
+// guards against a legacy timestamp-shaped value, which would otherwise compare
+// greater than its own FY's end date and fall outside it.
+function inFY(row, fy) {
+  if (fy === ALL_FY) return true;
+  const d = String(row?.date || "").slice(0, 10);
+  if (!d) return false;
+  const { start, end } = fyBounds(fy);
+  return d >= start && d <= end;
+}
+
+// Selectable FYs: every year present in the data, plus the current one, plus
+// whatever is selected. That last term matters — a value persisted from an
+// earlier session with no matching <option> would leave the select painting one
+// FY while the app filtered by another, and a reload would not clear it.
+function fyChoices(rows, selected) {
+  const years = new Set([currentFY()]);
+  for (const r of rows || []) { const f = fyOfDate(r?.date); if (f) years.add(f); }
+  if (selected && selected !== ALL_FY) years.add(selected);
+  return [...years].sort((a, b) => Number(b) - Number(a));
+}
 const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid for 30 days from the date of issue. Pricing may be subject to change after this period.
 2. Acceptance: Work commences upon written acceptance of this quote.
 3. Fees: Fees are as quoted above.
@@ -1088,12 +1137,38 @@ export default function BookkeeperApp() {
 
   const [divMenuOpen, setDivMenuOpen] = useState(false);
 
+  // Global financial-year filter. Same shape as `division` above: the value is
+  // written to localStorage inside the setter, not from an effect — an effect
+  // keyed on a derived array would re-fire on every render and loop.
+  const [fy, setFy] = useState(() => {
+    try { return localStorage.getItem("bk_activeFY") || currentFY(); } catch { return currentFY(); }
+  });
+  const switchFY = (id) => {
+    if (id === fy) return;
+    try { localStorage.setItem("bk_activeFY", id); } catch { /* storage blocked */ }
+    // A job whose documents all sit outside the new FY loses its <option>, and a
+    // stale jobFilter would then filter the list to nothing with no visible cause.
+    setDocView((prev) => ({ invoice: { ...prev.invoice, jobFilter: "" }, quote: { ...prev.quote, jobFilter: "" } }));
+    setFy(id);
+  };
+  // After saving a document, follow it: a doc dated outside the selected FY would
+  // otherwise vanish on save and look like the save failed.
+  const followDocFY = (dateStr) => { const f = fyOfDate(dateStr); if (f && fy !== ALL_FY && f !== fy) switchFY(f); };
+
   const divInfo = divisionInfo(division);
   const accent = divInfo.accent;
   const insertDivision = division === ALL_DIVISIONS ? (localStorage.getItem("bk_lastSpecificDivision") || "mworx") : division;
   const inActiveDiv = (r) => division === ALL_DIVISIONS || recordDivision(r) === division;
   const divInvoices = invoices.filter(inActiveDiv);
   const divJobs = jobs.filter(inActiveDiv);
+  // FY-scoped views for display only. divInvoices/divJobs above stay lifetime and
+  // are what document numbering, the form seeds, the job/contact pickers and every
+  // project money total must keep reading — hand getNextDocumentNumber an
+  // FY-filtered array and it reissues numbers that already exist.
+  const fyInvoices = divInvoices.filter((r) => inFY(r, fy));
+  // A project is in the FY if it is still open, or if it has a document dated in
+  // it. Never by created_at: projects span years.
+  const fyJobs = divJobs.filter((p) => ["active", "lead"].includes(p.status || "active") || fyInvoices.some((d) => d.project_id === p.id));
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -2073,6 +2148,13 @@ export default function BookkeeperApp() {
     miniStat: { flex: "1 1 120px", minWidth: 0, background: "#ffffff", borderRadius: 12, border: "1px solid #eef1f0", padding: "11px 14px", boxShadow: "0 1px 2px rgba(16,24,40,0.04)" },
   };
 
+
+  const fySelectEl = (extra) => (
+    <select value={fy} onChange={(e) => switchFY(e.target.value)} aria-label="Financial year"
+      style={{ ...s.select, width: "auto", padding: "7px 10px", fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer", ...extra }}>
+      {[ALL_FY, ...fyChoices(divInvoices, fy)].map((id) => <option key={id} value={id}>{fyLabel(id)}</option>)}
+    </select>
+  );
 
   const FilterPills = ({ tabs, active, onChange }) => (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -3220,6 +3302,7 @@ export default function BookkeeperApp() {
         </button>
         </div>
       </div>
+      <div style={{ marginTop: 10 }}>{fySelectEl({ width: "100%" })}</div>
     </div>
   );
 
@@ -3499,7 +3582,8 @@ export default function BookkeeperApp() {
               <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{PAGE_TITLES[page] || ""}</div>
               <div style={{ fontSize: 10, color: accent, fontWeight: 600, marginTop: 2 }}>{divInfo.name}</div>
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              {fySelectEl()}
               {page === "quotes" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
