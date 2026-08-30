@@ -2777,13 +2777,27 @@ export default function BookkeeperApp() {
     const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
     const openQuotes = quotes.filter((q) => q.status === "sent");
-    const acceptedNotInvoiced = quotes.filter((q) => q.status === "accepted" && !realInvoices.some((i) => i.converted_from_quote_id === q.id));
+    // Projects that still have accepted-quote value left to invoice.
+    //
+    // Deliberately computed per PROJECT, not per quote. An invoice raised the
+    // normal way carries no link back to the quote it fulfils — only the
+    // deposit-on-accept flow sets converted_from_quote_id — so asking "has this
+    // quote been invoiced?" answers no for almost every quote, while hiding the
+    // ones that genuinely still owe an invoice.
+    const ISSUED_STATUSES = new Set(["sent", "overdue", "paid"]);
+    const leftToInvoice = divJobs.map((proj) => {
+      const docs = divInvoices.filter((d) => d.project_id === proj.id);
+      if (!docs.some((d) => d.type === "quote" && d.status === "accepted")) return null;
+      const quoted = docs.filter((d) => d.type === "quote" && d.status === "accepted").reduce((sum, d) => sum + Number(d.total || 0), 0);
+      const issued = docs.filter((d) => d.type === "invoice" && ISSUED_STATUSES.has(d.status)).reduce((sum, d) => sum + Number(d.total || 0), 0);
+      return { proj, remaining: quoted - issued };
+    }).filter((x) => x && x.remaining > 0.01);
     const draftDocs = divInvoices.filter((i) => i.status === "draft");
     const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
     const attention = [
       ...overdueInvoices.slice(0, 4).map((i) => ({ key: "o" + i.id, tone: "#ef4444", label: `${i.number} — ${daysOverdue(i)} day${daysOverdue(i) === 1 ? "" : "s"} overdue`, sub: i.contact_name || i.contact_company || "", amount: i.total, go: () => { setEditItem(i); setModal("invoice"); } })),
-      ...acceptedNotInvoiced.slice(0, 3).map((q) => ({ key: "a" + q.id, tone: "#0ea5e9", label: `${q.number} accepted — not invoiced yet`, sub: q.contact_name || q.contact_company || "", amount: q.total, go: () => { setEditItem(q); setModal("invoice"); } })),
+      ...leftToInvoice.slice(0, 3).map(({ proj, remaining }) => ({ key: "a" + proj.id, tone: "#0ea5e9", label: `${proj.job_number || "Project"} — left to invoice`, sub: projectLabel(proj), amount: remaining, go: () => { setEditItem(proj); setModal("project"); } })),
       ...draftDocs.slice(0, 3).map((d) => ({ key: "d" + d.id, tone: "#94a3b8", label: `${d.number} still a draft`, sub: d.contact_name || d.contact_company || "", amount: d.total, go: () => { setEditItem(d); setModal("invoice"); } })),
     ];
 
