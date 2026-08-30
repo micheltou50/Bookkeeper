@@ -239,12 +239,20 @@ const cardPaidLocked = (doc) => !!(doc && doc.type !== "quote" && doc.status ===
 // sheet on mobile. Rendered at the app root and handed the document itself, so a
 // list re-rendering or re-filtering underneath cannot pull it apart.
 function PopoverSheet({ anchor, isMobile, title, width = 176, onClose, children }) {
+  // Keep the panel on screen. A full-screen backdrop sits behind it, so anything
+  // that falls below the fold cannot be scrolled into view — clamp where it
+  // starts and let the panel itself scroll instead of clipping.
+  const top = Math.min((anchor?.y || 0) + 6, Math.max(8, window.innerHeight - 220));
+  const desktop = {
+    position: "fixed", top, left: Math.max(8, Math.min(anchor?.x || 0, window.innerWidth - width - 8)), width,
+    maxHeight: Math.max(160, window.innerHeight - top - 12), overflowY: "auto",
+    background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 91,
+  };
+  const mobile = { position: "fixed", left: 0, right: 0, bottom: 0, maxHeight: "80vh", overflowY: "auto", background: "#fff", borderRadius: "16px 16px 0 0", padding: "4px 8px calc(env(safe-area-inset-bottom) + 12px)", zIndex: 91, boxShadow: "0 -8px 32px -12px rgba(16,24,40,0.35)" };
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 90, background: isMobile ? "rgba(15,23,42,0.35)" : "transparent" }} />
-      <div style={isMobile
-        ? { position: "fixed", left: 0, right: 0, bottom: 0, background: "#fff", borderRadius: "16px 16px 0 0", padding: "4px 8px calc(env(safe-area-inset-bottom) + 12px)", zIndex: 91, boxShadow: "0 -8px 32px -12px rgba(16,24,40,0.35)" }
-        : { position: "fixed", top: (anchor?.y || 0) + 6, left: Math.max(8, Math.min(anchor?.x || 0, window.innerWidth - width - 8)), width, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 91 }}>
+      <div style={isMobile ? mobile : desktop}>
         {title && <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8", padding: isMobile ? "12px 12px 8px" : "5px 8px 6px" }}>{title}</div>}
         {children}
       </div>
@@ -3195,12 +3203,21 @@ export default function BookkeeperApp() {
   // Built when the menu opens, not during render: the items close over handlers
   // that read refs, and calling this from the render path trips the refs rule.
   // It also matches how the menu behaves — it holds the document as it was.
+  // A click that ends a text selection should not also open the document —
+  // otherwise dragging across an invoice number to copy it loses the selection
+  // and opens the viewer instead.
+  const openDocFromRow = (inv) => {
+    const sel = typeof window.getSelection === "function" ? window.getSelection() : null;
+    if (sel && !sel.isCollapsed) return;
+    viewInvoice(inv);
+  };
+
   const docMenuItems = (inv, anchor) => {
     const isQuote = inv.type === "quote";
     const prim = docPrimaryAction(inv);
-    const items = [];
-    if (!isQuote && inv.status !== "paid" && inv.status !== "draft") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
-    if (isQuote && !QUOTE_CLOSED.has(inv.status) && inv.status !== "draft") items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
+    const items = [{ key: "view", label: "Open", icon: <Icons.Eye />, run: () => viewInvoice(inv) }];
+    if (!isQuote && inv.status !== "paid") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
+    if (isQuote && !QUOTE_CLOSED.has(inv.status)) items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
     items.push({ key: "email", label: emailConn ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
     if (!isQuote && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "remind", label: "Send payment reminder", icon: <Icons.Bell />, run: () => sendReminderViaResend(inv) });
     if (!isQuote && inv.pay_token) items.push({ key: "paylink", label: "Copy pay link", icon: <Icons.Link />, run: () => {
@@ -3350,7 +3367,7 @@ export default function BookkeeperApp() {
               <table style={s.table}>
                 <thead><tr><th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Job</th><th style={s.th}>Status</th><th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 100 }}></th></tr></thead>
                 <tbody>{rows.map((inv) => (
-                  <tr key={inv.id} onClick={() => viewInvoice(inv)} style={{ cursor: "pointer" }}>
+                  <tr key={inv.id} onClick={() => openDocFromRow(inv)} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                     <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
@@ -3380,7 +3397,7 @@ export default function BookkeeperApp() {
                   const balance = balanceOf(inv);
                   const od = daysOverdue(inv);
                   return (
-                    <tr key={inv.id} onClick={() => viewInvoice(inv)} style={{ cursor: "pointer", ...(selected.has(inv.id) ? { background: "#ecfdf5" } : {}) }}>
+                    <tr key={inv.id} onClick={() => openDocFromRow(inv)} style={{ cursor: "pointer", ...(selected.has(inv.id) ? { background: "#ecfdf5" } : {}) }}>
                       <td style={{ ...s.td, textAlign: "center" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
                       <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                       <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
@@ -3562,20 +3579,17 @@ export default function BookkeeperApp() {
     </div>
   );
 
-  const MobileRow = ({ primary, secondary, right, rightSub, badge, isLast, onClick, action, onBadgeClick }) => (
+  const MobileRow = ({ primary, secondary, right, rightSub, badge, isLast, onClick }) => (
     <div onClick={onClick} style={{ display: "flex", alignItems: "center", padding: "12px 16px", borderBottom: isLast ? "none" : "0.5px solid #f1f5f9", gap: 10, cursor: onClick ? "pointer" : "default" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 15, fontWeight: 500, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{primary}</div>
         {secondary && <div style={{ fontSize: 13, color: "#5b6675", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
       </div>
       <div style={{ textAlign: "right", flexShrink: 0 }}>
-        {badge && (onBadgeClick
-          ? <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); onBadgeClick(); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}><span style={s.badge(badge.color, badge.variant)}>{badge.label}</span></button>
-          : <span style={s.badge(badge.color, badge.variant)}>{badge.label}</span>)}
+        {badge && <span style={s.badge(badge.color, badge.variant)}>{badge.label}</span>}
         {right && <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{right}</div>}
         {rightSub && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 1 }}>{rightSub}</div>}
       </div>
-      {action && <div style={{ flexShrink: 0, marginLeft: 4 }}>{action}</div>}
     </div>
   );
 
@@ -3686,7 +3700,7 @@ export default function BookkeeperApp() {
               const note = dueNote(inv);
               const late = daysOverdue(inv) > 0;
               return (
-                <div key={inv.id} onClick={() => viewInvoice(inv)}
+                <div key={inv.id} onClick={() => openDocFromRow(inv)}
                   style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "12px 14px", cursor: "pointer" }}>
                   {/* Status leads, where the eye starts; the amount sits on its own
                       line so a pill can never collide with a number again. */}
