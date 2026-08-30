@@ -1729,7 +1729,7 @@ export default function BookkeeperApp() {
     const pct = Number(String(raw).replace("%", "").trim());
     if (!isFinite(pct) || pct <= 0 || pct > 100) { release(); alert("Deposit skipped — the percentage must be a number between 1 and 100."); return null; }
     const inserted = await createDepositInvoice(quote, project, pct);
-    if (inserted) { setInvoiceSeed(null); setEditItem(inserted); setModal("invoice"); }
+    if (inserted) { followDocFY(inserted.date); setInvoiceSeed(null); setEditItem(inserted); setModal("invoice"); }
     else release();
     return inserted;
   };
@@ -2281,6 +2281,10 @@ export default function BookkeeperApp() {
       if (existing) { const ok = await updateInvoice(existing.id, inv); saved = ok ? { ...existing, ...inv } : null; }
       else { saved = await addInvoice(inv); }
       if (saved && !inv.project_id) upsertJob(inv.job, inv.contact_name);
+      // New documents are dated today, and a date can be edited to any year. Move
+      // the FY filter to wherever the document actually landed, or it saves
+      // successfully and vanishes from the list behind the form.
+      if (saved) followDocFY(saved.date);
       return saved;
     };
     // Save, then open the compose window so the user reviews/edits the email and
