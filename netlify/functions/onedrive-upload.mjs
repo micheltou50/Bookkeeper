@@ -1,11 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
-import { PDFDocument } from "pdf-lib";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 import { wrapCors } from './lib/cors.mjs';
 
-// Save an invoice PDF or expense receipt into the user's OneDrive. Invoices go
-// into the matching job folder under onedrive_folder. Receipts are converted to
-// PDF and saved flat in onedrive_receipts_folder (falling back to onedrive_folder).
+// File an invoice/quote PDF into its project folder in the user's OneDrive, or
+// create the project folder itself. Receipt filing lived here too until MYOB
+// took over expenses.
 
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
@@ -292,25 +291,6 @@ async function uploadToDrivePath(token, folderPath, fileName, buffer, contentTyp
   return fetchWithTimeout(url, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType }, body: buffer }, 30000);
 }
 
-async function imageToPdf(imageBuffer, ext) {
-  const pdfDoc = await PDFDocument.create();
-  const image = ext === "png"
-    ? await pdfDoc.embedPng(imageBuffer)
-    : await pdfDoc.embedJpg(imageBuffer);
-  const { width, height } = image.scale(1);
-  const page = pdfDoc.addPage([width, height]);
-  page.drawImage(image, { x: 0, y: 0, width, height });
-  return Buffer.from(await pdfDoc.save());
-}
-
-function receiptPdfName(tx) {
-  const date = tx.date || "undated";
-  const vendor = sanitizePart(tx.merchant || tx.contact || tx.description || "receipt") || "receipt";
-  const amount = Number(tx.amount || 0).toFixed(2);
-  const category = sanitizePart(tx.account || "Uncategorised") || "Uncategorised";
-  return `${date}_${vendor}_${amount}_${category}.pdf`.slice(0, 200);
-}
-
 const handler = async (req) => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
@@ -331,7 +311,6 @@ const handler = async (req) => {
   if (!user) return json({ error: "Unauthorized" }, 401);
 
   let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
-  let receiptFolderPath = null;
   let docSubfolder = null; // "Quotes" | "Invoices" — Admin subfolder for kind "invoice"
   let docIsSent = false;   // sent docs file into the project folder; drafts stay central
 
@@ -364,29 +343,6 @@ const handler = async (req) => {
     let job = inv.project_id ? (jobsList || []).find((j) => j.id === inv.project_id) : null;
     if (!job && inv.job) job = (jobsList || []).find((j) => j.address === inv.job || j.name === inv.job);
     if (job) { jobNumber = job.job_number; jobLabel = job.address || job.name; }
-  } else if (kind === "expense") {
-    const { data: tx } = await supabase.from("bk_transactions").select("*").eq("id", id).single();
-    if (!tx || tx.user_id !== user.id) return json({ error: "Expense not found" }, 404);
-    if (!tx.receipt_path) return json({ error: "This expense has no receipt to save" }, 400);
-    businessId = tx.business_id;
-    const { data: rData, error: rErr } = await supabase.storage.from("receipts").download(tx.receipt_path);
-    if (rErr || !rData) return json({ error: "Could not load the receipt" }, 500);
-    const rawBuffer = Buffer.from(await rData.arrayBuffer());
-    const ext = (tx.receipt_path.split(".").pop() || "jpg").toLowerCase();
-    if (ext === "pdf") {
-      fileBuffer = rawBuffer;
-    } else if (ext === "png" || ext === "jpg" || ext === "jpeg") {
-      try {
-        fileBuffer = await imageToPdf(rawBuffer, ext === "png" ? "png" : "jpg");
-      } catch (err) {
-        console.error("Receipt PDF conversion failed:", err);
-        return json({ error: "Could not convert receipt to PDF" }, 500);
-      }
-    } else {
-      return json({ error: "Unsupported receipt format" }, 400);
-    }
-    contentType = "application/pdf";
-    fileName = receiptPdfName(tx);
   } else if (kind === "project") {
     // Folder-only: create the OneDrive project folder, no file to upload.
     const { data: job } = await supabase.from("bk_jobs").select("*").eq("id", id).single();
@@ -414,13 +370,8 @@ const handler = async (req) => {
     if (!accessToken) return json({ error: "Reconnect Microsoft in Settings" }, 401);
   }
 
-  const { data: profile } = await supabase.from("bk_profiles").select("onedrive_folder, onedrive_receipts_folder").eq("user_id", user.id).eq("business_id", businessId).maybeSingle();
+  const { data: profile } = await supabase.from("bk_profiles").select("onedrive_folder").eq("user_id", user.id).eq("business_id", businessId).maybeSingle();
   const projectsBase = (profile?.onedrive_folder || "Mworx Group").trim();
-  const receiptsBase = (profile?.onedrive_receipts_folder || "").trim();
-
-  if (kind === "expense") {
-    receiptFolderPath = receiptsBase || projectsBase;
-  }
 
   const run = async (tok) => {
     if (kind === "project") {
@@ -440,28 +391,6 @@ const handler = async (req) => {
         if (seeded.auth) return { auth: true };
       }
       return { ok: true, webUrl: folder.webUrl, savedTo: folder.name };
-    }
-    if (kind === "expense") {
-      const ensured = await ensureFolderPath(tok, receiptFolderPath);
-      if (ensured.auth) return { auth: true };
-      if (ensured.status) {
-        if (ensured.status === 404) {
-          return { error: `OneDrive receipts folder not found — check "${receiptFolderPath}" exists in Settings` };
-        }
-        return { error: `OneDrive folder error (${ensured.status})` };
-      }
-      const up = await uploadToDrivePath(tok, receiptFolderPath, fileName, fileBuffer, contentType);
-      if (up.status === 401) return { auth: true };
-      if (up.status === 404) {
-        return { error: `OneDrive receipts folder not found — check "${receiptFolderPath}" exists in Settings` };
-      }
-      if (!up.ok) {
-        let e = "";
-        try { e = JSON.stringify(await up.json()); } catch { /* ignore */ }
-        return { error: `OneDrive upload failed (${up.status})`, detail: e };
-      }
-      const item = await up.json();
-      return { ok: true, webUrl: item.webUrl, savedTo: `${receiptFolderPath}/${fileName}` };
     }
 
     // kind === "invoice"/"quote": two-stage filing.

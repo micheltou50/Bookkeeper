@@ -1,21 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
-import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, BUSINESS_PURPOSE_CATEGORIES, processBankFile } from "./bankImport";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://bkeeper.netlify.app" : "";
-
-const REVENUE_ACCOUNTS = [
-  { code: "4000", name: "Sales Revenue", type: "Revenue" },
-  { code: "4200", name: "Service Revenue", type: "Revenue" },
-  { code: "4300", name: "Other Income", type: "Revenue" },
-];
-const EXPENSE_ACCOUNTS = EXPENSE_CATEGORIES.map((name, i) => ({
-  code: String(6000 + i * 10),
-  name,
-  type: "Expense",
-}));
-const DEFAULT_ACCOUNTS = [...REVENUE_ACCOUNTS, ...EXPENSE_ACCOUNTS];
 
 const DEFAULT_EMAIL_TEMPLATE_INVOICE = `Hi {first_name},
 
@@ -37,13 +24,12 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", onedrive_receipts_folder: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "" };
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", expenses: "Expenses", reimbursements: "Reimbursements", reconcile: "Bank Reconciliation", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts", pnl: "Profit & Loss" };
+const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
 
-const isReconciled = (r) => !!(r?.reconciliation_id || r?.reconciled_at);
 
 // One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
 // invoices, expenses, and projects live there today. Division is an extra tag
@@ -147,28 +133,9 @@ const divisionInfo = (id) => {
 };
 const isValidDivision = (id) => id === ALL_DIVISIONS || DIVISIONS.some((d) => d.id === id);
 
-function periodBounds(type, value) {
-  if (type === "month") {
-    const [y, m] = value.split("-").map(Number);
-    const lastDay = new Date(y, m, 0).getDate();
-    return { start: `${value}-01`, end: `${value}-${String(lastDay).padStart(2, "0")}`, label: new Date(y, m - 1).toLocaleDateString("en-AU", { month: "long", year: "numeric" }) };
-  }
-  if (type === "quarter") {
-    const y = Number(value.slice(0, 4));
-    const q = Number(value.slice(-1));
-    const startMonth = (q - 1) * 3 + 1;
-    const endMonth = startMonth + 2;
-    const endDay = new Date(y, endMonth, 0).getDate();
-    return { start: `${y}-${String(startMonth).padStart(2, "0")}-01`, end: `${y}-${String(endMonth).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`, label: `Q${q} ${y}` };
-  }
-  const y = Number(value);
-  return { start: `${y}-01-01`, end: `${y}-12-31`, label: String(y) };
-}
-const inPeriod = (dateStr, start, end) => !!dateStr && dateStr >= start && dateStr <= end;
 
 const sanitizeFilePart = (s) => (s || "").replace(/[/\\:*?"<>|&#%]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 const safeFileName = (parts, ext) => parts.map(p => sanitizeFilePart(String(p))).filter(Boolean).join("_") + "." + ext;
-const fmtAmtFile = (n) => Number(n).toFixed(2).replace(".", "-");
 
 function getDocumentPrefix(divisionId, type) {
   const div = divisionInfo(divisionId);
@@ -296,7 +263,6 @@ function projectConsultants(project, invoices) {
 
 const Icons = {
   Dashboard: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
-  Expenses: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Contacts: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
   Invoices: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>,
   Projects: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><path d="M2 13h20"/></svg>,
@@ -307,20 +273,16 @@ const Icons = {
   Edit: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
   Check: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>,
   Send: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>,
-  Camera: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
   Menu: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>,
   Logout: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
   Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
   Download: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>,
-  Reconcile: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>,
   More: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>,
   Bell: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>,
   Link: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>,
   Eye: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
   Cloud: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>,
-  Reimburse: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
   Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
-  Reports: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>,
   ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
   ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>,
   Filter: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
@@ -766,34 +728,6 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
 // so receipts never need window.open()/a new tab. The signed URL is rendered inline:
 // PDFs in an <iframe>, images in an <img>. Top-level so a parent re-render doesn't
 // reload it.
-function ReceiptViewer({ receipt, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const ext = (receipt.name || "").split(".").pop().toLowerCase();
-  const isPdf = ext === "pdf";
-  const btn = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9, cursor: "pointer", whiteSpace: "nowrap", textDecoration: "none" };
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#1e293b", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
-        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 4 }}><Icons.X /></button>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Receipt</div>
-        {receipt.url && <a href={receipt.url} target="_blank" rel="noopener noreferrer" style={{ ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" }}><Icons.Download /> Open original</a>}
-      </div>
-      {!receipt.url ? (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#cbd5e1", fontSize: 14 }}>Loading receipt…</div>
-      ) : isPdf ? (
-        <iframe src={receipt.url} title="Receipt" style={{ flex: 1, width: "100%", border: "none", background: "#fff" }} />
-      ) : (
-        <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <img src={receipt.url} alt="Receipt" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 6 }} />
-        </div>
-      )}
-    </div>
-  );
-}
 
 // Business settings. At MODULE scope, not inside BookkeeperApp: a component
 // declared inside App is a new function type on every App render, so React
@@ -924,11 +858,6 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
             <label style={s.label}>Projects folder</label>
             <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group/Projects" style={s.input} />
             <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Base OneDrive folder for job/project subfolders. New projects get their own "26106 - Address" subfolder here, and invoice PDFs save into the matching one.</div>
-          </div>
-          <div>
-            <label style={s.label}>Receipts folder</label>
-            <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
-            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts saved as PDFs (e.g. 2026-06-20_Vendor_45.00_Category.pdf). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect & reconnect to grant file access.</div>
           </div>
           <div style={{ marginTop: 14, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
             <div style={{ fontWeight: 600, color: "#475569", marginBottom: 4 }}>How to change these</div>
@@ -1111,7 +1040,6 @@ export default function BookkeeperApp() {
     if (modal !== "project") projectDraftRef.current = null;
     if (modal !== "invoice") invoiceDraftRef.current = null;
   }, [modal]);
-  const [aiData, setAiData] = useState(null);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("bk_navCollapsed") === "1");
   const toggleNav = () => setNavCollapsed((v) => { const nv = !v; localStorage.setItem("bk_navCollapsed", nv ? "1" : "0"); return nv; });
@@ -1149,16 +1077,12 @@ export default function BookkeeperApp() {
     invoice: { filter: "outstanding", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
     quote: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
   });
-  const [txns, setTxns] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [jobParties, setJobParties] = useState([]); // bk_job_parties rows for this business's projects
   const [quoteTemplates, setQuoteTemplates] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
-  const [categoryRules, setCategoryRules] = useState([]);
 
-  const [lastReconciliation, setLastReconciliation] = useState(null);
-  const [reconciliations, setReconciliations] = useState([]);
   const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
   const [divMenuOpen, setDivMenuOpen] = useState(false);
   const navMenuTimer = useRef(null);
@@ -1172,10 +1096,8 @@ export default function BookkeeperApp() {
   const accent = divInfo.accent;
   const insertDivision = division === ALL_DIVISIONS ? (localStorage.getItem("bk_lastSpecificDivision") || "mworx") : division;
   const inActiveDiv = (r) => division === ALL_DIVISIONS || recordDivision(r) === division;
-  const divTxns = txns.filter(inActiveDiv);
   const divInvoices = invoices.filter(inActiveDiv);
   const divJobs = jobs.filter(inActiveDiv);
-  const accounts = DEFAULT_ACCOUNTS;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -1208,28 +1130,24 @@ export default function BookkeeperApp() {
 
   const requestCloseModal = (alwaysConfirm = false) => {
     if ((alwaysConfirm || formDirtyRef.current) && !window.confirm("Are you sure you want to close? Any unsaved changes will be lost.")) return;
-    if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {});
     formDirtyRef.current = false;
     projectDraftRef.current = null;
     invoiceDraftRef.current = null;
     setModal(null);
     setEditItem(null);
     setInvoiceSeed(null);
-    setAiData(null);
   };
 
   const loadData = useCallback(async (businessId) => {
     if (!session) return;
     setLoading(true);
     try {
-    const [cRes, iRes, tRes, pRes, jRes, eRes, rRes, qtRes] = await Promise.all([
+    const [cRes, iRes, pRes, jRes, eRes, qtRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
-      supabase.from("bk_transactions").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
       supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
-      supabase.from("bk_category_rules").select("*").eq("business_id", businessId),
       supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
     ]);
 
@@ -1256,16 +1174,11 @@ export default function BookkeeperApp() {
 
     setContacts(cRes.data || []);
     setInvoices(loadedInvoices);
-    setTxns(tRes.data || []);
     setJobs(loadedJobs);
     setJobParties(loadedParties);
     setQuoteTemplates(qtRes.data || []);
-    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group", onedrive_receipts_folder: "Mworx Group/Receipts" });
+    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
     setEmailConn(eRes.data || null);
-    setCategoryRules(rRes.data || []);
-    const { data: recs } = await supabase.from("bk_reconciliations").select("*").eq("business_id", businessId).order("statement_date", { ascending: false }).limit(20);
-    setReconciliations(recs || []);
-    setLastReconciliation((recs && recs[0]) || null);
     setLoading(false);
 
     // Mark overdue invoices server-side. Scope to type "invoice" only — quotes share
@@ -1303,12 +1216,9 @@ export default function BookkeeperApp() {
     setSession(null);
     setContacts([]);
     setInvoices([]);
-    setTxns([]);
     setJobs([]);
     setProfile({ ...DEFAULT_PROFILE });
     setEmailConn(null);
-    setCategoryRules([]);
-    setReconciliations([]);
   };
 
   useEffect(() => {
@@ -1324,9 +1234,7 @@ export default function BookkeeperApp() {
     }
   }, []);
 
-  const jobNames = [...new Set([...divInvoices.map((i) => i.job), ...divTxns.map((t) => t.job)].filter(Boolean))].sort();
-  const pendingReimbursements = txns.filter((t) => t.payment_source === "personal" && t.reimbursement_required && t.reimbursement_status === "pending");
-  const pendingReimbTotal = pendingReimbursements.reduce((sum, t) => sum + Number(t.amount), 0);
+  const jobNames = [...new Set(divInvoices.map((i) => i.job).filter(Boolean))].sort();
 
   // --- Mutation functions: each writes directly to its table ---
 
@@ -1373,185 +1281,15 @@ export default function BookkeeperApp() {
     return res;
   };
 
-  // View a receipt image/PDF *inside* the app (see the ReceiptViewer component).
-  // Previously this did window.open(signedUrl, "_blank") AFTER awaiting the signed
-  // URL — and because the tap gesture is already spent by the time the await
-  // resolves, mobile/Safari reliably blocked it as a pop-up. Rendering it in-app
-  // sidesteps that entirely. The bucket is private, so we still mint a short-lived
-  // signed URL first, then hand it to the in-app viewer.
-  const openReceipt = async (t) => {
-    if (!t?.receipt_path) { alert("No receipt attached to this expense."); return; }
-    const { data, error } = await supabase.storage.from("receipts").createSignedUrl(t.receipt_path, 600);
-    if (error || !data?.signedUrl) { alert("Could not load receipt. Please try again."); return; }
-    setViewReceipt({ url: data.signedUrl, name: t.receipt_path.split("/").pop() });
-  };
 
-  // ---- Learned categorisation -------------------------------------------------
-  // Remember "merchant keyword -> category" from the user's own choices and reuse
-  // it for imports, receipt scans, and manual entry. Best-effort & silent.
-  const CAT_STOPWORDS = new Set(["pty", "ltd", "the", "and", "for", "au", "aus", "australia", "card", "value", "date", "payment", "pmt", "direct", "debit", "credit", "purchase", "transfer", "fast", "from", "account", "inv", "ref", "eftpos", "visa", "mastercard", "group", "services", "service", "store", "online", "www", "com"]);
-  const catKeyword = (text) => {
-    const toks = String(text || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
-      .filter((t) => t.length > 2 && !CAT_STOPWORDS.has(t) && !/^\d+$/.test(t));
-    return toks[0] || "";
-  };
-  const learnedCategoryFor = (text) => {
-    const hay = " " + String(text || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim() + " ";
-    let best = null;
-    for (const r of categoryRules) {
-      if (r.keyword && hay.includes(" " + r.keyword + " ")) {
-        if (!best || (r.hits || 0) > (best.hits || 0) || ((r.hits || 0) === (best.hits || 0) && r.keyword.length > best.keyword.length)) best = r;
-      }
-    }
-    return best && EXPENSE_CATEGORIES.includes(best.category) ? best.category : null;
-  };
-  const learnCategory = async (merchant, description, category) => {
-    if (!category || !EXPENSE_CATEGORIES.includes(category)) return;
-    const keyword = catKeyword(merchant) || catKeyword(description);
-    if (!keyword) return;
-    const existing = categoryRules.find((r) => r.keyword === keyword);
-    if (existing && existing.category === category) {
-      supabase.from("bk_category_rules").update({ hits: (existing.hits || 1) + 1, updated_at: new Date().toISOString() }).eq("id", existing.id).then(() => {}, () => {});
-      setCategoryRules((prev) => prev.map((r) => (r.id === existing.id ? { ...r, hits: (r.hits || 1) + 1 } : r)));
-      return;
-    }
-    const row = { user_id: session.user.id, business_id: biz, keyword, category, hits: (existing?.hits || 0) + 1, updated_at: new Date().toISOString() };
-    const { data } = await supabase.from("bk_category_rules").upsert(row, { onConflict: "business_id,keyword" }).select().single();
-    if (data) setCategoryRules((prev) => [...prev.filter((r) => !(r.business_id === data.business_id && r.keyword === data.keyword)), data]);
-  };
 
-  const addTransaction = async (t) => {
-    const ps = t.payment_source || "business";
-    const isReimburse = ps === "personal_reimburse";
-    const isPersonalNoReimburse = ps === "personal_no_reimburse";
-    const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, merchant: t.merchant || null, reference: t.reference, receipt_path: t.receipt_path || t.receiptPath || "", job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? "pending" : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: null, reimbursement_amount: isReimburse ? (Number(t.amount) || 0) : null, reimbursement_reference: null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null, ai_category_confidence: t.ai_category_confidence != null ? Number(t.ai_category_confidence) : null, ai_extraction_confidence: t.ai_extraction_confidence != null ? Number(t.ai_extraction_confidence) : null, ai_warnings: t.ai_warnings?.length ? t.ai_warnings : null };
-    const { ok, data: inserted } = await sbInsert("bk_transactions", row, "save expense");
-    if (!ok) return;
-    if (inserted) {
-      if (inserted.receipt_path) {
-        const ext = (inserted.receipt_path.split(".").pop() || "jpg").toLowerCase();
-        const newName = safeFileName([inserted.date, (inserted.merchant || inserted.description || "Expense").slice(0, 40), inserted.account || "Uncategorised", fmtAmtFile(inserted.amount), inserted.id], ext);
-        const newPath = `${session.user.id}/${newName}`;
-        const { error: moveErr } = await supabase.storage.from("receipts").move(inserted.receipt_path, newPath);
-        if (!moveErr) {
-          await supabase.from("bk_transactions").update({ receipt_path: newPath }).eq("id", inserted.id);
-          inserted.receipt_path = newPath;
-        }
-      }
-      setTxns((prev) => [inserted, ...prev]);
-      learnCategory(inserted.merchant, inserted.description, inserted.account);
-    }
-    if (inserted && inserted.receipt_path && emailConn) saveToOneDrive("expense", inserted.id, { silent: true });
-    setModal(null);
-    setAiData(null);
-  };
 
-  // Insert several scanned expenses at once (batch receipts) without closing the
-  // modal per item. Mirrors addTransaction's per-row handling: receipt rename,
-  // category learning, OneDrive filing. Returns the inserted rows.
-  const addExpensesBatch = async (items) => {
-    const inserted = [];
-    for (const t of items) {
-      const isPersonal = !!t.personal_card;
-      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, date: t.date, type: "expense", description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, merchant: t.merchant || null, reference: t.reference || null, receipt_path: t.receipt_path || "", payment_source: isPersonal ? "personal" : "business", paid_by: isPersonal ? "Michel" : null, reimbursement_required: isPersonal, reimbursement_status: isPersonal ? "pending" : "not_required", business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null };
-      const { ok, data } = await sbInsert("bk_transactions", row, "save expense");
-      if (!ok || !data) continue;
-      let rec = data;
-      if (rec.receipt_path) {
-        const ext = (rec.receipt_path.split(".").pop() || "jpg").toLowerCase();
-        const newName = safeFileName([rec.date, (rec.merchant || rec.description || "Expense").slice(0, 40), rec.account || "Uncategorised", fmtAmtFile(rec.amount), rec.id], ext);
-        const newPath = `${session.user.id}/${newName}`;
-        const { error: moveErr } = await supabase.storage.from("receipts").move(rec.receipt_path, newPath);
-        if (!moveErr) { await supabase.from("bk_transactions").update({ receipt_path: newPath }).eq("id", rec.id); rec = { ...rec, receipt_path: newPath }; }
-      }
-      setTxns((prev) => [rec, ...prev]);
-      learnCategory(rec.merchant, rec.description, rec.account);
-      if (rec.receipt_path && emailConn) saveToOneDrive("expense", rec.id, { silent: true });
-      inserted.push(rec);
-    }
-    return inserted;
-  };
 
-  const updateTransaction = async (id, t) => {
-    const orig = txns.find((x) => x.id === id);
-    const ps = t.payment_source || "business";
-    const isReimburse = ps === "personal_reimburse";
-    const isPersonalNoReimburse = ps === "personal_no_reimburse";
-    const isPersonal = isReimburse || isPersonalNoReimburse;
-    const row = { date: t.date, type: t.type, description: t.description, amount: Number(t.amount) || 0, account: t.account, contact: null, merchant: t.merchant || null, reference: t.reference, receipt_path: t.receipt_path || null, job: t.job, payment_source: isPersonal ? "personal" : ps, paid_by: isPersonal ? (t.paid_by || "Michel") : null, reimbursement_required: isReimburse, reimbursement_status: isReimburse ? (t.reimbursement_status === "reimbursed" ? "reimbursed" : "pending") : isPersonalNoReimburse ? "do_not_reimburse" : "not_required", reimbursement_date: isReimburse ? (t.reimbursement_date || null) : null, reimbursement_amount: isReimburse ? (t.reimbursement_amount != null ? Number(t.reimbursement_amount) : (Number(t.amount) || 0)) : null, reimbursement_reference: isReimburse ? (t.reimbursement_reference || null) : null, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(t.account) ? (t.business_purpose || null) : null };
-    const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update expense");
-    if (!ok) return;
-    if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
-    if (updated && updated.receipt_path && updated.receipt_path !== (orig?.receipt_path || null) && emailConn) saveToOneDrive("expense", updated.id, { silent: true });
-    if (updated) learnCategory(updated.merchant, updated.description, updated.account);
-    setModal(null);
-    setEditItem(null);
-  };
 
-  const deleteTransaction = async (id) => {
-    if (!window.confirm("Delete this transaction? This cannot be undone.")) return;
-    const { ok } = await sbWrite(supabase.from("bk_transactions").delete().eq("id", id), "delete expense");
-    if (!ok) return;
-    setTxns((prev) => prev.filter((t) => t.id !== id));
-    setModal(null);
-    setEditItem(null);
-  };
 
-  const updateIncome = async (id, f) => {
-    const row = { date: f.date, amount: Number(f.amount) || 0, description: f.description, account: f.account };
-    const { ok, data } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update income");
-    if (!ok) return;
-    if (data) setTxns((prev) => prev.map((x) => (x.id === id ? data : x)));
-    setModal(null);
-    setEditItem(null);
-  };
 
-  const markReimbursed = async (id, { status, date, amount, reference }) => {
-    const row = { reimbursement_status: status, reimbursement_date: date || null, reimbursement_amount: amount != null ? Number(amount) : null, reimbursement_reference: reference || null };
-    const { ok, data: updated } = await sbWrite(supabase.from("bk_transactions").update(row).eq("id", id).select().single(), "update reimbursement");
-    if (!ok) return;
-    if (updated) setTxns((prev) => prev.map((x) => (x.id === id ? updated : x)));
-  };
 
-  const completeReconciliation = async ({ statementDate, closingBalance, openingBalance, txnIds, invoiceIds }) => {
-    const row = { user_id: session.user.id, business_id: biz, statement_date: statementDate, opening_balance: openingBalance, closing_balance: closingBalance };
-    const { ok, data: rec, error } = await sbWrite(supabase.from("bk_reconciliations").insert(row).select().single(), "save reconciliation");
-    if (!ok) {
-      if (error?.code === "42P01") alert("Bank reconciliation needs migration 0009 applied in Supabase first.");
-      return false;
-    }
-    const stamp = new Date().toISOString();
-    const patch = { reconciled_at: stamp, reconciliation_id: rec.id };
-    if (txnIds.length) {
-      const tRes = await sbWrite(supabase.from("bk_transactions").update(patch).in("id", txnIds), "reconcile expenses");
-      if (!tRes.ok) return false;
-    }
-    if (invoiceIds.length) {
-      const iRes = await sbWrite(supabase.from("bk_invoices").update(patch).in("id", invoiceIds), "reconcile invoices");
-      if (!iRes.ok) return false;
-    }
-    const txnSet = new Set(txnIds);
-    const invSet = new Set(invoiceIds);
-    setTxns((prev) => prev.map((t) => (txnSet.has(t.id) ? { ...t, ...patch } : t)));
-    setInvoices((prev) => prev.map((i) => (invSet.has(i.id) ? { ...i, ...patch } : i)));
-    setLastReconciliation(rec);
-    return true;
-  };
 
-  // Reverse a whole reconciliation/import batch: delete the expenses & income it
-  // created, clear the reconciled marks from anything it matched, and remove the
-  // reconciliation record. Invoices it marked paid stay paid (adjust in Sales).
-  const undoReconciliation = async (recId) => {
-    if (!window.confirm("Undo this reconciliation?\n\nThis deletes the expenses and income this import created, clears the reconciled marks from any matched items, and removes the reconciliation record. Any invoices it marked paid stay paid — change those in Sales if needed.")) return false;
-    const d1 = await sbWrite(supabase.from("bk_transactions").delete().eq("reconciliation_id", recId).eq("source", "bank"), "remove imported transactions");
-    if (!d1.ok) return false;
-    await sbWrite(supabase.from("bk_transactions").update({ reconciled_at: null, reconciliation_id: null }).eq("reconciliation_id", recId), "clear reconciled marks");
-    await sbWrite(supabase.from("bk_invoices").update({ reconciled_at: null, reconciliation_id: null }).eq("reconciliation_id", recId), "clear invoice marks");
-    await sbWrite(supabase.from("bk_reconciliations").delete().eq("id", recId), "delete reconciliation");
-    await loadData(biz);
-    return true;
-  };
 
   const addContact = async (c, keepModal) => {
     const row = { user_id: session.user.id, business_id: biz, name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
@@ -1935,7 +1673,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "", onedrive_receipts_folder: p.onedrive_receipts_folder || "" };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
     if (saved) setProfile(saved);
@@ -1961,7 +1699,6 @@ export default function BookkeeperApp() {
 
   const [pdfLoading, setPdfLoading] = useState(null);
   const [viewDoc, setViewDoc] = useState(null);
-  const [viewReceipt, setViewReceipt] = useState(null);
 
   const downloadPDF = async (inv) => {
     const pdfName = safeFileName([inv.number || "draft", inv.contact_name || "Client", inv.job, inv.date].filter(Boolean), "pdf");
@@ -2299,15 +2036,13 @@ export default function BookkeeperApp() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
-    { id: "expenses", label: "Expenses", icon: Icons.Expenses, submenu: [{ id: "expenses", label: "Expenses", icon: Icons.Expenses }, { id: "reimbursements", label: "Reimbursements", icon: Icons.Reimburse }, { id: "reconcile", label: "Bank Reconciliation", icon: Icons.Reconcile }] },
     { id: "invoices", label: "Sales", icon: Icons.Invoices, submenu: [{ id: "invoices", label: "Invoices", icon: Icons.Invoices }, { id: "quotes", label: "Quotes", icon: Icons.Quotes }] },
-    { id: "pnl", label: "P&L", icon: Icons.Reports },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
-  // Sub-pages reached via in-page toggles map to their parent nav item for the
-  // active highlight: reimburse/reconcile sit under Expenses, quotes under Sales.
-  const activeNav = ({ reimbursements: "expenses", reconcile: "expenses", quotes: "invoices" })[page] || page;
+  // Quotes and Invoices share the one "Sales" nav item, so the quotes page
+  // highlights it too.
+  const activeNav = ({ quotes: "invoices" })[page] || page;
 
   const badgeBg = { "#34d399": "#ecfdf5", "#3b82f6": "#eff6ff", "#64748b": "#f1f5f9", "#ef4444": "#fef2f2", "#f59e0b": "#fffbeb" };
   const badgeTx = { "#34d399": "#065f46", "#3b82f6": "#1e40af", "#64748b": "#475569", "#ef4444": "#991b1b", "#f59e0b": "#92400e" };
@@ -2343,11 +2078,6 @@ export default function BookkeeperApp() {
     miniStat: { flex: "1 1 120px", minWidth: 0, background: "#ffffff", borderRadius: 12, border: "1px solid #eef1f0", padding: "11px 14px", boxShadow: "0 1px 2px rgba(16,24,40,0.04)" },
   };
 
-  // Shared list-screen UX bits (pills with counts, summary tiles, friendly empty
-  // states) so every table screen looks and behaves consistently.
-  const ReconciledMark = () => (
-    <span style={{ display: "inline-flex", alignItems: "center", marginLeft: 6, padding: "1px 7px", borderRadius: 10, fontSize: 9, fontWeight: 600, background: "#ecfdf5", color: "#059669", whiteSpace: "nowrap" }} title="Reconciled to bank statement">✓ Bank</span>
-  );
 
   const FilterPills = ({ tabs, active, onChange }) => (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -2374,474 +2104,9 @@ export default function BookkeeperApp() {
     </div>
   );
 
-  const ReceiptCapture = () => {
-    const [phase, setPhase] = useState("capture");
-    const [rawUrl, setRawUrl] = useState(null);
-    const [scannedUrl, setScannedUrl] = useState(null);
-    const [error, setError] = useState("");
-    const [corners, setCorners] = useState(null);
-    const [dragging, setDragging] = useState(null);
-    const [imgNat, setImgNat] = useState({ w: 0, h: 0 });
-    const fileRef = useRef(null);
-    const containerRef = useRef(null);
-    const imgRef = useRef(null);
 
-    const handleFile = (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      setError("");
-      setRawUrl(URL.createObjectURL(file));
-      setPhase("scan");
-    };
 
-    const onImgLoad = () => {
-      const img = imgRef.current;
-      if (!img) return;
-      const w = img.naturalWidth, h = img.naturalHeight;
-      setImgNat({ w, h });
-      setCorners([{ x: w * 0.05, y: h * 0.05 }, { x: w * 0.95, y: h * 0.05 }, { x: w * 0.95, y: h * 0.95 }, { x: w * 0.05, y: h * 0.95 }]);
-    };
 
-    const getPos = (e) => {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return null;
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      return { x: Math.max(0, Math.min(imgNat.w, ((clientX - rect.left) / rect.width) * imgNat.w)), y: Math.max(0, Math.min(imgNat.h, ((clientY - rect.top) / rect.height) * imgNat.h)) };
-    };
-
-    const onPointerDown = (idx) => (e) => { e.preventDefault(); setDragging(idx); };
-    const onPointerMove = (e) => { if (dragging === null) return; const p = getPos(e); if (p) setCorners((c) => c.map((pt, i) => (i === dragging ? p : pt))); };
-    const onPointerUp = () => setDragging(null);
-
-    const doScan = async () => {
-      setPhase("scanning");
-      const img = new Image();
-      img.src = rawUrl;
-      await new Promise((r) => { img.onload = r; });
-
-      const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-      const outW = Math.round(Math.max(dist(corners[0], corners[1]), dist(corners[3], corners[2])));
-      const outH = Math.round(Math.max(dist(corners[0], corners[3]), dist(corners[1], corners[2])));
-
-      const srcC = document.createElement("canvas");
-      srcC.width = img.naturalWidth; srcC.height = img.naturalHeight;
-      const srcCtx = srcC.getContext("2d");
-      srcCtx.drawImage(img, 0, 0);
-      const srcData = srcCtx.getImageData(0, 0, srcC.width, srcC.height);
-
-      const dstC = document.createElement("canvas");
-      dstC.width = outW; dstC.height = outH;
-      const dstCtx = dstC.getContext("2d");
-      const dstData = dstCtx.createImageData(outW, outH);
-
-      const [tl, tr, br, bl] = corners;
-      for (let dy = 0; dy < outH; dy++) {
-        const t = dy / outH;
-        const lx = tl.x + t * (bl.x - tl.x), ly = tl.y + t * (bl.y - tl.y);
-        const rx = tr.x + t * (br.x - tr.x), ry = tr.y + t * (br.y - tr.y);
-        for (let dx = 0; dx < outW; dx++) {
-          const u = dx / outW;
-          const sx = Math.round(lx + u * (rx - lx)), sy = Math.round(ly + u * (ry - ly));
-          if (sx >= 0 && sx < srcC.width && sy >= 0 && sy < srcC.height) {
-            const si = (sy * srcC.width + sx) * 4, di = (dy * outW + dx) * 4;
-            dstData.data[di] = srcData.data[si]; dstData.data[di + 1] = srcData.data[si + 1]; dstData.data[di + 2] = srcData.data[si + 2]; dstData.data[di + 3] = 255;
-          }
-        }
-      }
-      dstCtx.putImageData(dstData, 0, 0);
-
-      const enhC = document.createElement("canvas");
-      enhC.width = outW; enhC.height = outH;
-      const enhCtx = enhC.getContext("2d");
-      enhCtx.filter = "contrast(1.4) brightness(1.1) saturate(0.2)";
-      enhCtx.drawImage(dstC, 0, 0);
-
-      const dataUrl = enhC.toDataURL("image/jpeg", 0.92);
-      setScannedUrl(dataUrl);
-
-      setPhase("processing");
-      let filePath = null;
-      try {
-        const base64 = dataUrl.split(",")[1];
-        const blob = await (await fetch(dataUrl)).blob();
-        filePath = `${session.user.id}/${Date.now()}_receipt.jpg`;
-        await supabase.storage.from("receipts").upload(filePath, blob, { contentType: "image/jpeg" });
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch(`${API_BASE}/.netlify/functions/extract-receipt`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: "image/jpeg" }) });
-        if (!resp.ok) throw new Error("Failed to process receipt");
-        const result = await resp.json();
-        const fromReimbursements = page === "reimbursements";
-        setAiData({ ...result, receiptPath: filePath, scannedUrl: dataUrl, fromReimbursements });
-        setModal("expense");
-      } catch (err) {
-        if (filePath) supabase.storage.from("receipts").remove([filePath]).catch(() => {});
-        setError(err.message || "Failed to process receipt");
-        setPhase("scan");
-      }
-    };
-
-    const reset = () => { setPhase("capture"); setRawUrl(null); setScannedUrl(null); setCorners(null); setError(""); };
-
-    const cornerStyle = (c) => {
-      if (!containerRef.current || !imgNat.w) return { display: "none" };
-      const rect = containerRef.current.getBoundingClientRect();
-      return { position: "absolute", left: (c.x / imgNat.w) * rect.width - 10, top: (c.y / imgNat.h) * rect.height - 10, width: 20, height: 20, borderRadius: "50%", background: accent, border: "3px solid #fff", cursor: "grab", touchAction: "none", zIndex: 2 };
-    };
-
-    const polyPoints = () => {
-      if (!corners || !containerRef.current || !imgNat.w) return "";
-      const rect = containerRef.current.getBoundingClientRect();
-      return corners.map((c) => `${(c.x / imgNat.w) * rect.width},${(c.y / imgNat.h) * rect.height}`).join(" ");
-    };
-
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{phase === "scan" ? "Crop Receipt" : "Snap Receipt"}</h3>
-          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-
-        {phase === "capture" && (
-          <div>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
-            <button onClick={() => fileRef.current?.click()} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", padding: "20px", fontSize: 15 }}><Icons.Camera /> Take Photo of Receipt</button>
-            <div style={{ textAlign: "center", color: "#64748b", fontSize: 12, marginTop: 12 }}>or choose from gallery</div>
-            <input type="file" accept="image/*" onChange={handleFile} style={{ display: "block", margin: "8px auto 0", color: "#64748b", fontSize: 12 }} />
-          </div>
-        )}
-
-        {phase === "scan" && rawUrl && (
-          <div>
-            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>Drag the corners to the edges of the receipt</div>
-            <div ref={containerRef} style={{ position: "relative", userSelect: "none", marginBottom: 12 }} onMouseMove={onPointerMove} onMouseUp={onPointerUp} onTouchMove={onPointerMove} onTouchEnd={onPointerUp}>
-              <img ref={imgRef} src={rawUrl} onLoad={onImgLoad} alt="Receipt" style={{ width: "100%", display: "block", borderRadius: 8, border: "1px solid #e2e8f0" }} />
-              {corners && (
-                <>
-                  <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 1 }}>
-                    <polygon points={polyPoints()} fill={accent + "20"} stroke={accent} strokeWidth="2" strokeDasharray="6 3" />
-                  </svg>
-                  {corners.map((c, i) => <div key={i} style={cornerStyle(c)} onMouseDown={onPointerDown(i)} onTouchStart={onPointerDown(i)} />)}
-                </>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={doScan} style={{ ...s.btn(accent), flex: 1, justifyContent: "center" }}>Scan & Extract</button>
-              <button onClick={reset} style={s.btnOutline}>Retake</button>
-            </div>
-          </div>
-        )}
-
-        {(phase === "scanning" || phase === "processing") && (
-          <div style={{ textAlign: "center", padding: "30px 0" }}>
-            {scannedUrl && <img src={scannedUrl} alt="Scanned" style={{ width: "60%", borderRadius: 8, border: "1px solid #e2e8f0", marginBottom: 12 }} />}
-            <div style={{ color: "#94a3b8" }}>{phase === "scanning" ? "Scanning receipt..." : "Reading receipt with AI..."}</div>
-          </div>
-        )}
-
-        {error && <div style={{ color: "#ef4444", fontSize: 13, padding: 12, background: "#fef2f2", borderRadius: 8, marginTop: 12 }}>{error}</div>}
-      </div>
-    );
-  };
-
-  const ExpenseForm = ({ existing }) => {
-    const derivePersonalCard = (e) => {
-      if (!e) return false;
-      return e.payment_source === "personal";
-    };
-    const ai = !existing ? aiData : null;
-    const fromReimbursements = ai?.fromReimbursements;
-    const initPersonalCard = existing ? derivePersonalCard(existing) : (fromReimbursements || false);
-    const defaultCategory = EXPENSE_CATEGORIES.includes("Office Supplies & Stationery") ? "Office Supplies & Stationery" : EXPENSE_CATEGORIES[0];
-    const init = existing
-      ? { ...existing, personal_card: initPersonalCard, business_purpose: existing.business_purpose || "", merchant: existing.merchant || "" }
-      : ai
-        ? { date: ai.date || today(), type: "expense", description: ai.description || ai.vendor || "", amount: ai.total != null ? String(ai.total) : "", account: learnedCategoryFor(ai.vendor || ai.description) || (EXPENSE_CATEGORIES.includes(ai.category) ? ai.category : defaultCategory), merchant: ai.vendor || "", reference: "", job: "", receipt_path: ai.receiptPath || "", personal_card: initPersonalCard, business_purpose: ai.businessPurpose || "", ai_category_confidence: ai.categoryConfidence || null, ai_extraction_confidence: ai.confidence || null, ai_warnings: ai.warnings || null }
-        : { date: today(), type: "expense", description: "", amount: "", account: defaultCategory, merchant: "", reference: "", job: "", personal_card: false, business_purpose: "" };
-    const [f, setF] = useState({ ...init, amount: String(init.amount || "") });
-    const [saving, setSaving] = useState(false);
-    const needsBusinessPurpose = BUSINESS_PURPOSE_CATEGORIES.has(f.account);
-    const hasWarnings = ai && (ai.confidence < 0.7 || ai.warnings?.length > 0);
-    const receiptInputRef = useRef(null);
-    const [uploadingReceipt, setUploadingReceipt] = useState(false);
-    const [extracting, setExtracting] = useState(false);
-    const [extractInfo, setExtractInfo] = useState(null);
-    const origReceiptRef = useRef(existing?.receipt_path || null);
-    const draftPathRef = useRef(ai?.receiptPath || null);
-    const handleReceiptFile = async (e) => {
-      const file = e.target.files?.[0];
-      if (e.target) e.target.value = "";
-      if (!file) return;
-      setUploadingReceipt(true);
-      try {
-        const isPdf = (file.type || "").includes("pdf") || file.name.toLowerCase().endsWith(".pdf");
-        const ext = isPdf ? "pdf" : ((file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg");
-        const path = `${session.user.id}/${Date.now()}_receipt.${ext}`;
-        const { error } = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || "image/jpeg" });
-        if (error) { alert("Could not upload the receipt. Please try again."); return; }
-        if (draftPathRef.current && draftPathRef.current !== origReceiptRef.current) supabase.storage.from("receipts").remove([draftPathRef.current]).catch(() => {});
-        draftPathRef.current = path;
-        setF((prev) => ({ ...prev, receipt_path: path }));
-        // For an image receipt on a new expense, let the AI read it and fill the blanks.
-        if (!existing) {
-          setExtracting(true);
-          setExtractInfo(null);
-          try {
-            const base64 = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(",")[1]); fr.onerror = reject; fr.readAsDataURL(file); });
-            const token = (await supabase.auth.getSession()).data.session?.access_token;
-            const resp = await fetch(`${API_BASE}/.netlify/functions/extract-receipt`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: base64, mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
-            if (resp.ok) {
-              const r = await resp.json();
-              setF((prev) => ({
-                ...prev,
-                merchant: prev.merchant || r.vendor || "",
-                description: prev.description || r.description || r.vendor || "",
-                amount: prev.amount && prev.amount !== "" ? prev.amount : (r.total != null ? String(r.total) : ""),
-                date: r.date || prev.date,
-                account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : prev.account),
-                business_purpose: prev.business_purpose || r.businessPurpose || "",
-                reference: prev.reference || r.reference || "",
-              }));
-              setExtractInfo({ confidence: r.confidence, warnings: r.warnings || [] });
-            } else {
-              setExtractInfo({ error: true });
-            }
-          } catch { setExtractInfo({ error: true }); }
-          finally { setExtracting(false); }
-        }
-      } finally { setUploadingReceipt(false); }
-    };
-    const removeReceiptDraft = () => {
-      const cur = f.receipt_path;
-      if (cur && cur === draftPathRef.current && cur !== origReceiptRef.current) { supabase.storage.from("receipts").remove([cur]).catch(() => {}); draftPathRef.current = null; }
-      setF((prev) => ({ ...prev, receipt_path: "" }));
-    };
-    const toSave = () => ({
-      ...f,
-      payment_source: f.personal_card ? "personal_reimburse" : "business",
-      paid_by: f.personal_card ? "Michel" : null,
-      business_purpose: needsBusinessPurpose ? (f.business_purpose || "") : "",
-    });
-    const categorySelect = (
-      <select value={f.account} onChange={(e) => { const account = e.target.value; setF({ ...f, account, business_purpose: BUSINESS_PURPOSE_CATEGORIES.has(account) ? f.business_purpose : "" }); }} style={s.select}>
-        {!EXPENSE_CATEGORIES.includes(f.account) && f.account ? <option value={f.account}>{f.account} (legacy)</option> : null}
-        {EXPENSE_CATEGORY_GROUPS.map((g) => (
-          <optgroup key={g.label} label={g.label}>
-            {g.categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </optgroup>
-        ))}
-      </select>
-    );
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Expense</h3>
-            {!existing && <button type="button" onClick={() => setModal("batch")} title="Add many receipts at once" style={{ ...s.btnOutline, color: "#7c3aed", borderColor: "#7c3aed40", padding: "3px 9px", fontSize: 11, gap: 5 }}><Icons.Camera /> Batch</button>}
-          </div>
-          <button onClick={() => { if (ai?.receiptPath) supabase.storage.from("receipts").remove([ai.receiptPath]).catch(() => {}); if (draftPathRef.current && draftPathRef.current !== origReceiptRef.current) supabase.storage.from("receipts").remove([draftPathRef.current]).catch(() => {}); setModal(null); setEditItem(null); setAiData(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        {ai && (
-          <div style={{ background: hasWarnings ? "#fffbeb" : "#ecfdf5", border: "1px solid " + (hasWarnings ? "#fde68a" : "#86efac"), borderRadius: 8, padding: 12, marginBottom: 16 }}>
-            <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-              {ai.scannedUrl && <img src={ai.scannedUrl} alt="Receipt" style={{ width: 60, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0" }} />}
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>AI extracted receipt details</div>
-                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>Overall confidence: {Math.round((ai.confidence || 0) * 100)}%{ai.categoryConfidence != null ? ` · Category: ${Math.round(ai.categoryConfidence * 100)}%` : ""}</div>
-                {ai.warnings?.length > 0 && ai.warnings.map((w, i) => <div key={i} style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>Warning: {w}</div>)}
-                {hasWarnings && <div style={{ fontSize: 11, color: "#92400e", fontWeight: 600, marginTop: 4 }}>Please review these details before saving.</div>}
-              </div>
-            </div>
-          </div>
-        )}
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
-        </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Merchant</label><input value={f.merchant || ""} onChange={(e) => { const m = e.target.value; const learned = learnedCategoryFor(m); setF((prev) => ({ ...prev, merchant: m, ...(learned ? { account: learned } : {}) })); }} placeholder="e.g. Bunnings Warehouse" style={s.input} /></div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. 20x 90mm screws, timber battens" style={s.input} /></div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Category</label>{categorySelect}</div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Reference</label><input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Receipt number" style={s.input} /></div>
-        {needsBusinessPurpose && (
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Business Purpose</label><input value={f.business_purpose} onChange={(e) => setF({ ...f, business_purpose: e.target.value })} placeholder="Why was this purchased? (required for ATO-scrutinised categories)" style={s.input} /></div>
-        )}
-        <div style={{ marginBottom: 12, padding: "12px 14px", background: f.personal_card ? "#fffbeb" : "#f8fafc", border: `1px solid ${f.personal_card ? "#fde68a" : "#e2e8f0"}`, borderRadius: 9 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", margin: 0 }}>
-            <input type="checkbox" checked={!!f.personal_card} onChange={(e) => setF({ ...f, personal_card: e.target.checked })} style={{ width: 16, height: 16, accentColor: accent }} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>Paid on personal card</span>
-          </label>
-          {f.personal_card && (
-            <div style={{ fontSize: 11, color: "#92400e", marginTop: 10, fontWeight: 500 }}>Will appear in Reimbursements as pending — owed to Michel</div>
-          )}
-        </div>
-        <div style={{ marginBottom: 12, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 9 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>Receipt</span>
-            {f.receipt_path ? <span style={{ fontSize: 12, color: "#059669", fontWeight: 600 }}>✓ Attached</span> : <span style={{ fontSize: 11, color: "#94a3b8" }}>Optional</span>}
-          </div>
-          <input ref={receiptInputRef} type="file" accept="image/*,application/pdf" capture="environment" onChange={handleReceiptFile} style={{ display: "none" }} />
-          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button type="button" disabled={uploadingReceipt || extracting} onClick={() => receiptInputRef.current?.click()} style={{ ...s.btnOutline, color: "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: uploadingReceipt || extracting ? 0.5 : 1 }}><Icons.Camera /> {uploadingReceipt ? "Uploading…" : extracting ? "Reading…" : (f.receipt_path ? "Replace" : "Snap / attach")}</button>
-            {f.receipt_path && <button type="button" onClick={() => openReceipt({ receipt_path: f.receipt_path })} style={{ ...s.btnOutline, gap: 6 }}>View</button>}
-            {f.receipt_path && <button type="button" onClick={removeReceiptDraft} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
-          </div>
-          {extracting && <div style={{ fontSize: 12, color: "#8b5cf6", fontWeight: 600, marginTop: 8 }}>Reading the receipt with AI…</div>}
-          {!extracting && extractInfo && !extractInfo.error && <div style={{ fontSize: 11, color: "#059669", fontWeight: 600, marginTop: 8 }}>AI filled the details{extractInfo.confidence != null ? ` · ${Math.round(extractInfo.confidence * 100)}% confidence` : ""} — please review.{extractInfo.warnings?.length ? ` ${extractInfo.warnings.join(" ")}` : ""}</div>}
-          {!extracting && extractInfo?.error && <div style={{ fontSize: 11, color: "#92400e", marginTop: 8 }}>Couldn't auto-read this receipt — enter the details manually.</div>}
-          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, lineHeight: 1.5 }}>{emailConn ? "Photograph or attach a receipt — the AI reads it to fill the fields, and it's filed to your OneDrive receipts folder as a PDF when you save." : "Photograph or attach a receipt — the AI reads it to fill the fields. Connect Microsoft in Settings to also file it to OneDrive."}</div>
-        </div>
-        <button disabled={!f.description || !f.amount || saving} onClick={async () => { setSaving(true); const payload = toSave(); existing ? await updateTransaction(existing.id, payload) : await addTransaction(payload); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.description || !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Expense"}</button>
-        {existing && !existing.receipt_path && existing.payment_source === "personal" && (
-          <div style={{ marginTop: 8, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#991b1b", fontWeight: 500 }}>Missing receipt for personally paid expense</div>
-        )}
-        {existing && (
-          <button onClick={() => deleteTransaction(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
-            <Icons.Trash /> Delete Expense
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const BatchReceipts = () => {
-    const [phase, setPhase] = useState("select"); // select | scanning | review | saving | done
-    const [drafts, setDrafts] = useState([]);
-    const [progress, setProgress] = useState({ done: 0, total: 0 });
-    const [dragOver, setDragOver] = useState(false);
-    const [savedCount, setSavedCount] = useState(0);
-    const fileRef = useRef(null);
-    const defCat = EXPENSE_CATEGORIES.includes("Office Supplies & Stationery") ? "Office Supplies & Stationery" : EXPENSE_CATEGORIES[0];
-
-    const scanOne = async (file, i) => {
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      const base = { key: `${i}-${file.name}`, include: true, isPdf, status: "ok", merchant: "", amount: "", date: today(), account: defCat, description: "", business_purpose: "", reference: "", confidence: null, warnings: [], receipt_path: "", scannedUrl: "" };
-      try {
-        const ext = isPdf ? "pdf" : (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
-        const path = `${session.user.id}/${Date.now()}_${i}_receipt.${ext}`;
-        const up = await supabase.storage.from("receipts").upload(path, file, { contentType: file.type || (isPdf ? "application/pdf" : "image/jpeg") });
-        if (up.error) return { ...base, status: "error" };
-        base.receipt_path = path;
-        const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(file); });
-        if (!isPdf) base.scannedUrl = dataUrl;
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch(`${API_BASE}/.netlify/functions/extract-receipt`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ image: dataUrl.split(",")[1], mediaType: file.type || (isPdf ? "application/pdf" : "image/jpeg") }) });
-        if (!resp.ok) return { ...base, status: "scanfail" };
-        const r = await resp.json();
-        return { ...base, merchant: r.vendor || "", description: r.description || r.vendor || "", amount: r.total != null ? String(r.total) : "", date: r.date || base.date, account: learnedCategoryFor(r.vendor || r.description) || (EXPENSE_CATEGORIES.includes(r.category) ? r.category : defCat), business_purpose: r.businessPurpose || "", reference: r.reference || "", confidence: r.confidence, warnings: r.warnings || [] };
-      } catch { return { ...base, status: "scanfail" }; }
-    };
-
-    const onFiles = async (fileList) => {
-      const files = [...(fileList || [])].filter((f) => { const t = f.type || ""; return t.startsWith("image/") || t === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"); }).slice(0, 25);
-      if (!files.length) { alert("Drop receipt images (JPG, PNG) or PDFs."); return; }
-      setPhase("scanning");
-      setProgress({ done: 0, total: files.length });
-      const out = [];
-      for (let i = 0; i < files.length; i++) { out.push(await scanOne(files[i], i)); setProgress({ done: i + 1, total: files.length }); }
-      setDrafts(out);
-      setPhase("review");
-    };
-
-    const upd = (key, patch) => setDrafts((prev) => prev.map((d) => (d.key === key ? { ...d, ...patch } : d)));
-    const chosen = drafts.filter((d) => d.include && d.amount && Number(d.amount) > 0);
-
-    const addAll = async () => {
-      if (!chosen.length) { alert("Set an amount on at least one receipt to add it."); return; }
-      setPhase("saving");
-      const dropped = drafts.filter((d) => !d.include && d.receipt_path).map((d) => d.receipt_path);
-      if (dropped.length) supabase.storage.from("receipts").remove(dropped).catch(() => {});
-      const added = await addExpensesBatch(chosen.map((d) => ({ date: d.date, amount: d.amount, account: d.account, merchant: d.merchant, description: d.description || d.merchant || "Expense", business_purpose: d.business_purpose, reference: d.reference, receipt_path: d.receipt_path })));
-      setSavedCount(added.length);
-      setPhase("done");
-    };
-
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Batch Receipts</h3>
-          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        {phase === "select" && (
-          <>
-            <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => onFiles(e.target.files)} style={{ display: "none" }} />
-            <div onClick={() => fileRef.current?.click()} onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files); }} style={{ border: `2px dashed ${dragOver ? accent : "#cbd5e1"}`, borderRadius: 12, padding: "40px 20px", textAlign: "center", cursor: "pointer", background: dragOver ? "#ecfdf5" : "#f8fafc" }}>
-              <div style={{ color: accent, marginBottom: 8, display: "flex", justifyContent: "center" }}><Icons.Camera /></div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Drop receipt photos or PDFs here, or click to choose</div>
-              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Up to 25 files. Images are auto-read by AI — PDFs go straight to manual entry.</div>
-            </div>
-          </>
-        )}
-        {phase === "scanning" && (
-          <div style={{ padding: "30px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Uploading &amp; reading… {progress.done}/{progress.total}</div>
-            <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, marginTop: 14, overflow: "hidden" }}><div style={{ height: "100%", width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`, background: accent, transition: "width .2s" }} /></div>
-          </div>
-        )}
-        {phase === "review" && (
-          <>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>{drafts.length} scanned · {chosen.length} ready to add. Review and edit, then add.</div>
-            <div style={{ maxHeight: "55vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-              {drafts.map((d) => (
-                <div key={d.key} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, opacity: d.include ? 1 : 0.5, background: "#fff" }}>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <input type="checkbox" checked={d.include} onChange={() => upd(d.key, { include: !d.include })} style={{ width: 16, height: 16, accentColor: accent, marginTop: 2, flexShrink: 0 }} />
-                    {d.isPdf ? <div style={{ width: 44, height: 56, borderRadius: 6, border: "1px solid #e2e8f0", background: "#fef3c7", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#92400e" }}>PDF</div> : d.scannedUrl ? <img src={d.scannedUrl} alt="" style={{ width: 44, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid #e2e8f0", flexShrink: 0 }} /> : null}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {d.status === "scanfail" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>{d.isPdf ? "Couldn't read PDF — enter manually" : "Couldn't auto-read — enter manually"}</div>}
-                      {d.status === "error" && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>Upload failed</div>}
-                      {d.status === "ok" && d.confidence != null && <div style={{ fontSize: 10, color: d.confidence < 0.7 ? "#92400e" : "#94a3b8", marginBottom: 4 }}>{d.isPdf ? "PDF · " : ""}AI {Math.round(d.confidence * 100)}%{d.warnings?.length ? ` · ${d.warnings.join(" ")}` : ""}</div>}
-                      {d.status === "ok" && d.confidence == null && d.isPdf && <div style={{ fontSize: 11, color: "#92400e", marginBottom: 4 }}>PDF — enter details manually</div>}
-                      <div style={s.grid2}>
-                        <input value={d.merchant} onChange={(e) => upd(d.key, { merchant: e.target.value })} placeholder="Merchant" style={{ ...s.input, marginBottom: 6 }} />
-                        <input type="number" step="0.01" value={d.amount} onChange={(e) => upd(d.key, { amount: e.target.value })} placeholder="Amount" style={{ ...s.input, marginBottom: 6 }} />
-                      </div>
-                      <div style={s.grid2}>
-                        <input type="date" value={d.date} onChange={(e) => upd(d.key, { date: e.target.value })} style={{ ...s.input, marginBottom: 0 }} />
-                        <select value={d.account} onChange={(e) => upd(d.key, { account: e.target.value })} style={{ ...s.select, marginBottom: 0 }}>{EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.label} label={g.label}>{g.categories.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}</select>
-                      </div>
-                      {d.reference && <input value={d.reference} onChange={(e) => upd(d.key, { reference: e.target.value })} placeholder="Receipt #" style={{ ...s.input, marginTop: 6, marginBottom: 0, fontSize: 11 }} />}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button disabled={!chosen.length} onClick={addAll} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 12, opacity: chosen.length ? 1 : 0.5 }}>Add {chosen.length} expense{chosen.length === 1 ? "" : "s"}</button>
-          </>
-        )}
-        {phase === "saving" && <div style={{ padding: "30px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Adding expenses…</div>}
-        {phase === "done" && (
-          <div style={{ padding: "30px 10px", textAlign: "center" }}>
-            <div style={{ width: 54, height: 54, borderRadius: 27, background: "#ecfdf5", color: "#059669", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icons.Check /></div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 12 }}>{savedCount} expense{savedCount === 1 ? "" : "s"} added</div>
-            <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>They're in your Expenses{emailConn ? " and filed to OneDrive" : ""}.</div>
-            <button onClick={() => setModal(null)} style={{ ...s.btn(accent), marginTop: 18 }}>Done</button>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const IncomeForm = ({ existing }) => {
-    const [f, setF] = useState({ date: existing?.date || today(), amount: String(existing?.amount ?? ""), description: existing?.description || "", account: existing?.account || "Other Income" });
-    const [saving, setSaving] = useState(false);
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Edit Income</h3>
-          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        {isReconciled(existing) && <div style={{ fontSize: 11, color: "#059669", fontWeight: 600, marginBottom: 14 }}>✓ Reconciled to a bank statement</div>}
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Amount (AUD)</label><input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0.00" style={s.input} /></div>
-        </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Description</label><input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Refund, owner deposit" style={s.input} /></div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Income account</label><select value={f.account} onChange={(e) => setF({ ...f, account: e.target.value })} style={s.select}>{!REVENUE_ACCOUNTS.some((a) => a.name === f.account) && f.account ? <option value={f.account}>{f.account}</option> : null}{REVENUE_ACCOUNTS.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}</select></div>
-        <button disabled={!f.amount || saving} onClick={async () => { setSaving(true); await updateIncome(existing.id, f); setSaving(false); }} style={{ ...s.btn(accent), opacity: !f.amount || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : "Save Changes"}</button>
-        <button onClick={() => deleteTransaction(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}><Icons.Trash /> Delete Income</button>
-      </div>
-    );
-  };
 
 
   const InvoiceForm = ({ existing }) => {
@@ -3496,196 +2761,89 @@ export default function BookkeeperApp() {
   };
 
 
-  const PnlPage = () => {
-    const now = new Date();
-    const defaultMonth = now.toISOString().slice(0, 7);
-    const defaultQuarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
-    const defaultYear = String(now.getFullYear());
-    const [periodType, setPeriodType] = useState("month");
-    const [periodValue, setPeriodValue] = useState(defaultMonth);
-    const bounds = periodBounds(periodType, periodValue);
-    const realInvoices = divInvoices.filter((i) => i.type !== "quote");
-    const incomeInvoices = realInvoices.filter((i) => i.status === "paid" && inPeriod(i.paid_date || i.date, bounds.start, bounds.end));
-    const incomeTxns = divTxns.filter((t) => t.type === "income" && inPeriod(t.date, bounds.start, bounds.end));
-    const expenseTxns = divTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer" && inPeriod(t.date, bounds.start, bounds.end));
-    const totalIncome = incomeInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0) + incomeTxns.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-    const totalExpenses = expenseTxns.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-    const net = totalIncome - totalExpenses;
-    const onTypeChange = (type) => {
-      setPeriodType(type);
-      if (type === "month") setPeriodValue(defaultMonth);
-      else if (type === "quarter") setPeriodValue(defaultQuarter);
-      else setPeriodValue(defaultYear);
-    };
-    const periodInput = periodType === "month" ? (
-      <input type="month" value={periodValue} onChange={(e) => setPeriodValue(e.target.value)} style={{ ...s.input, maxWidth: 180 }} />
-    ) : periodType === "quarter" ? (
-      <select value={periodValue} onChange={(e) => setPeriodValue(e.target.value)} style={{ ...s.select, maxWidth: 140 }}>
-        {[0, 1, 2, 3].map((i) => {
-          const y = now.getFullYear();
-          const q = Math.floor(now.getMonth() / 3) + 1 - i;
-          const adjY = q <= 0 ? y - 1 : y;
-          const adjQ = q <= 0 ? q + 4 : q;
-          const val = `${adjY}-Q${adjQ}`;
-          return <option key={val} value={val}>Q{adjQ} {adjY}</option>;
-        })}
-      </select>
-    ) : (
-      <select value={periodValue} onChange={(e) => setPeriodValue(e.target.value)} style={{ ...s.select, maxWidth: 120 }}>
-        {[0, 1, 2, 3, 4].map((i) => {
-          const y = now.getFullYear() - i;
-          return <option key={y} value={String(y)}>{y}</option>;
-        })}
-      </select>
-    );
-    if (isMobile) {
-      const incomeRows = [
-        ...incomeInvoices.map((i) => ({ id: i.id, date: i.paid_date || i.date, label: `${i.number} — ${i.contact_name || i.contact_company || ""}`, amount: Number(i.total) || 0, txn: null })),
-        ...incomeTxns.map((t) => ({ id: t.id, date: t.date, label: `${t.description || "Deposit"} · ${t.account || "Other Income"}`, amount: Number(t.amount) || 0, txn: t })),
-      ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-      const expRows = [...expenseTxns].sort((a, b) => b.date.localeCompare(a.date));
-      return (
-        <div style={{ paddingBottom: 20 }}>
-          <div style={{ padding: "8px 16px 0" }}>
-            <FilterPills tabs={[{ key: "month", label: "Month" }, { key: "quarter", label: "Quarter" }, { key: "year", label: "Year" }]} active={periodType} onChange={onTypeChange} />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 0", flexWrap: "wrap" }}>
-            {periodInput}
-            <span style={{ fontSize: 12, color: "#64748b" }}>{divInfo.name} · {bounds.label}</span>
-          </div>
-          <div style={{ display: "flex", gap: 10, padding: "12px 16px 0" }}>
-            <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Income</div>
-              <div style={{ marginTop: 4 }}><MoneyBig value={totalIncome} size={20} color="#059669" /></div>
-              <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{incomeRows.length} item{incomeRows.length !== 1 ? "s" : ""}</div>
-            </div>
-            <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Expenses</div>
-              <div style={{ marginTop: 4 }}><MoneyBig value={totalExpenses} size={20} color="#ef4444" /></div>
-              <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{expRows.length} expense{expRows.length !== 1 ? "s" : ""}</div>
-            </div>
-          </div>
-          <div style={{ padding: "10px 16px 0" }}>
-            <div style={{ background: net >= 0 ? "#ecfdf5" : "#fef2f2", border: `1px solid ${net >= 0 ? "#a7f3d0" : "#fecaca"}`, borderRadius: 14, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: net >= 0 ? "#065f46" : "#991b1b" }}>Net {net >= 0 ? "Profit" : "Loss"}</span>
-              <MoneyBig value={Math.abs(net)} size={22} color={net >= 0 ? "#059669" : "#ef4444"} />
-            </div>
-          </div>
-          <MobileSection title="Income">
-            {incomeRows.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No income in this period</div> : incomeRows.map((r, idx) => (
-              <MobileRow key={r.id} primary={r.label} secondary={fmtDate(r.date)} right={fmt(r.amount)} isLast={idx === incomeRows.length - 1} onClick={r.txn ? () => { setEditItem(r.txn); setModal("income"); } : undefined} />
-            ))}
-          </MobileSection>
-          <MobileSection title="Expenses">
-            {expRows.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses in this period</div> : expRows.map((t, idx) => (
-              <MobileRow key={t.id} primary={t.description} secondary={`${fmtDate(t.date)}${t.account ? " · " + t.account : ""}`} right={fmt(t.amount)} isLast={idx === expRows.length - 1} onClick={() => { setEditItem(t); setModal("expense"); }} />
-            ))}
-          </MobileSection>
-        </div>
-      );
-    }
-    return (
-      <div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-          <FilterPills tabs={[{ key: "month", label: "Month" }, { key: "quarter", label: "Quarter" }, { key: "year", label: "Year" }]} active={periodType} onChange={onTypeChange} />
-          {periodInput}
-          <span style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>{divInfo.name} · {bounds.label}</span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Income</div><div style={{ marginTop: 8 }}><MoneyBig value={totalIncome} color="#059669" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{incomeInvoices.length} paid invoice{incomeInvoices.length !== 1 ? "s" : ""}{incomeTxns.length ? ` · ${incomeTxns.length} other income` : ""}</div></div>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Expenses</div><div style={{ marginTop: 8 }}><MoneyBig value={totalExpenses} color="#ef4444" /></div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>{expenseTxns.length} expense{expenseTxns.length !== 1 ? "s" : ""}</div></div>
-          <div style={{ ...s.statCard(), borderColor: net >= 0 ? "#86efac" : "#fecaca" }}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Net {net >= 0 ? "Profit" : "Loss"}</div><div style={{ marginTop: 8 }}><MoneyBig value={Math.abs(net)} color={net >= 0 ? "#059669" : "#ef4444"} /></div></div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div style={s.card}>
-            <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Income</h4>
-            {incomeInvoices.length === 0 && incomeTxns.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12, padding: "12px 0" }}>No income in this period</div> : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={s.table}><tbody>
-                  {[
-                    ...incomeInvoices.map((i) => ({ id: i.id, date: i.paid_date || i.date, label: `${i.number} — ${i.contact_name || i.contact_company || ""}`, amount: Number(i.total) || 0, txn: null })),
-                    ...incomeTxns.map((t) => ({ id: t.id, date: t.date, label: `${t.description || "Deposit"} · ${t.account || "Other Income"}`, amount: Number(t.amount) || 0, txn: t })),
-                  ].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r) => (
-                    <tr key={r.id} onClick={r.txn ? () => { setEditItem(r.txn); setModal("income"); } : undefined} style={r.txn ? { cursor: "pointer" } : undefined}><td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td><td style={s.td}>{r.label}{r.txn && <span style={{ fontSize: 10, color: "#94a3b8" }}> · tap to edit</span>}</td><td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(r.amount)}</td></tr>
-                  ))}
-                </tbody></table>
-              </div>
-            )}
-          </div>
-          <div style={s.card}>
-            <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Expenses</h4>
-            {expenseTxns.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12, padding: "12px 0" }}>No expenses in this period</div> : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={s.table}><tbody>
-                  {[...expenseTxns].sort((a, b) => b.date.localeCompare(a.date)).map((t) => (
-                    <tr key={t.id}><td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td><td style={s.td}>{t.description}<div style={{ fontSize: 10, color: "#94a3b8" }}>{t.account || ""}</div></td><td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td></tr>
-                  ))}
-                </tbody></table>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
 
+  // Operational dashboard: what is owed, what is late, and what needs a decision.
+  // Deliberately no accounting metrics — MYOB owns those now.
   const DashboardPage = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
-    const expense = monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").reduce((sum, t) => sum + Number(t.amount), 0);
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
-    const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const quotes = divInvoices.filter((i) => i.type === "quote");
+    const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
+    const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
+    const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const paidThisMonth = realInvoices.filter((i) => i.status === "paid" && (i.paid_date || i.date || "").slice(0, 7) === thisMonth);
+    const paidThisMonthTotal = paidThisMonth.reduce((sum, i) => sum + Number(i.total || 0), 0);
     const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
-    const recentExpenses = [...divTxns].filter((t) => t.type === "expense" && t.account !== "Internal transfer").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const openQuotes = quotes.filter((q) => q.status === "sent");
+    const acceptedNotInvoiced = quotes.filter((q) => q.status === "accepted" && !realInvoices.some((i) => i.converted_from_quote_id === q.id));
+    const draftDocs = divInvoices.filter((i) => i.status === "draft");
+    const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
+    const attention = [
+      ...overdueInvoices.slice(0, 4).map((i) => ({ key: "o" + i.id, tone: "#ef4444", label: `${i.number} — ${daysOverdue(i)} day${daysOverdue(i) === 1 ? "" : "s"} overdue`, sub: i.contact_name || i.contact_company || "", amount: i.total, go: () => { setEditItem(i); setModal("invoice"); } })),
+      ...acceptedNotInvoiced.slice(0, 3).map((q) => ({ key: "a" + q.id, tone: "#0ea5e9", label: `${q.number} accepted — not invoiced yet`, sub: q.contact_name || q.contact_company || "", amount: q.total, go: () => { setEditItem(q); setModal("invoice"); } })),
+      ...draftDocs.slice(0, 3).map((d) => ({ key: "d" + d.id, tone: "#94a3b8", label: `${d.number} still a draft`, sub: d.contact_name || d.contact_company || "", amount: d.total, go: () => { setEditItem(d); setModal("invoice"); } })),
+    ];
+
+    const tile = (label, value, sub, opts = {}) => (
+      <div className={opts.onClick ? "bk-card-hover" : undefined} style={{ ...s.statCard(), cursor: opts.onClick ? "pointer" : "default" }} onClick={opts.onClick}>
+        <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+        <div style={{ marginTop: 8 }}><MoneyBig value={value} color={opts.color} /></div>
+        <div style={{ fontSize: 12, color: opts.subColor || "#065f46", marginTop: 6, fontWeight: 500 }}>{sub}</div>
+      </div>
+    );
 
     return (
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard()}>
-            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Expenses This Month</div>
-            <div style={{ marginTop: 8 }}><MoneyBig value={expense} /></div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").length} transactions</div>
-          </div>
-          <div style={s.statCard()}>
-            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Outstanding Invoices</div>
-            <div style={{ marginTop: 8 }}><MoneyBig value={outstanding} /></div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").length} unpaid</div>
-          </div>
-          <div style={s.statCard()}>
-            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Revenue Collected</div>
-            <div style={{ marginTop: 8 }}><MoneyBig value={realInvoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + Number(i.total || 0), 0)} /></div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "paid").length} paid invoice{realInvoices.filter((i) => i.status === "paid").length !== 1 ? "s" : ""}</div>
-          </div>
-          <div className="bk-card-hover" style={{ ...s.statCard(), cursor: "pointer" }} onClick={() => setPage("projects")}>
-            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Active Projects</div>
-            <div style={{ marginTop: 8 }}><MoneyBig value={projectsRemaining} /></div>
-            <div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{activeProjects.length} active · remaining</div>
-          </div>
+          {tile("Outstanding", outstanding, `${unpaid.length} unpaid`, { onClick: () => setPage("invoices") })}
+          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due` : "nothing late", { color: overdueTotal > 0 ? "#b91c1c" : undefined, subColor: overdueTotal > 0 ? "#b91c1c" : "#94a3b8", onClick: () => setPage("invoices") })}
+          {tile("Paid This Month", paidThisMonthTotal, `${paidThisMonth.length} invoice${paidThisMonth.length === 1 ? "" : "s"}`)}
+          {tile("Active Projects", projectsRemaining, `${activeProjects.length} active · remaining`, { onClick: () => setPage("projects") })}
         </div>
+
+        {attention.length > 0 && (
+          <div style={s.card}>
+            <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Needs attention</h4>
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}><tbody>
+                {attention.map((a) => (
+                  <tr key={a.key} onClick={a.go} style={{ cursor: "pointer" }}>
+                    <td style={{ ...s.td, width: 6, paddingRight: 0 }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 3, background: a.tone }} /></td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{a.label}<div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>{a.sub}</div></td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(a.amount || 0)}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </div>
+          </div>
+        )}
+
         <div style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Expenses</h4>
-            <button onClick={() => setPage("expenses")} style={s.btnOutline}>View All</button>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Invoices</h4>
+            <button onClick={() => setPage("invoices")} style={s.btnOutline}>View All</button>
           </div>
-          {recentExpenses.length === 0 ? (
-            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No expenses yet</div>
+          {recentInvoices.length === 0 ? (
+            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No invoices yet</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}><tbody>
-                {recentExpenses.map((t) => (
-                  <tr key={t.id}>
-                    <td style={{ ...s.td, color: "#94a3b8", width: 70, fontSize: 11 }}>{fmtDate(t.date)}</td>
-                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || ""}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
+                {recentInvoices.map((inv) => (
+                  <tr key={inv.id} onClick={() => { setEditItem(inv); setModal("invoice"); }} style={{ cursor: "pointer" }}>
+                    <td style={{ ...s.td, color: "#94a3b8", width: 70, fontSize: 11 }}>{fmtDate(inv.date)}</td>
+                    <td style={{ ...s.td, fontWeight: 500 }}>{inv.number}<div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>{inv.contact_name || inv.contact_company || ""}</div></td>
+                    <td style={{ ...s.td }}><span style={s.badge(statusBadge(inv.status).color)}>{statusBadge(inv.status).label}</span></td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(inv.total || 0)}</td>
                   </tr>
                 ))}
               </tbody></table>
             </div>
           )}
         </div>
+
         <div style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Active Projects</h4>
@@ -3707,126 +2865,28 @@ export default function BookkeeperApp() {
             </div>
           )}
         </div>
-        {pendingReimbursements.length > 0 && (
-          <div className="bk-card-hover" style={{ ...s.card, cursor: "pointer", borderColor: "#fde68a", background: "#fffef5" }} onClick={() => setPage("reimbursements")}>
+
+        {openQuotes.length > 0 && (
+          <div className="bk-card-hover" style={{ ...s.card, cursor: "pointer" }} onClick={() => setPage("quotes")}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
-                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#92400e" }}>Owed to Michel</h4>
-                <div style={{ fontSize: 12, color: "#92400e", marginTop: 4 }}>{pendingReimbursements.length} pending reimbursement{pendingReimbursements.length !== 1 ? "s" : ""} — {fmt(pendingReimbTotal)}</div>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Quotes awaiting a decision</h4>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{openQuotes.length} sent · {fmt(openQuotes.reduce((sum, q) => sum + Number(q.total || 0), 0))}</div>
               </div>
-              <span style={{ fontSize: 20, color: "#f59e0b" }}>→</span>
+              <span style={{ fontSize: 20, color: "#94a3b8" }}>→</span>
             </div>
           </div>
         )}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
-          <button onClick={() => setModal("receipt")} style={{ ...s.btn("#8b5cf6"), justifyContent: "center", padding: "14px" }}><Icons.Camera /> Snap Receipt</button>
-          <button onClick={() => setModal("batch")} style={{ ...s.btn("#7c3aed"), justifyContent: "center", padding: "14px" }}><Icons.Camera /> Batch Receipts</button>
-          <button onClick={() => setModal("expense")} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> Add Expense</button>
-          <button onClick={() => setModal("invoice")} style={{ ...s.btn("#3b82f6"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Invoice</button>
+          <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={{ ...s.btn("#3b82f6"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Invoice</button>
+          <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Quote</button>
+          <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={{ ...s.btn("#6366f1"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Project</button>
         </div>
       </div>
     );
   };
 
-  const ExpensesPage = () => {
-    const [search, setSearch] = useState("");
-    const [showFilter, setShowFilter] = useState(false);
-    const [dateMode, setDateMode] = useState("all"); // "all" | "month" | "custom"
-    const [month, setMonth] = useState(() => today().slice(0, 7));
-    const [fromDate, setFromDate] = useState("");
-    const [toDate, setToDate] = useState("");
-    const monthBounds = dateMode === "month" && month ? periodBounds("month", month) : null;
-    const range = monthBounds
-      ? { start: monthBounds.start, end: monthBounds.end }
-      : dateMode === "custom"
-      ? { start: fromDate || null, end: toDate || null }
-      : { start: null, end: null };
-    const dateActive = !!(range.start || range.end);
-    const activeLabel = monthBounds
-      ? monthBounds.label
-      : dateMode === "custom" && dateActive
-      ? `${fromDate ? fmtDate(fromDate) : "start"} – ${toDate ? fmtDate(toDate) : "now"}`
-      : "";
-    const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
-    const filtered = sorted.filter((t) => {
-      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase()) && !(t.merchant || "").toLowerCase().includes(search.toLowerCase())) return false;
-      if (range.start && (t.date || "") < range.start) return false;
-      if (range.end && (t.date || "") > range.end) return false;
-      return true;
-    });
-    const filteredTotal = filtered.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-    const paymentBadge = (t) => {
-      if (t.payment_source !== "personal") return null;
-      if (t.reimbursement_status === "reimbursed") return <span style={s.badge("#34d399")}>Reimbursed</span>;
-      if (t.reimbursement_status === "pending") return <span style={s.badge("#f59e0b")}>Reimbursement pending</span>;
-      if (t.reimbursement_status === "do_not_reimburse") return <span style={s.badge("#64748b")}>Personal</span>;
-      return <span style={s.badge("#64748b")}>Personal</span>;
-    };
-
-    return (
-      <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ ...s.input, maxWidth: 280, flex: "1 1 200px" }} />
-          <button onClick={() => setShowFilter((v) => !v)} style={{ ...(dateActive ? s.btn(accent, true) : s.btnOutline), gap: 6, whiteSpace: "nowrap" }}><Icons.Filter /> {activeLabel || "Filter"}</button>
-          {dateActive && <button onClick={() => { setDateMode("all"); setFromDate(""); setToDate(""); setShowFilter(false); }} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", whiteSpace: "nowrap" }}>Clear</button>}
-        </div>
-        {showFilter && (
-          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginBottom: 12, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div>
-              <label style={s.label}>Period</label>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {[["all", "All time"], ["month", "By month"], ["custom", "Custom range"]].map(([m, lbl]) => (
-                  <button key={m} onClick={() => setDateMode(m)} style={{ ...(dateMode === m ? s.btn(accent, true) : s.btnOutline), fontSize: 12, whiteSpace: "nowrap" }}>{lbl}</button>
-                ))}
-              </div>
-            </div>
-            {dateMode === "month" && (
-              <div>
-                <label style={s.label}>Month</label>
-                <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ ...s.input, maxWidth: 180 }} />
-              </div>
-            )}
-            {dateMode === "custom" && (
-              <>
-                <div><label style={s.label}>From</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ ...s.input, maxWidth: 160 }} /></div>
-                <div><label style={s.label}>To</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ ...s.input, maxWidth: 160 }} /></div>
-              </>
-            )}
-          </div>
-        )}
-        {dateActive && (
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>{filtered.length} expense{filtered.length === 1 ? "" : "s"}{activeLabel ? ` · ${activeLabel}` : ""} · <strong style={{ color: "#0f172a" }}>{fmt(filteredTotal)}</strong> total</div>
-        )}
-        <div style={s.card}>
-          {filtered.length === 0 ? (
-            <EmptyState icon={Icons.Expenses} title="No expenses found" hint={search || dateActive ? "Try adjusting your search or filter." : "Snap a receipt or add an expense to get started."} />
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={s.table}>
-                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Merchant</th><th style={s.th}>Description</th><th style={s.th}>Category</th><th style={s.th}>Payment</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={{ ...s.th, width: 60 }}></th></tr></thead>
-                <tbody>{filtered.map((t) => (
-                  <tr key={t.id} onClick={() => { setEditItem(t); setModal("expense"); }} style={{ cursor: "pointer" }}>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                    <td style={{ ...s.td, fontWeight: 600 }}>{t.merchant || "--"}</td>
-                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}{isReconciled(t) && <ReconciledMark />}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{t.account || "--"}</td>
-                    <td style={s.td}>{paymentBadge(t)}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
-                    <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      {t.receipt_path && <button onClick={(e) => { e.stopPropagation(); openReceipt(t); }} title="View receipt" style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button>}
-                      {t.receipt_path && <button onClick={(e) => { e.stopPropagation(); saveToOneDrive("expense", t.id); }} title="Save receipt to OneDrive" style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", padding: 2 }}><Icons.Cloud /></button>}
-                      <button onClick={(e) => { e.stopPropagation(); deleteTransaction(t.id); }} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
-                    </td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
 
   const DocList = ({ docType }) => {
     const isQuoteList = docType === "quote";
@@ -3954,7 +3014,7 @@ export default function BookkeeperApp() {
                     <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
                       <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
                       <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.date)}</td>
-                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.status === "paid" && isReconciled(inv) && <ReconciledMark />}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
+                      <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(inv.total || 0)}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
@@ -4109,102 +3169,6 @@ export default function BookkeeperApp() {
     );
   };
 
-  const ReimbursementsPage = () => {
-    const [filter, setFilter] = useState("pending");
-    const [search, setSearch] = useState("");
-    const [markingId, setMarkingId] = useState(null);
-    const [markForm, setMarkForm] = useState({ date: today(), amount: "", reference: "" });
-    const allPersonal = txns.filter((t) => t.payment_source === "personal");
-    const pending = allPersonal.filter((t) => t.reimbursement_status === "pending");
-    const reimbursed = allPersonal.filter((t) => t.reimbursement_status === "reimbursed");
-    const thisMonth = new Date().toISOString().slice(0, 7);
-    const [yr, mo] = thisMonth.split("-").map(Number);
-    const reimbursedThisMonth = reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).reduce((sum, t) => sum + Number(t.reimbursement_amount || t.amount), 0);
-    const missingReceipts = pending.filter((t) => !t.receipt_path);
-    const oldestPending = pending.length ? [...pending].sort((a, b) => a.date.localeCompare(b.date))[0] : null;
-    const oldestDays = oldestPending ? Math.floor((Date.now() - new Date(oldestPending.date).getTime()) / 86400000) : 0;
-    const filtered = allPersonal.filter((t) => {
-      if (filter === "pending" && t.reimbursement_status !== "pending") return false;
-      if (filter === "reimbursed" && t.reimbursement_status !== "reimbursed") return false;
-      if (filter === "no_receipt" && t.reimbursement_status !== "missing_receipt" && (t.receipt_path || t.reimbursement_status !== "pending")) return false;
-      if (filter === "do_not_reimburse" && t.reimbursement_status !== "do_not_reimburse") return false;
-      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.paid_by || "").toLowerCase().includes(search.toLowerCase())) return false;
-      return true;
-    }).sort((a, b) => b.date.localeCompare(a.date));
-
-    const copyAccountantSummary = () => {
-      const lines = pending.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)} | Paid by ${t.paid_by || "Owner"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""} | ${t.reimbursement_status} | Ref: ${t.reference || "-"}`);
-      const text = `Owner Reimbursement Summary\nPending total: ${fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}\nReimbursed this month: ${fmt(reimbursedThisMonth)}\nMissing receipts: ${missingReceipts.length}\nItems:\n${lines.join("\n")}`;
-      navigator.clipboard.writeText(text);
-      alert("Copied to clipboard!");
-    };
-
-    const handleMark = async (id, status) => {
-      if (status === "reimbursed" && markingId !== id) { setMarkingId(id); const t = txns.find(x => x.id === id); setMarkForm({ date: today(), amount: String(t?.amount || ""), reference: "" }); return; }
-      if (status === "reimbursed") { await markReimbursed(id, { status: "reimbursed", date: markForm.date, amount: markForm.amount, reference: markForm.reference }); setMarkingId(null); return; }
-      await markReimbursed(id, { status, date: null, amount: null, reference: null });
-    };
-
-    return (
-      <div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Owed to Michel</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(pending.reduce((sum, t) => sum + Number(t.amount), 0))}</div><div style={{ fontSize: 12, color: "#92400e", marginTop: 6, fontWeight: 500 }}>{pending.length} reimbursement pending</div></div>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Reimbursed This Month</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{fmt(reimbursedThisMonth)}</div><div style={{ fontSize: 12, color: "#065f46", marginTop: 6, fontWeight: 500 }}>{reimbursed.filter((t) => { const d = new Date(t.reimbursement_date || t.date); return d.getFullYear() === yr && d.getMonth() + 1 === mo; }).length} this month</div></div>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Missing Receipts</div><div style={{ fontSize: 28, fontWeight: 700, color: missingReceipts.length > 0 ? "#ef4444" : "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{missingReceipts.length}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>pending without receipt</div></div>
-          <div style={s.statCard()}><div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Oldest Pending</div><div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", marginTop: 8, letterSpacing: "-0.02em" }}>{oldestPending ? `${oldestDays}d` : "—"}</div><div style={{ fontSize: 12, color: "#64748b", marginTop: 6, fontWeight: 500 }}>{oldestPending ? oldestPending.description : "None pending"}</div></div>
-        </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <FilterPills tabs={[{ key: "all", label: "All", count: allPersonal.length }, { key: "pending", label: "Pending", count: pending.length }, { key: "reimbursed", label: "Reimbursed", count: reimbursed.length }, { key: "no_receipt", label: "Missing Receipt", count: missingReceipts.length }, { key: "do_not_reimburse", label: "Do Not Reimburse", count: allPersonal.filter((t) => t.reimbursement_status === "do_not_reimburse").length }]} active={filter} onChange={setFilter} />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." style={{ ...s.input, maxWidth: 180, flex: "1 1 140px", marginLeft: "auto" }} />
-          <button onClick={copyAccountantSummary} style={s.btn("#6366f1", true)}><Icons.Download /> Copy for Accountant</button>
-        </div>
-        <div style={s.card}>
-          {filtered.length === 0 ? (
-            <EmptyState icon={Icons.Reimburse} title="No reimbursements found" hint={filter === "all" ? "Personal-paid expenses you flag for reimbursement show up here." : "Try a different filter."} />
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={s.table}>
-                <thead><tr><th style={s.th}>Date</th><th style={s.th}>Description</th><th style={s.th}>Paid By</th><th style={s.th}>Purpose</th><th style={{ ...s.th, textAlign: "right" }}>Amount</th><th style={s.th}>Receipt</th><th style={s.th}>Status</th><th style={{ ...s.th, width: 160 }}>Actions</th></tr></thead>
-                <tbody>{filtered.map((t) => (
-                  <tr key={t.id}>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(t.date)}</td>
-                    <td style={{ ...s.td, fontWeight: 500 }}>{t.description}<div style={{ fontSize: 10, color: "#94a3b8" }}>{t.account || ""}</div></td>
-                    <td style={{ ...s.td, fontSize: 12 }}>{t.paid_by || "Owner"}</td>
-                    <td style={{ ...s.td, fontSize: 12, color: "#64748b", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.business_purpose || "--"}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(t.amount)}</td>
-                    <td style={s.td}>{t.receipt_path ? <button onClick={() => openReceipt(t)} style={{ background: "none", border: "none", color: "#8b5cf6", cursor: "pointer", padding: 2 }}><Icons.Camera /></button> : <span style={{ fontSize: 10, color: "#ef4444" }}>Missing</span>}</td>
-                    <td style={s.td}><span style={s.badge(t.reimbursement_status === "reimbursed" ? "#34d399" : t.reimbursement_status === "pending" ? "#f59e0b" : "#64748b")}>{t.reimbursement_status === "reimbursed" ? "Reimbursed" : t.reimbursement_status === "pending" ? "Reimbursement pending" : t.reimbursement_status === "missing_receipt" ? "No Receipt" : "Skipped"}</span>{t.reimbursement_status === "reimbursed" && t.reimbursement_date ? <div style={{ fontSize: 10, color: "#94a3b8" }}>{fmtDate(t.reimbursement_date)}</div> : null}{t.reimbursement_reference ? <div style={{ fontSize: 10, color: "#94a3b8" }}>Ref: {t.reimbursement_reference}</div> : null}</td>
-                    <td style={{ ...s.td, whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        {t.reimbursement_status === "pending" && <button onClick={() => handleMark(t.id, "reimbursed")} style={{ ...s.btn("#34d399", true), fontSize: 10 }}><Icons.Check /> Reimburse</button>}
-                        {t.reimbursement_status === "pending" && !t.receipt_path && <button onClick={() => handleMark(t.id, "missing_receipt")} style={{ ...s.btnOutline, fontSize: 10, color: "#ef4444", borderColor: "#ef444440" }}>No Receipt</button>}
-                        {t.reimbursement_status === "pending" && <button onClick={() => handleMark(t.id, "do_not_reimburse")} style={{ ...s.btnOutline, fontSize: 10 }}>Skip</button>}
-                        {t.reimbursement_status === "reimbursed" && <button onClick={() => markReimbursed(t.id, { status: "pending", date: null, amount: null, reference: null })} style={{ ...s.btnOutline, fontSize: 10, color: "#f59e0b", borderColor: "#f59e0b40" }}>Undo</button>}
-                        <button onClick={() => { setEditItem(t); setModal("expense"); }} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {markingId && (
-                  <tr><td colSpan="8" style={{ ...s.td, background: "#ecfdf5", padding: 12 }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>Mark Reimbursed:</span>
-                      <input type="date" value={markForm.date} onChange={(e) => setMarkForm({ ...markForm, date: e.target.value })} style={{ ...s.input, width: 140 }} />
-                      <input type="number" step="0.01" value={markForm.amount} onChange={(e) => setMarkForm({ ...markForm, amount: e.target.value })} placeholder="Amount" style={{ ...s.input, width: 100 }} />
-                      <input value={markForm.reference} onChange={(e) => setMarkForm({ ...markForm, reference: e.target.value })} placeholder="Transfer ref" style={{ ...s.input, width: 140 }} />
-                      <button onClick={() => handleMark(markingId, "reimbursed")} style={s.btn("#34d399", true)}><Icons.Check /> Confirm</button>
-                      <button onClick={() => setMarkingId(null)} style={s.btnOutline}>Cancel</button>
-                    </div>
-                  </td></tr>
-                )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
 
   // ═══ MOBILE COMPONENTS ═══
 
@@ -4234,18 +3198,8 @@ export default function BookkeeperApp() {
           {divMenuOpen && <DivisionMenu division={division} onSwitch={switchDivision} onClose={() => setDivMenuOpen(false)} />}
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
-        {page === "expenses" && (
-          <button onClick={() => setModal("receipt")} style={{ width: 34, height: 34, borderRadius: 17, background: "#8b5cf6", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
-            <Icons.Camera />
-          </button>
-        )}
-        {page === "reimbursements" && (
-          <button onClick={() => { const lines = pendingReimbursements.map((t) => `- ${fmtDate(t.date)} | ${t.description} | ${t.account || "-"} | ${fmt(t.amount)} | Paid by ${t.paid_by || "Michel"}${t.business_purpose ? ` | Purpose: ${t.business_purpose}` : ""}`); navigator.clipboard.writeText(`Pending Reimbursements (${pendingReimbursements.length})\nOwed to Michel: ${fmt(pendingReimbTotal)}\n${lines.join("\n")}`); alert("Copied!"); }} style={{ width: 34, height: 34, borderRadius: 17, background: "#6366f1", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
-            <Icons.Download />
-          </button>
-        )}
-        {page !== "dashboard" && page !== "reimbursements" && (
-          <button onClick={() => { if (page === "expenses") setModal("expense"); else if (page === "quotes") { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+        {page !== "dashboard" && (
+          <button onClick={() => { if (page === "quotes") { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Plus />
           </button>
         )}
@@ -4300,12 +3254,6 @@ export default function BookkeeperApp() {
     return map[status] || map.draft;
   };
 
-  const MobileExpensesNav = () => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px 0" }}>
-      <button onClick={() => setPage("expenses")} style={s.pill(page === "expenses")}>Expenses</button>
-      <button onClick={() => setPage("reimbursements")} style={s.pill(page === "reimbursements")}>Reimburse</button>
-    </div>
-  );
   const MobileSalesNav = () => (
     <div style={{ display: "flex", gap: 8, padding: "8px 16px 0" }}>
       <button onClick={() => setPage("invoices")} style={s.pill(page === "invoices")}>Invoices</button>
@@ -4315,125 +3263,58 @@ export default function BookkeeperApp() {
 
   const MobileDashboard = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    const monthTxns = divTxns.filter((t) => (t.date || "").slice(0, 7) === thisMonth);
-    const expense = monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").reduce((sum, t) => sum + Number(t.amount), 0);
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
-    const outstanding = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const recentExpenses = [...divTxns].filter((t) => t.type === "expense" && t.account !== "Internal transfer").sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+    const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
+    const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
+    const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const paidThisMonth = realInvoices.filter((i) => i.status === "paid" && (i.paid_date || i.date || "").slice(0, 7) === thisMonth);
+    const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
+    const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
+    const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 4);
+    const tile = (label, value, sub, color) => (
+      <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>{label}</div>
+        <div style={{ marginTop: 4 }}><MoneyBig value={value} size={22} color={color} /></div>
+        <div style={{ fontSize: 11, color: color || "#065f46", marginTop: 4, fontWeight: 500 }}>{sub}</div>
+      </div>
+    );
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
-          <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>This Month</div>
-            <div style={{ marginTop: 4 }}><MoneyBig value={expense} size={22} /></div>
-            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{monthTxns.filter((t) => t.type === "expense" && t.account !== "Internal transfer").length} expenses</div>
-          </div>
-          <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Outstanding</div>
-            <div style={{ marginTop: 4 }}><MoneyBig value={outstanding} size={22} /></div>
-            <div style={{ fontSize: 11, color: "#065f46", marginTop: 4, fontWeight: 500 }}>{realInvoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices</div>
-          </div>
+          {tile("Outstanding", outstanding, `${unpaid.length} unpaid`)}
+          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due` : "nothing late", overdueTotal > 0 ? "#b91c1c" : undefined)}
         </div>
-        <MobileSection title="Recent Expenses" onViewAll={() => setPage("expenses")}>
-          {recentExpenses.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses yet</div> : recentExpenses.map((e, i) => (
-            <MobileRow key={e.id} primary={e.description} secondary={fmtDate(e.date)} right={fmt(e.amount)} isLast={i === recentExpenses.length - 1} onClick={() => { setEditItem(e); setModal("expense"); }} />
-          ))}
-        </MobileSection>
-        <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
-          {realInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : realInvoices.slice(0, 3).map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === Math.min(2, realInvoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
-          ))}
-        </MobileSection>
-        {pendingReimbursements.length > 0 && (
-          <div style={{ margin: "12px 16px 0", background: "#fffef5", border: "1px solid #fde68a", borderRadius: 14, padding: "14px 16px", cursor: "pointer" }} onClick={() => setPage("reimbursements")}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>Owed to Michel</div>
-                <div style={{ fontSize: 12, color: "#b45309", marginTop: 2 }}>{pendingReimbursements.length} pending</div>
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "#92400e" }}>{fmt(pendingReimbTotal)}</div>
-            </div>
-          </div>
+        <div style={{ display: "flex", gap: 10, padding: "10px 16px 0" }}>
+          {tile("Paid This Month", paidThisMonth.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisMonth.length} invoice${paidThisMonth.length === 1 ? "" : "s"}`)}
+          {tile("Projects", projectsRemaining, `${activeProjects.length} active`)}
+        </div>
+        {overdueInvoices.length > 0 && (
+          <MobileSection title="Needs attention" onViewAll={() => setPage("invoices")}>
+            {overdueInvoices.slice(0, 4).map((inv, i) => (
+              <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={`${daysOverdue(inv)} day${daysOverdue(inv) === 1 ? "" : "s"} overdue`} right={fmt(inv.total || 0)} isLast={i === Math.min(3, overdueInvoices.length - 1)} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+            ))}
+          </MobileSection>
         )}
+        <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
+          {recentInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : recentInvoices.map((inv, i) => (
+            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === recentInvoices.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
+          ))}
+        </MobileSection>
+        <MobileSection title="Active Projects" onViewAll={() => setPage("projects")}>
+          {activeProjects.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No active projects</div> : activeProjects.slice(0, 3).map((p, i) => (
+            <MobileRow key={p.id} primary={projectLabel(p)} secondary={p.job_number || ""} right={fmt(projectTotals(p, divInvoices).remaining)} rightSub="remaining" isLast={i === Math.min(2, activeProjects.length - 1)} onClick={() => { setEditItem(p); setModal("project"); }} />
+          ))}
+        </MobileSection>
         <div style={{ display: "flex", gap: 8, padding: "20px 16px 0" }}>
-          <button onClick={() => setModal("receipt")} style={{ ...s.btn("#8b5cf6"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Camera /> Receipt</button>
-          <button onClick={() => setModal("expense")} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Expense</button>
-          <button onClick={() => { setEditItem(null); setModal("invoice"); }} style={{ ...s.btn("#3b82f6"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Invoice</button>
+          <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={{ ...s.btn("#3b82f6"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Invoice</button>
+          <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Quote</button>
+          <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={{ ...s.btn("#6366f1"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Project</button>
         </div>
       </div>
     );
   };
 
-  const MobileExpenses = () => {
-    const [search, setSearch] = useState("");
-    const [showFilter, setShowFilter] = useState(false);
-    const [dateMode, setDateMode] = useState("all"); // "all" | "month" | "custom"
-    const [month, setMonth] = useState(() => today().slice(0, 7));
-    const [fromDate, setFromDate] = useState("");
-    const [toDate, setToDate] = useState("");
-    const monthBounds = dateMode === "month" && month ? periodBounds("month", month) : null;
-    const range = monthBounds
-      ? { start: monthBounds.start, end: monthBounds.end }
-      : dateMode === "custom"
-      ? { start: fromDate || null, end: toDate || null }
-      : { start: null, end: null };
-    const dateActive = !!(range.start || range.end);
-    const activeLabel = monthBounds
-      ? monthBounds.label
-      : dateMode === "custom" && dateActive
-      ? `${fromDate ? fmtDate(fromDate) : "start"} – ${toDate ? fmtDate(toDate) : "now"}`
-      : "";
-    const sorted = [...divTxns].filter((t) => t.type === "expense").sort((a, b) => b.date.localeCompare(a.date));
-    const filtered = sorted.filter((t) => {
-      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !(t.account || "").toLowerCase().includes(search.toLowerCase()) && !(t.merchant || "").toLowerCase().includes(search.toLowerCase())) return false;
-      if (range.start && (t.date || "") < range.start) return false;
-      if (range.end && (t.date || "") > range.end) return false;
-      return true;
-    });
-    const filteredTotal = filtered.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-    const mInput = { width: "100%", padding: "10px 12px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", color: "#0f172a", outline: "none", boxSizing: "border-box" };
-    return (
-      <div style={{ paddingBottom: 20 }}>
-        <MobileExpensesNav />
-        <div style={{ padding: "8px 16px 12px" }}>
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ position: "relative", flex: 1 }}>
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search expenses..." style={{ width: "100%", padding: "10px 12px 10px 36px", fontSize: 15, border: "1px solid #e2e8f0", borderRadius: 12, background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box" }} />
-              <div style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}><Icons.Expenses /></div>
-            </div>
-            <button onClick={() => setShowFilter((v) => !v)} aria-label="Filter expenses" style={{ flexShrink: 0, width: 46, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 12, border: dateActive ? "none" : "1px solid #e2e8f0", background: dateActive ? accent : "#ffffff", color: dateActive ? "#ffffff" : "#64748b", cursor: "pointer" }}><Icons.Filter /></button>
-          </div>
-          {showFilter && (
-            <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: dateMode === "all" ? 0 : 10 }}>
-                {[["all", "All time"], ["month", "By month"], ["custom", "Custom"]].map(([m, lbl]) => (
-                  <button key={m} onClick={() => setDateMode(m)} style={s.pill(dateMode === m)}>{lbl}</button>
-                ))}
-              </div>
-              {dateMode === "month" && <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={mInput} />}
-              {dateMode === "custom" && (
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={mInput} />
-                  <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={mInput} />
-                </div>
-              )}
-            </div>
-          )}
-          {dateActive && (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
-              <span style={{ fontSize: 13, color: "#64748b" }}>{filtered.length} · {activeLabel} · <strong style={{ color: "#0f172a" }}>{fmt(filteredTotal)}</strong></span>
-              <button onClick={() => { setDateMode("all"); setFromDate(""); setToDate(""); }} style={{ fontSize: 13, color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontWeight: 500 }}>Clear</button>
-            </div>
-          )}
-        </div>
-        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No expenses found</div> : filtered.map((e, i) => (
-            <MobileRow key={e.id} primary={e.description} secondary={`${fmtDate(e.date)} · ${e.account || ""}${e.payment_source === "personal" ? " · " + (e.reimbursement_status === "reimbursed" ? "Reimbursed" : e.reimbursement_status === "pending" ? "Pending reimburse" : "Paid personally") : ""}`} badge={e.payment_source === "personal" && e.reimbursement_required ? { color: e.reimbursement_status === "reimbursed" ? "#34d399" : "#f59e0b", label: e.reimbursement_status === "reimbursed" ? "Reimbursed" : "Pending" } : null} right={fmt(e.amount)} rightSub={e.job || ""} isLast={i === filtered.length - 1} onClick={() => { setEditItem(e); setModal("expense"); }} />
-          ))}
-        </div>
-      </div>
-    );
-  };
 
   const MobileDocs = ({ docType }) => {
     const isQuoteList = docType === "quote";
@@ -4495,466 +3376,23 @@ export default function BookkeeperApp() {
     );
   };
 
-  const MobileReimbursements = () => {
-    const [tab, setTab] = useState("Pending");
-    const [actionId, setActionId] = useState(null);
-    const allPersonal = txns.filter((t) => t.payment_source === "personal");
-    const filtered = allPersonal.filter((t) => { if (tab === "Pending") return t.reimbursement_status === "pending"; if (tab === "Reimbursed") return t.reimbursement_status === "reimbursed"; return true; }).sort((a, b) => b.date.localeCompare(a.date));
-    const pendingTotal = allPersonal.filter((t) => t.reimbursement_status === "pending").reduce((sum, t) => sum + Number(t.amount), 0);
-    const reimbBadge = (status) => ({ color: status === "reimbursed" ? "#34d399" : status === "pending" ? "#f59e0b" : "#64748b", label: status === "reimbursed" ? "Reimbursed" : status === "pending" ? "Pending" : status === "do_not_reimburse" ? "Skipped" : "N/A" });
-    return (
-      <div style={{ paddingBottom: 20 }}>
-        <MobileExpensesNav />
-        <div style={{ padding: "8px 16px 0" }}>
-          <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>Pending Reimbursement</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 4, letterSpacing: -0.3 }}>{fmt(pendingTotal)}</div>
-            <div style={{ fontSize: 11, color: "#92400e", marginTop: 4, fontWeight: 500 }}>{allPersonal.filter((t) => t.reimbursement_status === "pending").length} expenses</div>
-          </div>
-        </div>
-        <div style={{ paddingTop: 12, paddingBottom: 12 }}>
-          <MobileFilterTabs tabs={["All", "Pending", "Reimbursed"]} active={tab} onChange={setTab} />
-        </div>
-        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No reimbursements found</div> : filtered.map((e, i) => (
-            <div key={e.id}>
-              <MobileRow primary={e.description} secondary={`${fmtDate(e.date)} · ${e.paid_by || "Owner"} · ${e.business_purpose || ""}`} badge={reimbBadge(e.reimbursement_status)} right={fmt(e.amount)} isLast={actionId !== e.id && i === filtered.length - 1} onClick={() => setActionId(actionId === e.id ? null : e.id)} />
-              {actionId === e.id && (
-                <div style={{ display: "flex", gap: 6, padding: "8px 16px 12px", borderBottom: i === filtered.length - 1 ? "none" : "0.5px solid #f1f5f9", flexWrap: "wrap" }}>
-                  {e.reimbursement_status === "pending" && <button onClick={async () => { await markReimbursed(e.id, { status: "reimbursed", date: today(), amount: String(e.amount), reference: "" }); setActionId(null); }} style={{ ...s.btn("#34d399", true), borderRadius: 12, fontSize: 12 }}><Icons.Check /> Reimburse</button>}
-                  {e.reimbursement_status === "pending" && <button onClick={async () => { await markReimbursed(e.id, { status: "do_not_reimburse", date: null, amount: null, reference: null }); setActionId(null); }} style={{ ...s.btnOutline, borderRadius: 12, fontSize: 12 }}>Skip</button>}
-                  {e.reimbursement_status === "reimbursed" && <button onClick={async () => { await markReimbursed(e.id, { status: "pending", date: null, amount: null, reference: null }); setActionId(null); }} style={{ ...s.btnOutline, borderRadius: 12, fontSize: 12, color: "#f59e0b", borderColor: "#f59e0b40" }}>Undo Reimburse</button>}
-                  <button onClick={() => { setEditItem(e); setModal("expense"); setActionId(null); }} style={{ ...s.btnOutline, borderRadius: 12, fontSize: 12 }}><Icons.Edit /> Edit</button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
 
-  const ReconcilePage = () => {
-    const [phase, setPhase] = useState("setup");
-    const [statementDate, setStatementDate] = useState(today());
-    const [closingBalance, setClosingBalance] = useState("");
-    const [checked, setChecked] = useState({});
-    const [busy, setBusy] = useState(false);
-    const [doneMeta, setDoneMeta] = useState(null);
-    const [importItems, setImportItems] = useState(null);
-    const [importInclude, setImportInclude] = useState({});
-    const [importCat, setImportCat] = useState({});
-    const [depositChoice, setDepositChoice] = useState({});
-    const [parsing, setParsing] = useState(false);
-    const fileRef = useRef(null);
-
-    const openingBalance = Number(lastReconciliation?.closing_balance) || 0;
-    const periodStart = lastReconciliation?.statement_date
-      ? (() => { const d = new Date(`${lastReconciliation.statement_date}T12:00:00`); d.setDate(d.getDate() + 1); return d.toISOString().split("T")[0]; })()
-      : null;
-
-    const inPeriod = (d) => {
-      if (!d || d > statementDate) return false;
-      if (periodStart && d < periodStart) return false;
-      return true;
-    };
-
-    // One ABN, one bank account — the account is shared across divisions, so reconcile the whole business, not just the active division.
-    const unreconciledExpenses = txns
-      .filter((t) => t.type === "expense" && !isReconciled(t) && inPeriod(t.date))
-      .map((t) => ({ kind: "expense", id: t.id, date: t.date, label: t.description, sub: t.account || "Expense", amount: -(Number(t.amount) || 0) }));
-
-    const unreconciledIncome = invoices
-      .filter((i) => i.type === "invoice" && i.status === "paid" && !isReconciled(i) && inPeriod(i.paid_date || i.date))
-      .map((i) => ({ kind: "invoice", id: i.id, date: i.paid_date || i.date, label: `Invoice ${i.number}`, sub: i.contact_name || i.contact_company || "Payment received", amount: Number(i.total) || 0 }));
-
-    const items = [...unreconciledExpenses, ...unreconciledIncome].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-
-    // Invoices a statement deposit could be tied to: open (→ mark paid) or already-paid-but-unreconciled (→ just reconcile). Account-wide.
-    const matchableInvoices = invoices.filter((i) => i.type === "invoice" && !isReconciled(i) && (i.status === "sent" || i.status === "overdue" || i.status === "paid"));
-    const invoiceLabel = (i) => `${i.number} — ${i.contact_name || i.contact_company || "—"} · ${fmt(Number(i.total) || 0)}${i.status === "paid" ? " (paid)" : ""}`;
-    const findInvoiceForDeposit = (it) => {
-      const amt = Math.abs(Number(it.amount));
-      const desc = (it.description || "").toLowerCase();
-      const byNum = matchableInvoices.find((i) => i.number && desc.includes(String(i.number).toLowerCase()) && Math.abs((Number(i.total) || 0) - amt) < 0.01);
-      if (byNum) return byNum.id;
-      const byAmt = matchableInvoices.filter((i) => Math.abs((Number(i.total) || 0) - amt) < 0.01);
-      return byAmt.length === 1 ? byAmt[0].id : null;
-    };
-
-    const tickedItems = items.filter((it) => checked[`${it.kind}:${it.id}`]);
-    const tickedSum = tickedItems.reduce((s, it) => s + it.amount, 0);
-    const runningTotal = openingBalance + tickedSum;
-    const targetClosing = Number(closingBalance) || 0;
-    const balanced = phase === "match" && Math.abs(runningTotal - targetClosing) < 0.01;
-
-    const toggle = (it) => {
-      const k = `${it.kind}:${it.id}`;
-      setChecked((prev) => ({ ...prev, [k]: !prev[k] }));
-    };
-
-    const startMatching = () => {
-      if (!statementDate) { alert("Enter the statement date."); return; }
-      if (closingBalance === "" || Number.isNaN(Number(closingBalance))) { alert("Enter the closing balance from your bank statement."); return; }
-      setChecked({});
-      setPhase("match");
-    };
-
-    const resetReconcile = () => {
-      setPhase("setup");
-      setChecked({});
-      setDoneMeta(null);
-      setImportItems(null);
-      setImportInclude({});
-      setImportCat({});
-      setDepositChoice({});
-    };
-
-    // Money-out lines we can book as an expense (real expenses + any transfer the user opts to include).
-    const isBookableExpense = (it) => it.status === "expense" || (it.status === "review" && it.amount < 0);
-
-    const handleStatementFile = async (e) => {
-      const file = e.target.files?.[0];
-      if (e.target) e.target.value = "";
-      if (!file) return;
-      setParsing(true);
-      try {
-        const text = await file.text();
-        const result = processBankFile(text, file.name, { invoices, existingTxns: txns });
-        if (result.error) { alert(result.error); return; }
-        const items = result.items || [];
-        if (!items.length) { alert("No transactions found in that file."); return; }
-        const inc = {}, cat = {}, dep = {};
-        items.forEach((it) => {
-          if (it.amount > 0) {
-            // Money in: tie to an invoice if we can, otherwise record as Other Income.
-            if (it.status === "invoice" && it.invoice?.id) { dep[it._k] = it.invoice.id; inc[it._k] = true; }
-            else { const m = findInvoiceForDeposit(it); dep[it._k] = m || "income"; inc[it._k] = !!m; }
-          } else {
-            inc[it._k] = it.status === "expense" || it.status === "duplicate";
-            if (isBookableExpense(it)) cat[it._k] = learnedCategoryFor(it.description) || it.account || (it.status === "review" ? "Internal transfer" : "Office Supplies & Stationery");
-          }
-        });
-        setImportItems(items);
-        setImportInclude(inc);
-        setImportCat(cat);
-        setDepositChoice(dep);
-        if (!statementDate) setStatementDate(items.reduce((mx, it) => (it.date && it.date > mx ? it.date : mx), items[0]?.date || today()));
-        setPhase("import-review");
-      } catch {
-        alert("Could not read that file. Please upload a CSV or OFX export.");
-      } finally { setParsing(false); }
-    };
-
-    const applyBankStatement = async () => {
-      if (!importItems) return;
-      const chosen = importItems.filter((it) => importInclude[it._k]);
-      if (!chosen.length) { alert("Tick at least one transaction to apply."); return; }
-      setBusy(true);
-      try {
-        const recRow = { user_id: session.user.id, business_id: biz, statement_date: statementDate, opening_balance: openingBalance, closing_balance: closingBalance === "" ? null : Number(closingBalance) };
-        const { data: rec, error: recErr } = await supabase.from("bk_reconciliations").insert(recRow).select().single();
-        if (recErr || !rec) { alert(recErr?.code === "42P01" ? "Bank reconciliation needs migration 0009 applied in Supabase first." : `Couldn't save the reconciliation: ${recErr?.message || "unknown error"}`); setBusy(false); return; }
-        const stamp = new Date().toISOString();
-        const patch = { reconciled_at: stamp, reconciliation_id: rec.id };
-        const batchId = (crypto?.randomUUID && crypto.randomUUID()) || `imp_${Date.now()}`;
-        const baseRow = (it, type, account) => ({
-          user_id: session.user.id, business_id: biz, division: insertDivision,
-          date: it.date, type, description: it.description, amount: Math.abs(Number(it.amount)) || 0, account,
-          contact: null, merchant: null, reference: null, job: null,
-          payment_source: "business", paid_by: null, reimbursement_required: false, reimbursement_status: "not_required",
-          source: "bank", bank_ref: it.bank_ref || null, import_batch_id: batchId, dedupe_key: it.dedupe_key, imported_at: stamp,
-          reconciled_at: stamp, reconciliation_id: rec.id,
-        });
-        // Money out → new expenses; deposits marked "Other income" → income entries.
-        const expenseRows = chosen.filter((it) => it.amount < 0 && isBookableExpense(it)).map((it) => baseRow(it, "expense", importCat[it._k] || it.account || "Office Supplies & Stationery"));
-        const incomeRows = chosen.filter((it) => it.amount > 0 && depositChoice[it._k] === "income").map((it) => baseRow(it, "income", "Other Income"));
-        const newRows = [...expenseRows, ...incomeRows];
-        let insertedTxns = [];
-        if (newRows.length) {
-          const { ok, data } = await sbWrite(supabase.from("bk_transactions").insert(newRows).select(), "import transactions");
-          if (!ok) { setBusy(false); return; }
-          insertedTxns = data || [];
-        }
-        for (const r of expenseRows) learnCategory(null, r.description, r.account);
-        // Deposits tied to an invoice → mark it paid (if still open) and reconcile.
-        const invItems = chosen.filter((it) => it.amount > 0 && depositChoice[it._k] && depositChoice[it._k] !== "income");
-        const invUpdates = [];
-        for (const it of invItems) {
-          const inv = invoices.find((i) => i.id === depositChoice[it._k]);
-          if (!inv) continue;
-          const upd = inv.status === "paid" ? { ...patch } : { status: "paid", paid_date: it.date || statementDate, ...patch };
-          const r = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "reconcile invoice");
-          if (r.ok) invUpdates.push({ id: inv.id, upd });
-        }
-        // Money out already in the books → reconcile the existing entry (no duplicate created).
-        const dupIds = chosen.filter((it) => it.amount < 0 && it.status === "duplicate" && it.duplicateOf).map((it) => it.duplicateOf);
-        if (dupIds.length) await sbWrite(supabase.from("bk_transactions").update(patch).in("id", dupIds), "reconcile matched");
-        if (insertedTxns.length) setTxns((prev) => [...insertedTxns, ...prev]);
-        const dupSet = new Set(dupIds);
-        if (dupSet.size) setTxns((prev) => prev.map((t) => dupSet.has(t.id) ? { ...t, ...patch } : t));
-        if (invUpdates.length) setInvoices((prev) => prev.map((i) => { const u = invUpdates.find((x) => x.id === i.id); return u ? { ...i, ...u.upd } : i; }));
-        setLastReconciliation(rec);
-        setDoneMeta({ count: chosen.length, statementDate, closingBalance: Number(closingBalance) || 0, created: insertedTxns.length, matchedInv: invUpdates.length, matchedExp: dupSet.size });
-        setPhase("done");
-      } finally { setBusy(false); }
-    };
-
-    const finish = async () => {
-      if (!balanced) return;
-      setBusy(true);
-      const txnIds = tickedItems.filter((it) => it.kind === "expense").map((it) => it.id);
-      const invoiceIds = tickedItems.filter((it) => it.kind === "invoice").map((it) => it.id);
-      const ok = await completeReconciliation({ statementDate, closingBalance: targetClosing, openingBalance, txnIds, invoiceIds });
-      setBusy(false);
-      if (ok) {
-        setDoneMeta({ count: tickedItems.length, statementDate, closingBalance: targetClosing });
-        setPhase("done");
-      }
-    };
-
-    if (phase === "done") {
-      return (
-        <div style={{ ...s.card, textAlign: "center", padding: "40px 20px" }}>
-          <div style={{ width: 54, height: 54, borderRadius: 27, background: "#ecfdf5", color: "#059669", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icons.Check /></div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 12 }}>Reconciliation complete</div>
-          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
-            {doneMeta?.count || 0} transaction{(doneMeta?.count || 0) === 1 ? "" : "s"} matched to statement ending {fmtDate(doneMeta?.statementDate)} ({fmt(doneMeta?.closingBalance || 0)}).
-          </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 18 }}>
-            <button onClick={resetReconcile} style={s.btnOutline}>Reconcile again</button>
-            <button onClick={() => setPage("expenses")} style={s.btn(accent)}>View expenses</button>
-          </div>
-        </div>
-      );
-    }
-
-    if (phase === "setup") {
-      return (
-        <div style={s.card}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 20 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: "#ecfdf5", color: accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icons.Reconcile /></div>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Match your bank statement</div>
-              <div style={{ fontSize: 12, color: "#64748b", marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-                Enter the closing balance and date from your bank statement, then tick off each transaction that appears on it. Personal card expenses are included — they are real business transactions on your books.
-              </div>
-            </div>
-          </div>
-          <div style={{ ...s.grid2, maxWidth: 480 }}>
-            <div>
-              <label style={s.label}>Statement date</label>
-              <input type="date" value={statementDate} onChange={(e) => setStatementDate(e.target.value)} style={s.input} />
-            </div>
-            <div>
-              <label style={s.label}>Closing balance ($)</label>
-              <input type="number" step="0.01" value={closingBalance} onChange={(e) => setClosingBalance(e.target.value)} placeholder="e.g. 12450.00" style={s.input} />
-            </div>
-          </div>
-          {reconciliations.length > 0 && (
-            <div style={{ marginTop: 18 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Recent reconciliations</div>
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 9, overflow: "hidden" }}>
-                {reconciliations.slice(0, 8).map((rec, idx) => (
-                  <div key={rec.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "9px 12px", borderTop: idx ? "1px solid #f1f5f9" : "none" }}>
-                    <div style={{ fontSize: 12, color: "#334155" }}>
-                      <span style={{ fontWeight: 600 }}>{fmtDate(rec.statement_date)}</span>
-                      <span style={{ color: "#94a3b8" }}> · closing {rec.closing_balance == null ? "—" : fmt(rec.closing_balance)}</span>
-                    </div>
-                    <button onClick={() => undoReconciliation(rec.id)} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", padding: "4px 10px", fontSize: 12 }}>Undo</button>
-                  </div>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.5 }}>Undo deletes the expenses/income an import created and clears its reconciled marks (invoices it paid stay paid). Opening balance for a new reconcile: {fmt(openingBalance)}.</div>
-            </div>
-          )}
-          <button onClick={startMatching} style={{ ...s.btn(accent), marginTop: 18 }}><Icons.Reconcile /> Start matching</button>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "22px 0 14px", color: "#94a3b8", fontSize: 11, fontWeight: 600, letterSpacing: "0.05em" }}>
-            <div style={{ flex: 1, height: 1, background: "#e2e8f0" }} /> OR IMPORT A STATEMENT <div style={{ flex: 1, height: 1, background: "#e2e8f0" }} />
-          </div>
-          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5, maxWidth: 520 }}>Upload a CSV or OFX/QFX export from your bank. We'll match deposits to your invoices, auto-categorise expenses, skip duplicates, and create anything new — then reconcile against the closing balance above.</div>
-          <input ref={fileRef} type="file" accept=".csv,.ofx,.qfx,text/csv,text/plain,application/x-ofx" onChange={handleStatementFile} style={{ display: "none" }} />
-          <button onClick={() => fileRef.current?.click()} disabled={parsing} style={{ ...s.btnOutline, marginTop: 12, color: "#3b82f6", borderColor: "#3b82f640", gap: 6, opacity: parsing ? 0.5 : 1 }}><Icons.Cloud /> {parsing ? "Reading…" : "Upload CSV / OFX"}</button>
-        </div>
-      );
-    }
-
-    if (phase === "import-review" && importItems) {
-      const chosen = importItems.filter((it) => importInclude[it._k]);
-      const moneyIn = chosen.filter((it) => it.amount > 0).reduce((sum, it) => sum + it.amount, 0);
-      const moneyOut = chosen.filter((it) => it.amount < 0).reduce((sum, it) => sum + Math.abs(it.amount), 0);
-      const net = moneyIn - moneyOut;
-      const target = closingBalance === "" ? null : Number(closingBalance);
-      const diff = target == null ? 0 : openingBalance + net - target;
-      const reconBalanced = target != null && Math.abs(diff) < 0.01;
-      const chip = (it) => {
-        const map = { invoice: ["#3b82f6", `Match invoice ${it.invoice?.number || ""}`.trim()], expense: ["#10b981", "New expense"], duplicate: ["#64748b", "Already booked"], review: ["#f59e0b", it.amount > 0 ? "Unmatched deposit" : (it.reviewReason || "Review")] };
-        const [c, label] = map[it.status] || ["#64748b", it.status];
-        return <span style={s.badge(c)}>{label}</span>;
-      };
-      return (
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#64748b" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", fontWeight: 600, color: "#0f172a" }}><Icons.Reconcile /> {importItems.length} line{importItems.length === 1 ? "" : "s"} imported</span>
-            <button onClick={resetReconcile} style={{ ...s.btnOutline, marginLeft: "auto" }}>Start over</button>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            <ListStat label="Money in" value={fmt(moneyIn)} color="#059669" />
-            <ListStat label="Money out" value={fmt(moneyOut)} color="#0f172a" />
-            <ListStat label="Selected" value={`${chosen.length}/${importItems.length}`} color="#059669" />
-            {target != null && <ListStat label={reconBalanced ? "Balanced ✓" : "Difference"} value={reconBalanced ? fmt(target) : fmt(diff)} color={reconBalanced ? "#059669" : "#92400e"} />}
-          </div>
-          {target != null && !reconBalanced && (
-            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 12 }}>Selected lines net to {fmt(net)}. Opening {fmt(openingBalance)} + selected ≠ closing {fmt(target)} (off by {fmt(diff)}). Tick the remaining lines — match each deposit to an invoice or mark it Other Income — to close the gap.</div>
-          )}
-          <div style={s.card}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={s.table}>
-                <thead><tr>
-                  <th style={{ ...s.th, width: 36 }}></th>
-                  <th style={s.th}>Transaction</th>
-                  <th style={s.th}>Action</th>
-                  <th style={{ ...s.th, textAlign: "right" }}>Amount</th>
-                </tr></thead>
-                <tbody>
-                  {importItems.map((it) => {
-                    const inflow = it.amount > 0;
-                    const choice = depositChoice[it._k] || "income";
-                    return (
-                      <tr key={it._k} style={importInclude[it._k] ? undefined : { opacity: 0.55 }}>
-                        <td style={{ ...s.td, textAlign: "center" }}>
-                          <input type="checkbox" checked={!!importInclude[it._k]} onChange={() => setImportInclude((p) => ({ ...p, [it._k]: !p[it._k] }))} style={{ width: 16, height: 16, accentColor: accent, cursor: "pointer" }} />
-                        </td>
-                        <td style={s.td}>
-                          <div style={{ fontWeight: 500 }}>{it.description}</div>
-                          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{fmtDate(it.date)}</div>
-                        </td>
-                        <td style={s.td}>
-                          {inflow ? (
-                            <>
-                              <span style={s.badge(choice === "income" ? "#8b5cf6" : "#3b82f6")}>{choice === "income" ? "Other income" : "Match invoice"}</span>
-                              <select value={choice} onChange={(e) => setDepositChoice((p) => ({ ...p, [it._k]: e.target.value }))} style={{ ...s.select, marginTop: 6, padding: "4px 8px", fontSize: 11, maxWidth: 280 }}>
-                                <option value="income">Other income (record deposit)</option>
-                                {matchableInvoices.map((i) => <option key={i.id} value={i.id}>{invoiceLabel(i)}</option>)}
-                              </select>
-                            </>
-                          ) : (
-                            <>
-                              {chip(it)}
-                              {isBookableExpense(it) && (
-                                <select value={importCat[it._k] || it.account || ""} onChange={(e) => setImportCat((p) => ({ ...p, [it._k]: e.target.value }))} style={{ ...s.select, marginTop: 6, padding: "4px 8px", fontSize: 11, maxWidth: 220 }}>
-                                  {EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.label} label={g.label}>{g.categories.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}
-                                </select>
-                              )}
-                            </>
-                          )}
-                        </td>
-                        <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: it.amount >= 0 ? "#059669" : "#0f172a" }}>{it.amount >= 0 ? "+" : "-"}{fmt(Math.abs(it.amount))}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12, ...s.card, marginBottom: 0 }}>
-            <div style={{ fontSize: 12, color: "#64748b" }}>{chosen.length} of {importItems.length} will be applied{target != null ? (reconBalanced ? " · Balanced ✓" : ` · off by ${fmt(diff)}`) : ""}</div>
-            <button disabled={busy || !chosen.length} onClick={applyBankStatement} style={{ ...s.btn(accent), opacity: busy || !chosen.length ? 0.5 : 1 }}>{busy ? "Applying…" : "Apply & reconcile"}</button>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#64748b" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", fontWeight: 600, color: "#0f172a" }}>
-            <Icons.Reconcile /> Statement {fmtDate(statementDate)}
-          </span>
-          <span>Target {fmt(targetClosing)} · Opening {fmt(openingBalance)}</span>
-          <button onClick={resetReconcile} style={{ ...s.btnOutline, marginLeft: "auto" }}>Change details</button>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          <ListStat label="Unreconciled" value={items.length} />
-          <ListStat label="Selected" value={tickedItems.length} color="#059669" />
-          <ListStat label="Running total" value={fmt(runningTotal)} color={balanced ? "#059669" : "#0f172a"} />
-          <ListStat label="Statement balance" value={fmt(targetClosing)} />
-        </div>
-        {balanced && (
-          <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 600, color: "#059669", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-            <Icons.Check /> Balanced — running total matches your bank statement
-          </div>
-        )}
-        {!balanced && tickedItems.length > 0 && (
-          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 12 }}>
-            Difference {fmt(runningTotal - targetClosing)} — keep ticking transactions until the running total matches {fmt(targetClosing)}.
-          </div>
-        )}
-        <div style={s.card}>
-          {items.length === 0 ? (
-            <EmptyState icon={Icons.Reconcile} title="Nothing to reconcile" hint={periodStart ? `No unreconciled transactions between ${fmtDate(periodStart)} and ${fmtDate(statementDate)}.` : `No unreconciled transactions on or before ${fmtDate(statementDate)}.`} />
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    <th style={{ ...s.th, width: 36 }}></th>
-                    <th style={s.th}>Transaction</th>
-                    <th style={{ ...s.th, textAlign: "right" }}>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it) => (
-                    <tr key={`${it.kind}:${it.id}`}>
-                      <td style={{ ...s.td, textAlign: "center" }}>
-                        <input type="checkbox" checked={!!checked[`${it.kind}:${it.id}`]} onChange={() => toggle(it)} style={{ width: 16, height: 16, accentColor: accent, cursor: "pointer" }} />
-                      </td>
-                      <td style={s.td}>
-                        <div style={{ fontWeight: 500 }}>{it.label}</div>
-                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{fmtDate(it.date)} · {it.sub}</div>
-                      </td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: it.amount >= 0 ? "#059669" : "#0f172a" }}>
-                        {it.amount >= 0 ? "+" : "-"}{fmt(Math.abs(it.amount))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 12, ...s.card, marginBottom: 0 }}>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
-            {tickedItems.length} selected · running total {fmt(runningTotal)}
-            {balanced && " · Balanced ✓"}
-          </div>
-          <button disabled={!balanced || busy || !tickedItems.length} onClick={finish} style={{ ...s.btn(accent), opacity: !balanced || busy || !tickedItems.length ? 0.5 : 1 }}>
-            {busy ? "Saving…" : "Mark reconciliation complete"}
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   const MobileLayout = () => (
     <div style={{ display: "flex", flexDirection: "column", height: "100dvh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
-        {page === "expenses" && <MobileExpenses />}
-        {page === "reconcile" && <div style={{ padding: 16 }}><ReconcilePage /></div>}
-        {page === "reimbursements" && <MobileReimbursements />}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
         {page === "contacts" && <MobileContacts />}
-        {page === "pnl" && <PnlPage />}
       </div>
       <MobileTabBar />
     </div>
   );
 
-  const pageMap = { dashboard: DashboardPage, expenses: ExpensesPage, reconcile: ReconcilePage, reimbursements: ReimbursementsPage, quotes: QuotesPage, invoices: InvoicesPage, pnl: PnlPage, projects: ProjectsPage, contacts: ContactsPage };
+  const pageMap = { dashboard: DashboardPage, quotes: QuotesPage, invoices: InvoicesPage, projects: ProjectsPage, contacts: ContactsPage };
   const PageComponent = pageMap[page] || DashboardPage;
 
   // Prefill for the compose-email window: recipient + subject + message (signature
@@ -5035,23 +3473,19 @@ export default function BookkeeperApp() {
       <div className="bk-modal" style={isMobile
         ? { ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }
         : s.modalContent}>
-        {modal === "expense" && <ExpenseForm existing={editItem} />}
-        {modal === "income" && <IncomeForm existing={editItem} />}
-        {modal === "batch" && <BatchReceipts />}
         {/* key: now that this form no longer remounts, opening a different
             contact must still start from that contact's values rather than
             reusing the previous one's state. */}
         {modal === "contact" && <ContactForm key={editItem?.id ?? "new"} existing={editItem} s={s} accent={accent} setModal={setModal} setEditItem={setEditItem} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} />}
         {modal === "invoice" && <InvoiceForm existing={editItem} />}
         {modal === "project" && <ProjectForm existing={editItem} />}
-        {modal === "receipt" && <ReceiptCapture />}
         {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} setModal={setModal} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} />}
       </div>
     </div>
   );
 
   // Slot order below is load-bearing and identical in both layouts:
-  //   0 layout · 1 modal · 2 viewDoc · 3 viewReceipt · 4 composeDoc
+  //   0 layout · 1 modal · 2 viewDoc · 3 composeDoc
   return (
     <>
       {isMobile ? <MobileLayout /> : (
@@ -5073,8 +3507,6 @@ export default function BookkeeperApp() {
               <div style={{ fontSize: 10, color: accent, fontWeight: 600, marginTop: 2 }}>{divInfo.name}</div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <button onClick={() => setModal("receipt")} style={s.btn("#8b5cf6", true)}><Icons.Camera /> Receipt</button>
-              {(page === "expenses" || page === "dashboard" || page === "reimbursements") && <button onClick={() => setModal("expense")} style={s.btn(accent, true)}><Icons.Plus /> Expense</button>}
               {page === "quotes" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
@@ -5087,7 +3519,6 @@ export default function BookkeeperApp() {
       )}
       {modalBlock}
       {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
-      {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );

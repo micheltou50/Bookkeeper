@@ -482,11 +482,10 @@ function buildEnvDiagnostic() {
       SUPABASE_ANON_KEY: (process.env.SUPABASE_ANON_KEY || "").length,
       VITE_SUPABASE_ANON_KEY: (process.env.VITE_SUPABASE_ANON_KEY || "").length,
       RESEND_API_KEY: (process.env.RESEND_API_KEY || "").length,
-      ANTHROPIC_API_KEY: (process.env.ANTHROPIC_API_KEY || "").length,
       ENV_SMOKE_TEST: (process.env.ENV_SMOKE_TEST || "").length,
     },
     matchingNames: allKeys
-      .filter((k) => /SUPABASE|SERVICE|RESEND|ENV_SMOKE|ANTHROPIC/i.test(k))
+      .filter((k) => /SUPABASE|SERVICE|RESEND|ENV_SMOKE/i.test(k))
       .sort(),
   };
 }
