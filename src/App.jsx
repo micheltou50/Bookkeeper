@@ -229,6 +229,12 @@ function dueNote(inv) {
 }
 const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES);
 
+// An invoice settled by card cannot be manually un-paid. pay-invoice.mjs blocks
+// the payment link only while the status is "paid", so un-marking it re-activates
+// the link already sent to the customer, and reminder emails resume. Both the
+// list pill and the edit form refuse it through this one predicate.
+const cardPaidLocked = (doc) => !!(doc && doc.type !== "quote" && doc.status === "paid" && doc.stripe_session_id);
+
 // Status picker. Rendered once at the app root rather than inside a list row: it
 // holds the document itself, so changing a status while a filter is active
 // cannot pull the row out from under the open panel.
@@ -2107,8 +2113,8 @@ export default function BookkeeperApp() {
       // and stripe-webhook.mjs treats a second charge as a duplicate (its guard
       // is stripe_session_id IS NULL, which no longer holds), so BookKeeper
       // would never record it. The edit form still allows this deliberately.
-      if (doc.stripe_session_id) {
-        alert(`${doc.number} was paid by card, so its status cannot be changed from here.\n\nUn-marking it would re-activate the payment link already sent to the customer, and a second card payment would not be recorded.\n\nOpen the invoice and change the status there if you really need to.`);
+      if (cardPaidLocked(doc)) {
+        alert(`${doc.number} was paid by card, so its status cannot be changed.\n\nUn-marking it would re-activate the payment link already sent to the customer and restart reminder emails, and a second card payment would not be recorded.`);
         return;
       }
       // Marking an invoice unpaid puts it back in front of the reminder cron,
@@ -2539,7 +2545,11 @@ export default function BookkeeperApp() {
               <button type="button" onClick={() => setQuickAdd(qa => !qa)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="Quick add contact">+</button>
             </div>
           </div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Status</label><select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={s.select}>{(f.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES).map((st) => <option key={st} value={st}>{statusInfo(st).label}</option>)}</select></div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Status</label>
+            <select value={f.status} disabled={cardPaidLocked(existing)} onChange={(e) => setF({ ...f, status: e.target.value })} style={{ ...s.select, ...(cardPaidLocked(existing) ? { background: "#f8fafc", color: "#64748b", cursor: "not-allowed" } : {}) }}>{(f.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES).map((st) => <option key={st} value={st}>{statusInfo(st).label}</option>)}</select>
+            {cardPaidLocked(existing) && <div style={{ fontSize: 11, color: "#64748b", marginTop: 5, lineHeight: 1.45 }}>Paid by card, so the status is locked. Un-marking it would re-activate the payment link sent to the customer and restart reminder emails.</div>}
+          </div>
         </div>
         {quickAdd && (
           <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
