@@ -235,29 +235,58 @@ const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_S
 // list pill and the edit form refuse it through this one predicate.
 const cardPaidLocked = (doc) => !!(doc && doc.type !== "quote" && doc.status === "paid" && doc.stripe_session_id);
 
-// Status picker. Rendered once at the app root rather than inside a list row: it
-// holds the document itself, so changing a status while a filter is active
-// cannot pull the row out from under the open panel.
-function StatusPicker({ doc, anchor, isMobile, badgeStyle, onPick, onClose }) {
+// Shared shell for the small anchored panels: a popover on desktop, a bottom
+// sheet on mobile. Rendered at the app root and handed the document itself, so a
+// list re-rendering or re-filtering underneath cannot pull it apart.
+function PopoverSheet({ anchor, isMobile, title, width = 176, onClose, children }) {
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 90, background: isMobile ? "rgba(15,23,42,0.35)" : "transparent" }} />
       <div style={isMobile
         ? { position: "fixed", left: 0, right: 0, bottom: 0, background: "#fff", borderRadius: "16px 16px 0 0", padding: "4px 8px calc(env(safe-area-inset-bottom) + 12px)", zIndex: 91, boxShadow: "0 -8px 32px -12px rgba(16,24,40,0.35)" }
-        : { position: "fixed", top: (anchor?.y || 0) + 6, left: Math.max(8, Math.min(anchor?.x || 0, window.innerWidth - 184)), width: 176, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 91 }}>
-        <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8", padding: isMobile ? "12px 12px 8px" : "5px 8px 6px" }}>Status · {doc.number}</div>
-        {statusesFor(doc).map((st) => {
-          const info = statusInfo(st);
-          return (
-            <button key={st} className="bk-menuitem" onClick={() => onPick(st)}
-              style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: isMobile ? "10px 12px" : "6px 8px", background: "none", border: "none", cursor: "pointer", fontSize: 13, textAlign: "left", borderRadius: 7, color: "#334155" }}>
-              <span style={badgeStyle(info.color, info.variant)}>{info.label}</span>
-              {st === doc.status && <span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>current</span>}
-            </button>
-          );
-        })}
+        : { position: "fixed", top: (anchor?.y || 0) + 6, left: Math.max(8, Math.min(anchor?.x || 0, window.innerWidth - width - 8)), width, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 91 }}>
+        {title && <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8", padding: isMobile ? "12px 12px 8px" : "5px 8px 6px" }}>{title}</div>}
+        {children}
       </div>
     </>
+  );
+}
+
+function SheetItem({ icon, label, danger, isMobile, trailing, onClick }) {
+  return (
+    <button className="bk-menuitem" onClick={onClick}
+      style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: isMobile ? "11px 12px" : "7px 9px", background: "none", border: "none", cursor: "pointer", fontSize: 13, textAlign: "left", borderRadius: 7, color: danger ? "#ef4444" : "#334155" }}>
+      {icon && <span style={{ display: "inline-flex", width: 16, justifyContent: "center", color: danger ? "#ef4444" : "#64748b" }}>{icon}</span>}
+      {label}
+      {trailing}
+    </button>
+  );
+}
+
+function StatusPicker({ doc, anchor, isMobile, badgeStyle, onPick, onClose }) {
+  return (
+    <PopoverSheet anchor={anchor} isMobile={isMobile} title={`Status · ${doc.number}`} onClose={onClose}>
+      {statusesFor(doc).map((st) => {
+        const info = statusInfo(st);
+        return (
+          <SheetItem key={st} isMobile={isMobile} onClick={() => onPick(st)}
+            label={<span style={badgeStyle(info.color, info.variant)}>{info.label}</span>}
+            trailing={st === doc.status ? <span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>current</span> : null} />
+        );
+      })}
+    </PopoverSheet>
+  );
+}
+
+// The one overflow menu, used by the desktop rows and the mobile cards alike.
+function ActionMenu({ doc, anchor, isMobile, items, onClose }) {
+  return (
+    <PopoverSheet anchor={anchor} isMobile={isMobile} width={212} title={doc.number} onClose={onClose}>
+      {items.map((it) => (
+        <SheetItem key={it.key} icon={it.icon} label={it.label} danger={it.danger} isMobile={isMobile}
+          onClick={() => { onClose(); it.run(); }} />
+      ))}
+    </PopoverSheet>
   );
 }
 
@@ -1223,6 +1252,9 @@ export default function BookkeeperApp() {
   // { doc, anchor } for the inline status picker. Lives here, not in the list,
   // so it survives the list re-rendering under it.
   const [statusPick, setStatusPick] = useState(null);
+  // { doc, anchor } for the shared overflow menu. Also root-level, so the mobile
+  // cards and the desktop rows open the same one.
+  const [actionMenu, setActionMenu] = useState(null);
 
   // Global financial-year filter. Same shape as `division` above: the value is
   // written to localStorage inside the setter, not from an effect — an effect
@@ -3141,6 +3173,50 @@ export default function BookkeeperApp() {
   };
 
 
+  // ── One action model for both lists and both layouts ─────────────────────
+  // The desktop row, the mobile card and the overflow menu all read from here,
+  // so the same document can never be offered different actions depending on
+  // where you look at it. Nothing new happens: every run() below is an existing
+  // handler, with its existing confirmations.
+  const emailDoc = async (inv) => { if (emailConn) { openComposeFor(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } };
+  const acceptAndOfferDeposit = async (inv) => { const proj = await acceptQuote(inv); if (proj) await offerDepositInvoice(inv, proj); };
+
+  // The single action a row earns a permanent button for, chosen by its state.
+  // A settled document gets none — there is nothing to chase.
+  const docPrimaryAction = (inv) => {
+    const isQuote = inv.type === "quote";
+    if (inv.status === "draft") return { key: "email", label: "Send", icon: <Icons.Send />, tone: "#3b82f6", run: () => emailDoc(inv) };
+    if (isQuote && inv.status === "sent") return { key: "accept", label: "Accept", icon: <Icons.Check />, tone: "#10b981", run: () => acceptAndOfferDeposit(inv) };
+    if (!isQuote && inv.status === "overdue") return { key: "remind", label: "Remind", icon: <Icons.Bell />, tone: "#ef4444", run: () => sendReminderViaResend(inv) };
+    if (!isQuote && inv.status === "sent") return { key: "paid", label: "Mark paid", icon: <Icons.Check />, tone: "#10b981", run: () => markPaid(inv) };
+    return null;
+  };
+
+  // Built when the menu opens, not during render: the items close over handlers
+  // that read refs, and calling this from the render path trips the refs rule.
+  // It also matches how the menu behaves — it holds the document as it was.
+  const docMenuItems = (inv, anchor) => {
+    const isQuote = inv.type === "quote";
+    const prim = docPrimaryAction(inv);
+    const items = [];
+    if (!isQuote && inv.status !== "paid" && inv.status !== "draft") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
+    if (isQuote && !QUOTE_CLOSED.has(inv.status) && inv.status !== "draft") items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
+    items.push({ key: "email", label: emailConn ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
+    if (!isQuote && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "remind", label: "Send payment reminder", icon: <Icons.Bell />, run: () => sendReminderViaResend(inv) });
+    if (!isQuote && inv.pay_token) items.push({ key: "paylink", label: "Copy pay link", icon: <Icons.Link />, run: () => {
+      const url = `${API_BASE || "https://bkeeper.netlify.app"}/.netlify/functions/pay-invoice?invoice=${inv.id}&t=${inv.pay_token}`;
+      navigator.clipboard?.writeText(url);
+      alert("Card payment link copied to clipboard.");
+    } });
+    items.push({ key: "pdf", label: "Download PDF", icon: <Icons.Download />, run: () => downloadPDF(inv) });
+    items.push({ key: "onedrive", label: "Save to OneDrive", icon: <Icons.Cloud />, run: () => saveToOneDrive("invoice", inv.id) });
+    items.push({ key: "status", label: "Change status…", icon: <Icons.Filter />, run: () => setStatusPick({ doc: inv, anchor }) });
+    items.push({ key: "edit", label: "Edit", icon: <Icons.Edit />, run: () => { setEditItem(inv); setModal("invoice"); } });
+    items.push({ key: "delete", label: isQuote ? "Delete quote" : "Delete invoice", icon: <Icons.Trash />, danger: true, run: () => deleteInvoice(inv.id) });
+    // The row already shows the primary; repeating it in the menu is noise.
+    return items.filter((it) => !(prim && it.key === prim.key));
+  };
+
   const DocList = ({ docType }) => {
     const isQuoteList = docType === "quote";
     // Filter/search/sort/selection all come from parent-persisted docView so they
@@ -3159,7 +3235,6 @@ export default function BookkeeperApp() {
     // would empty mid-flow — tick three invoices, glance at a status, lose them.
     const selected = useMemo(() => new Set(view.selected || []), [view.selected]);
     const setSelected = (next) => patchView({ selected: [...(typeof next === "function" ? next(selected) : next)] });
-    const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
     // Two groups, rendered either side of a divider. "All" and "Outstanding" are
     // views — Outstanding is sent + overdue, not something a document can be —
     // and everything after the divider is a status the document actually holds.
@@ -3172,7 +3247,7 @@ export default function BookkeeperApp() {
     const statusPill = (inv) => {
       const info = statusInfo(inv.status);
       return (
-        <button className="bk-statuspill" title="Change status" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+        <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
           <span style={s.badge(info.color, info.variant)}>{info.label}</span>
         </button>
       );
@@ -3227,15 +3302,20 @@ export default function BookkeeperApp() {
 
     // Two primary actions inline (Send, Mark paid / Accept); everything else lives
     // in the "⋯" overflow menu (rendered once at list level, below).
+    // One state-chosen action plus the overflow. View is gone — clicking the row
+    // opens the document, which is what people reach for first anyway.
     const actionsCell = (inv) => {
-      const primaryDone = isQuoteList ? QUOTE_CLOSED.has(inv.status) : (inv.status === "paid");
+      const prim = docPrimaryAction(inv);
       return (
-        <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
-          <div style={{ display: "inline-flex", gap: 2, alignItems: "center", justifyContent: "flex-end" }}>
-            <button onClick={() => viewInvoice(inv)} title="View" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4 }}><Icons.Eye /></button>
-            <button onClick={async () => { if (emailConn) { openComposeFor(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } }} disabled={outlookDraftLoading === inv.id} title={emailConn ? "Compose email (PDF attached)" : "Send via email app"} style={{ background: "none", border: "none", color: "#3b82f6", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer", padding: 4 }}>{outlookDraftLoading === inv.id ? "…" : <Icons.Send />}</button>
-            {!primaryDone && <button onClick={async () => { if (isQuoteList) { const proj = await acceptQuote(inv); if (proj) await offerDepositInvoice(inv, proj); } else { markPaid(inv); } }} title={isQuoteList ? "Accept quote" : "Mark paid"} style={{ background: "none", border: "none", color: "#10b981", cursor: "pointer", padding: 4 }}><Icons.Check /></button>}
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu((m) => m?.id === inv.id ? null : { id: inv.id, x: r.right, y: r.bottom }); }} title="More actions" style={{ background: menu?.id === inv.id ? "#eef2f6" : "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
+        <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+            {prim && (
+              <button onClick={prim.run} disabled={outlookDraftLoading === inv.id}
+                style={{ ...s.btnOutline, display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", fontSize: 11.5, color: prim.tone, borderColor: prim.tone + "40", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer" }}>
+                {prim.icon}{prim.label}
+              </button>
+            )}
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); const anchor = { x: r.right - 212, y: r.bottom }; setActionMenu({ doc: inv, anchor, items: docMenuItems(inv, anchor) }); }} title="More actions" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
           </div>
         </td>
       );
@@ -3270,7 +3350,7 @@ export default function BookkeeperApp() {
               <table style={s.table}>
                 <thead><tr><th style={s.th}>Number</th><th style={s.th}>Date</th><th style={s.th}>Contact</th><th style={s.th}>Job</th><th style={s.th}>Status</th><th style={{ ...s.th, textAlign: "right" }}>Total</th><th style={{ ...s.th, width: 100 }}></th></tr></thead>
                 <tbody>{rows.map((inv) => (
-                  <tr key={inv.id}>
+                  <tr key={inv.id} onClick={() => viewInvoice(inv)} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
                     <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                     <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
@@ -3300,8 +3380,8 @@ export default function BookkeeperApp() {
                   const balance = balanceOf(inv);
                   const od = daysOverdue(inv);
                   return (
-                    <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
-                      <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
+                    <tr key={inv.id} onClick={() => viewInvoice(inv)} style={{ cursor: "pointer", ...(selected.has(inv.id) ? { background: "#ecfdf5" } : {}) }}>
+                      <td style={{ ...s.td, textAlign: "center" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
                       <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                       <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
@@ -3317,35 +3397,6 @@ export default function BookkeeperApp() {
             </div>
           )}
         </div>
-        {menu && (() => {
-          const mi = rows.find((i) => i.id === menu.id);
-          if (!mi) return null;
-          const item = (label, icon, onClick, danger) => (
-            <button key={label} className="bk-menuitem" onClick={() => { setMenu(null); onClick(); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 11px", background: "none", border: "none", cursor: "pointer", fontSize: 13, color: danger ? "#ef4444" : "#334155", textAlign: "left", borderRadius: 7 }}>
-              <span style={{ display: "inline-flex", width: 16, justifyContent: "center", color: danger ? "#ef4444" : "#64748b" }}>{icon}</span>{label}
-            </button>
-          );
-          return (
-            <>
-              <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
-              <div style={{ position: "fixed", top: menu.y + 4, left: Math.max(8, menu.x - 212), width: 212, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
-                {emailConn && item("Compose email…", <Icons.Send />, () => openComposeFor(mi))}
-                {!emailConn && item("Email via default app", <Icons.Send />, async () => { sendInvoice(mi); await offerMarkSent(mi); })}
-                {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
-                {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
-                {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
-                {isQuoteList && item("Change status…", <Icons.Filter />, () => setStatusPick({ doc: mi, anchor: { x: menu.x - 176, y: menu.y } }))}
-                {!isQuoteList && (mi.status === "sent" || mi.status === "overdue") && item("Send payment reminder", <Icons.Bell />, () => sendReminderViaResend(mi))}
-                {!isQuoteList && mi.pay_token && item("Copy pay link", <Icons.Link />, () => {
-                  const url = `${API_BASE || "https://bkeeper.netlify.app"}/.netlify/functions/pay-invoice?invoice=${mi.id}&t=${mi.pay_token}`;
-                  navigator.clipboard?.writeText(url);
-                  alert("Card payment link copied to clipboard.");
-                })}
-                {item(isQuoteList ? "Delete quote" : "Delete invoice", <Icons.Trash />, () => deleteInvoice(mi.id), true)}
-              </div>
-            </>
-          );
-        })()}
       </div>
     );
   };
@@ -3625,11 +3676,46 @@ export default function BookkeeperApp() {
         <div style={{ paddingTop: 8, paddingBottom: 12 }}>
           <MobileFilterTabs tabs={tabs} active={tab} onChange={setTab} />
         </div>
-        <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found{fy !== ALL_FY && !debtorTab ? ` in ${fyLabel(fy)}` : ""}</div> : filtered.map((inv, i) => (
-            <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={<>{fmtDate(inv.date)}{inv.job ? ` · ${inv.job}` : ""}{daysOverdue(inv) > 0 && <span style={{ color: "#ef4444", fontWeight: 600 }}> · {daysOverdue(inv)}{daysOverdue(inv) === 1 ? " day overdue" : " days overdue"}</span>}</>} badge={statusBadge(inv.status)} onBadgeClick={isQuoteList ? () => setStatusPick({ doc: inv }) : undefined} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => viewInvoice(inv)} action={<button onClick={(e) => { e.stopPropagation(); setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 6 }}><Icons.Edit /></button>} />
-          ))}
-        </div>
+        {filtered.length === 0 ? (
+          <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found{fy !== ALL_FY && !debtorTab ? ` in ${fyLabel(fy)}` : ""}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "0 16px" }}>
+            {filtered.map((inv) => {
+              const info = statusInfo(inv.status);
+              const prim = docPrimaryAction(inv);
+              const note = dueNote(inv);
+              const late = daysOverdue(inv) > 0;
+              return (
+                <div key={inv.id} onClick={() => viewInvoice(inv)}
+                  style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "12px 14px", cursor: "pointer" }}>
+                  {/* Status leads, where the eye starts; the amount sits on its own
+                      line so a pill can never collide with a number again. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); setStatusPick({ doc: inv }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+                      <span style={s.badge(info.color, info.variant)}>{info.label}</span>
+                    </button>
+                    <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>{fmtDate(inv.date)}</span>
+                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a", marginTop: 7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{inv.number} · {inv.contact_name || inv.contact_company || ""}</div>
+                  {inv.job && <div style={{ fontSize: 13, color: "#5b6675", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{inv.job}</div>}
+                  {note && <div style={{ fontSize: 12, fontWeight: 600, marginTop: 3, color: late ? "#b91c1c" : "#475569" }}>{note}</div>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                    <span style={{ fontSize: 19, fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{fmt(inv.total || 0)}</span>
+                    <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                      {prim && (
+                        <button onClick={prim.run} disabled={outlookDraftLoading === inv.id}
+                          style={{ ...s.btnOutline, display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12, color: prim.tone, borderColor: prim.tone + "40", cursor: outlookDraftLoading === inv.id ? "wait" : "pointer" }}>
+                          {prim.icon}{prim.label}
+                        </button>
+                      )}
+                      <button onClick={() => setActionMenu({ doc: inv, items: docMenuItems(inv) })} title="More actions" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 6 }}><Icons.More /></button>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
@@ -3808,6 +3894,8 @@ export default function BookkeeperApp() {
       </div>
       )}
       {modalBlock}
+      {actionMenu && <ActionMenu doc={actionMenu.doc} anchor={actionMenu.anchor} isMobile={isMobile}
+        items={actionMenu.items} onClose={() => setActionMenu(null)} />}
       {statusPick && <StatusPicker doc={statusPick.doc} anchor={statusPick.anchor} isMobile={isMobile} badgeStyle={s.badge}
         onClose={() => setStatusPick(null)}
         onPick={(next) => { const d = statusPick.doc; setStatusPick(null); changeDocStatus(d, next); }} />}
