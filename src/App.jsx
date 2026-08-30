@@ -3206,7 +3206,12 @@ export default function BookkeeperApp() {
         default: return r.p.job_number || "";
       }
     };
-    const rows = divJobs
+    // fyJobs, not divJobs: a project is included if it is still open (active or
+    // lead) or has a document dated in the FY. Never by created_at — projects run
+    // across years, and one started last June is not last year's work.
+    // The money in each row still comes from divInvoices, so every total stays a
+    // lifetime figure.
+    const rows = fyJobs
       .filter((p) => statusFilter === "all" || (p.status || "active") === statusFilter)
       .filter((p) => !search || (p.name || "").toLowerCase().includes(search.toLowerCase()))
       .map((p) => ({ p, t: projectTotals(p, divInvoices), parties: partiesFor(p) }))
@@ -3219,12 +3224,12 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? divJobs.length : divJobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
+          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? fyJobs.length : fyJobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px", marginLeft: "auto" }} />
         </div>
         <div style={s.card}>
           {rows.length === 0 ? (
-            <EmptyState icon={Icons.Projects} title={statusFilter === "all" && !search ? "No projects yet" : "No projects found"} hint={statusFilter === "all" && !search ? "Projects build up automatically when you accept quotes." : "Try a different status or search term."} />
+            <EmptyState icon={Icons.Projects} title={statusFilter === "all" && !search && fy === ALL_FY ? "No projects yet" : "No projects found"} hint={statusFilter === "all" && !search ? (fy === ALL_FY ? "Projects build up automatically when you accept quotes." : `No open projects, and none with a document dated in ${fyLabel(fy)}.`) : "Try a different status or search term."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -3459,7 +3464,7 @@ export default function BookkeeperApp() {
 
   const MobileProjects = () => {
     const [tab, setTab] = useState("All");
-    const rows = divJobs
+    const rows = fyJobs
       .filter((p) => tab === "All" || (p.status || "active") === ({ "Active": "active", "Job Lost": "job_lost", "Lead": "lead", "Finalised": "finalised" })[tab])
       .map((p) => ({ p, t: projectTotals(p, divInvoices) }))
       .sort((a, b) => b.t.remaining - a.t.remaining);
@@ -3469,7 +3474,7 @@ export default function BookkeeperApp() {
           <MobileFilterTabs tabs={["Active", "Job Lost", "Lead", "Finalised", "All"]} active={tab} onChange={setTab} />
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {rows.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No projects found</div> : rows.map(({ p, t }, i) => (
+          {rows.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No projects found{fy === ALL_FY ? "" : ` for ${fyLabel(fy)}`}</div> : rows.map(({ p, t }, i) => (
             <MobileRow key={p.id} primary={projectLabel(p)} secondary={`${p.job_number ? p.job_number + " · " : ""}${fmt(t.paid)} paid of ${fmt(t.contract)}`} right={fmt(t.remaining)} rightSub="remaining" isLast={i === rows.length - 1} onClick={() => { setEditItem(p); setModal("project"); }} />
           ))}
         </div>
