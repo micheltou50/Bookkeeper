@@ -1199,6 +1199,13 @@ export default function BookkeeperApp() {
   }, []);
 
   // Close any modal, but if a form reported unsaved changes (formDirty), confirm first.
+  // A secondary action that switches to a DIFFERENT modal abandons the open
+  // form: the [modal] effect above clears that form's draft ref as soon as
+  // `modal` changes. Closing asks first; switching away was doing it silently.
+  // Same confirmation, same formDirtyRef — just at the other exit.
+  const confirmLeaveDirtyForm = (what) =>
+    !formDirtyRef.current || window.confirm(`Are you sure? Any unsaved changes to this ${what} will be lost.`);
+
   const requestCloseModal = (alwaysConfirm = false) => {
     if ((alwaysConfirm || formDirtyRef.current) && !window.confirm("Are you sure you want to close? Any unsaved changes will be lost.")) return;
     if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {});
@@ -2136,7 +2143,7 @@ export default function BookkeeperApp() {
     const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
     const body = `Hi ${firstName(inv.contact_name)},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${sig}`;
     window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-    if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+    markOverdueQuiet(inv);
   };
 
   // Send the reminder email directly via Resend (the same service the automated
@@ -2155,7 +2162,7 @@ export default function BookkeeperApp() {
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.ok) throw new Error((data && data.error) || `Request failed (${resp.status})`);
       alert(`Reminder emailed to ${data.sent_to || inv.contact_email}.`);
-      if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+      markOverdueQuiet(inv);
     } catch (err) {
       if (window.confirm(`Couldn't send via the email service (${err.message}).\n\nOpen an email draft instead?`)) sendReminder(inv);
     }
@@ -2182,6 +2189,21 @@ export default function BookkeeperApp() {
   };
 
   // Mark paid without closing the current modal (used inside the Project modal).
+  // Flip a lapsed invoice to "overdue" without disturbing an open form.
+  //
+  // Both reminder senders used updateInvoice for this, but updateInvoice ends by
+  // closing the modal and nulling invoiceDraftRef — so sending a reminder from
+  // inside an open invoice discarded every unsaved edit, with no confirmation.
+  // The status flip is incidental bookkeeping, not a save; it has no business
+  // touching the modal. Same shape as markPaidQuiet below, for the same reason.
+  const markOverdueQuiet = async (inv) => {
+    if (!(inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent")) return;
+    const upd = { status: "overdue" };
+    const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark overdue");
+    if (!ok) return;
+    setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
+  };
+
   const markPaidQuiet = async (inv) => {
     const upd = { status: "paid", paid_date: today() };
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark paid");
@@ -3446,7 +3468,7 @@ export default function BookkeeperApp() {
                   <div style={{ fontSize: 11, color: "#64748b" }}>quoted {fmt(c.contract)} · paid {fmt(c.paid)} · <span style={{ fontWeight: 700, color: c.remaining > 0 ? "#0f172a" : "#10b981" }}>{fmt(c.remaining)} left</span></div>
                 </div>
                 {c.quotes.map((q) => (
-                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={async () => { const proj = await acceptQuote(q); if (proj) await offerDepositInvoice(q, proj); }} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
+                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={async () => { if (!confirmLeaveDirtyForm("project")) return; const proj = await acceptQuote(q); if (proj) await offerDepositInvoice(q, proj); }} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
                 ))}
                 {c.invoices.map((iv) => (
                   <DocRow key={iv.id} d={iv} action={iv.status !== "paid" ? <button onClick={() => markPaidQuiet(iv)} style={{ ...s.btnOutline, fontSize: 11, color: "#34d399", borderColor: "#34d39940" }}><Icons.Check /> Paid</button> : null} />
