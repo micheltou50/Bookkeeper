@@ -2835,7 +2835,7 @@ export default function BookkeeperApp() {
                   <tr key={inv.id} onClick={() => { setEditItem(inv); setModal("invoice"); }} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, color: "#94a3b8", width: 70, fontSize: 11 }}>{fmtDate(inv.date)}</td>
                     <td style={{ ...s.td, fontWeight: 500 }}>{inv.number}<div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>{inv.contact_name || inv.contact_company || ""}</div></td>
-                    <td style={{ ...s.td }}>{statusBadge(inv.status)}</td>
+                    <td style={{ ...s.td }}><span style={s.badge(statusBadge(inv.status).color)}>{statusBadge(inv.status).label}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(inv.total || 0)}</td>
                   </tr>
                 ))}
