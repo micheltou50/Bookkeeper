@@ -83,3 +83,8 @@ tbody tr:hover { background: #f8fafc; }
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
+
+/* Status pills that open the inline status picker: a ring on hover so the pill
+   reads as a control, not just as a label, inside an already-hoverable row. */
+.bk-statuspill { border-radius: 20px; }
+.bk-statuspill:hover { box-shadow: 0 0 0 2px #cbd5e1; }
