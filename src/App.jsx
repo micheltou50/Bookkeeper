@@ -1041,6 +1041,46 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
   );
 }
 
+// Contact form. Module scope for the same reason as BusinessSettings: nested in
+// App it was a fresh function type every render, so React remounted it and the
+// half-typed contact vanished. Thirty lines, no effects, no refs — it never
+// mutated App state itself, it was only ever a bystander to someone else's render.
+
+function ContactForm({ existing, s, accent, setModal, setEditItem, addContact, updateContact, deleteContact }) {
+  const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
+        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="consultant">Consultant</option><option value="supplier">Supplier</option></select></div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} style={s.input} /></div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
+      </div>
+      <button disabled={(!f.name && !f.company) || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: (!f.name && !f.company) || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
+      {existing && (
+        <button onClick={() => deleteContact(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
+          <Icons.Trash /> Delete Contact
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function BookkeeperApp() {
   const [session, setSession] = useState(undefined);
   const [recovery, setRecovery] = useState(false);
@@ -2781,40 +2821,6 @@ export default function BookkeeperApp() {
     );
   };
 
-  const ContactForm = ({ existing }) => {
-    const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
-    const [saving, setSaving] = useState(false);
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
-          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="consultant">Consultant</option><option value="supplier">Supplier</option></select></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} style={s.input} /></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
-        </div>
-        <button disabled={(!f.name && !f.company) || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: (!f.name && !f.company) || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
-        {existing && (
-          <button onClick={() => deleteContact(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
-            <Icons.Trash /> Delete Contact
-          </button>
-        )}
-      </div>
-    );
-  };
 
   const InvoiceForm = ({ existing }) => {
     const defaultType = "invoice";
@@ -5010,7 +5016,10 @@ export default function BookkeeperApp() {
         {modal === "expense" && <ExpenseForm existing={editItem} />}
         {modal === "income" && <IncomeForm existing={editItem} />}
         {modal === "batch" && <BatchReceipts />}
-        {modal === "contact" && <ContactForm existing={editItem} />}
+        {/* key: now that this form no longer remounts, opening a different
+            contact must still start from that contact's values rather than
+            reusing the previous one's state. */}
+        {modal === "contact" && <ContactForm key={editItem?.id ?? "new"} existing={editItem} s={s} accent={accent} setModal={setModal} setEditItem={setEditItem} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} />}
         {modal === "invoice" && <InvoiceForm existing={editItem} />}
         {modal === "project" && <ProjectForm existing={editItem} />}
         {modal === "receipt" && <ReceiptCapture />}
