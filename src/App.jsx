@@ -28,7 +28,7 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
+const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts" };
 
 
 // One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
@@ -176,6 +176,55 @@ const APPLICATION_TYPES = ["DA", "CC", "CDC", "S4.55", "Drafting Only"];
 
 function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function getDefaultDueDate(type, date) { return addDays(date || today(), type === "quote" ? 30 : 7); }
+
+// ── Australian financial year (1 Jul – 30 Jun) ─────────────────────────────
+// An FY is identified by its starting calendar year as a string: "2026" is
+// FY2026-27. ALL_FY means "don't filter". Declared as hoisted functions so the
+// order of the consts below them can never matter.
+const ALL_FY = "all";
+
+// FY containing a "YYYY-MM-DD" date.
+function fyOfDate(dateStr) {
+  const d = String(dateStr || "").slice(0, 10);
+  if (d.length < 7) return null;
+  const y = Number(d.slice(0, 4)), m = Number(d.slice(5, 7));
+  return Number.isFinite(y) && Number.isFinite(m) ? String(m >= 7 ? y : y - 1) : null;
+}
+
+// The FY we are in right now. Deliberately NOT built on today(), which is
+// toISOString() and therefore UTC: in Sydney that reads as the previous day
+// until 10am, so on the morning of 1 July the app would open on the FY that
+// ended the night before.
+function currentFY() {
+  const d = new Date();
+  return String(d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1);
+}
+
+function fyBounds(fy) { const y = Number(fy); return { start: `${y}-07-01`, end: `${y + 1}-06-30` }; }
+function fyLabel(fy) { return fy === ALL_FY ? "All time" : `FY${String(Number(fy)).slice(-2)}-${String(Number(fy) + 1).slice(-2)}`; }
+
+// A document belongs to an FY by its issue date, never paid_date (often null)
+// or created_at (when the row was typed, not the date on the PDF). The slice
+// guards against a legacy timestamp-shaped value, which would otherwise compare
+// greater than its own FY's end date and fall outside it.
+function inFY(row, fy) {
+  if (fy === ALL_FY) return true;
+  const d = String(row?.date || "").slice(0, 10);
+  if (!d) return false;
+  const { start, end } = fyBounds(fy);
+  return d >= start && d <= end;
+}
+
+// Selectable FYs: every year present in the data, plus the current one, plus
+// whatever is selected. That last term matters — a value persisted from an
+// earlier session with no matching <option> would leave the select painting one
+// FY while the app filtered by another, and a reload would not clear it.
+function fyChoices(rows, selected) {
+  const years = new Set([currentFY()]);
+  for (const r of rows || []) { const f = fyOfDate(r?.date); if (f) years.add(f); }
+  if (selected && selected !== ALL_FY) years.add(selected);
+  return [...years].sort((a, b) => Number(b) - Number(a));
+}
 const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid for 30 days from the date of issue. Pricing may be subject to change after this period.
 2. Acceptance: Work commences upon written acceptance of this quote.
 3. Fees: Fees are as quoted above.
@@ -1074,7 +1123,10 @@ export default function BookkeeperApp() {
   // the page remounts on any action and local state would snap back to defaults
   // (that was the "Draft tab jumps back to Outstanding" bug).
   const [docView, setDocView] = useState({
-    invoice: { filter: "outstanding", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
+    // "all", not "outstanding": with every invoice paid the page opened on
+    // "No invoices found", which reads as broken rather than as an empty filter.
+    // Outstanding is still one tap away.
+    invoice: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
     quote: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
   });
   const [jobs, setJobs] = useState([]);
@@ -1083,14 +1135,25 @@ export default function BookkeeperApp() {
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
 
-  const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
   const [divMenuOpen, setDivMenuOpen] = useState(false);
-  const navMenuTimer = useRef(null);
-  // Sidebar sub-menus open on hover; a short close delay lets the cursor travel
-  // from the nav item into the popover without it vanishing.
-  const openNavMenu = (e, items) => { setDivMenuOpen(false); if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; const r = e.currentTarget.getBoundingClientRect(); setNavMenu({ x: r.right, y: r.top, items }); };
-  const holdNavMenu = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; };
-  const closeNavMenuSoon = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = setTimeout(() => setNavMenu(null), 220); };
+
+  // Global financial-year filter. Same shape as `division` above: the value is
+  // written to localStorage inside the setter, not from an effect — an effect
+  // keyed on a derived array would re-fire on every render and loop.
+  const [fy, setFy] = useState(() => {
+    try { return localStorage.getItem("bk_activeFY") || currentFY(); } catch { return currentFY(); }
+  });
+  const switchFY = (id) => {
+    if (id === fy) return;
+    try { localStorage.setItem("bk_activeFY", id); } catch { /* storage blocked */ }
+    // A job whose documents all sit outside the new FY loses its <option>, and a
+    // stale jobFilter would then filter the list to nothing with no visible cause.
+    setDocView((prev) => ({ invoice: { ...prev.invoice, jobFilter: "" }, quote: { ...prev.quote, jobFilter: "" } }));
+    setFy(id);
+  };
+  // After saving a document, follow it: a doc dated outside the selected FY would
+  // otherwise vanish on save and look like the save failed.
+  const followDocFY = (dateStr) => { const f = fyOfDate(dateStr); if (f && fy !== ALL_FY && f !== fy) switchFY(f); };
 
   const divInfo = divisionInfo(division);
   const accent = divInfo.accent;
@@ -1098,6 +1161,21 @@ export default function BookkeeperApp() {
   const inActiveDiv = (r) => division === ALL_DIVISIONS || recordDivision(r) === division;
   const divInvoices = invoices.filter(inActiveDiv);
   const divJobs = jobs.filter(inActiveDiv);
+  // FY-scoped views for display only. divInvoices/divJobs above stay lifetime and
+  // are what document numbering, the form seeds, the job/contact pickers and every
+  // project money total must keep reading — hand getNextDocumentNumber an
+  // FY-filtered array and it reissues numbers that already exist.
+  const fyInvoices = divInvoices.filter((r) => inFY(r, fy));
+  // A project is in the FY if it is still open, or if it has a document dated in
+  // it. Never by created_at: projects span years.
+  // "All time" means no filtering at all. Without the short-circuit, a closed
+  // project that never had a document — job 26110 is one — passes neither arm of
+  // the test and stays hidden in every year, including All time.
+  const fyJobs = fy === ALL_FY ? divJobs
+    : divJobs.filter((p) => ["active", "lead"].includes(p.status || "active") || fyInvoices.some((d) => d.project_id === p.id));
+  // Caption for anything scoped to the selected FY, so a figure never sits on
+  // screen without saying what period it covers.
+  const fyTag = fy === ALL_FY ? "all time" : fyLabel(fy);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -1234,7 +1312,7 @@ export default function BookkeeperApp() {
     }
   }, []);
 
-  const jobNames = [...new Set(divInvoices.map((i) => i.job).filter(Boolean))].sort();
+  const jobNames = [...new Set(fyInvoices.map((i) => i.job).filter(Boolean))].sort();
 
   // --- Mutation functions: each writes directly to its table ---
 
@@ -1655,7 +1733,7 @@ export default function BookkeeperApp() {
     const pct = Number(String(raw).replace("%", "").trim());
     if (!isFinite(pct) || pct <= 0 || pct > 100) { release(); alert("Deposit skipped — the percentage must be a number between 1 and 100."); return null; }
     const inserted = await createDepositInvoice(quote, project, pct);
-    if (inserted) { setInvoiceSeed(null); setEditItem(inserted); setModal("invoice"); }
+    if (inserted) { followDocFY(inserted.date); setInvoiceSeed(null); setEditItem(inserted); setModal("invoice"); }
     else release();
     return inserted;
   };
@@ -2036,13 +2114,12 @@ export default function BookkeeperApp() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
-    { id: "invoices", label: "Sales", icon: Icons.Invoices, submenu: [{ id: "invoices", label: "Invoices", icon: Icons.Invoices }, { id: "quotes", label: "Quotes", icon: Icons.Quotes }] },
+    { id: "invoices", label: "Invoices", icon: Icons.Invoices },
+    { id: "quotes", label: "Quotes", icon: Icons.Quotes },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
-  // Quotes and Invoices share the one "Sales" nav item, so the quotes page
-  // highlights it too.
-  const activeNav = ({ quotes: "invoices" })[page] || page;
+  const activeNav = page;
 
   const badgeBg = { "#34d399": "#ecfdf5", "#3b82f6": "#eff6ff", "#64748b": "#f1f5f9", "#ef4444": "#fef2f2", "#f59e0b": "#fffbeb" };
   const badgeTx = { "#34d399": "#065f46", "#3b82f6": "#1e40af", "#64748b": "#475569", "#ef4444": "#991b1b", "#f59e0b": "#92400e" };
@@ -2079,6 +2156,13 @@ export default function BookkeeperApp() {
   };
 
 
+  const fySelectEl = (extra) => (
+    <select value={fy} onChange={(e) => switchFY(e.target.value)} aria-label="Financial year"
+      style={{ ...s.select, width: "auto", padding: "7px 10px", fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer", ...extra }}>
+      {[ALL_FY, ...fyChoices(divInvoices, fy)].map((id) => <option key={id} value={id}>{fyLabel(id)}</option>)}
+    </select>
+  );
+
   const FilterPills = ({ tabs, active, onChange }) => (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {tabs.map((t) => (
@@ -2089,10 +2173,11 @@ export default function BookkeeperApp() {
     </div>
   );
 
-  const ListStat = ({ label, value, color }) => (
+  const ListStat = ({ label, value, color, note }) => (
     <div style={s.miniStat}>
       <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8" }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 700, color: color || "#0f172a", marginTop: 3, letterSpacing: "-0.01em" }}>{value}</div>
+      {note && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{note}</div>}
     </div>
   );
 
@@ -2200,6 +2285,10 @@ export default function BookkeeperApp() {
       if (existing) { const ok = await updateInvoice(existing.id, inv); saved = ok ? { ...existing, ...inv } : null; }
       else { saved = await addInvoice(inv); }
       if (saved && !inv.project_id) upsertJob(inv.job, inv.contact_name);
+      // New documents are dated today, and a date can be edited to any year. Move
+      // the FY filter to wherever the document actually landed, or it saves
+      // successfully and vanishes from the list behind the form.
+      if (saved) followDocFY(saved.date);
       return saved;
     };
     // Save, then open the compose window so the user reviews/edits the email and
@@ -2765,16 +2854,23 @@ export default function BookkeeperApp() {
   // Operational dashboard: what is owed, what is late, and what needs a decision.
   // Deliberately no accounting metrics — MYOB owns those now.
   const DashboardPage = () => {
-    const thisMonth = new Date().toISOString().slice(0, 7);
+    // Two roots. The lifetime one feeds the debtor figures: money still owed and
+    // quotes still unanswered do not belong to a financial year. The FY one feeds
+    // everything that is genuinely a period metric.
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const quotes = divInvoices.filter((i) => i.type === "quote");
+    const fyRealInvoices = fyInvoices.filter((i) => i.type !== "quote");
     const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
     const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
     const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
     const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const paidThisMonth = realInvoices.filter((i) => i.status === "paid" && (i.paid_date || i.date || "").slice(0, 7) === thisMonth);
-    const paidThisMonthTotal = paidThisMonth.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
+    // Was "paid this month", which a financial year can only ever contain one of;
+    // under any past FY it read $0.00 permanently. Anchored on the issue date, the
+    // same field the FY filter uses, rather than the old (paid_date || date) mix
+    // that put some rows on a cash basis and others on an accrual one.
+    const paidThisFY = fyRealInvoices.filter((i) => i.status === "paid");
+    const paidThisFYTotal = paidThisFY.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const activeProjects = fyJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
     const openQuotes = quotes.filter((q) => q.status === "sent");
     // Projects that still have accepted-quote value left to invoice.
@@ -2785,15 +2881,18 @@ export default function BookkeeperApp() {
     // quote been invoiced?" answers no for almost every quote, while hiding the
     // ones that genuinely still owe an invoice.
     const ISSUED_STATUSES = new Set(["sent", "overdue", "paid"]);
-    const leftToInvoice = divJobs.map((proj) => {
+    // The project SET is FY-scoped; the documents behind each figure are not.
+    // Slicing the docs would invent phantom balances wherever an accepted quote
+    // and the invoices fulfilling it fall either side of 30 June.
+    const leftToInvoice = fyJobs.map((proj) => {
       const docs = divInvoices.filter((d) => d.project_id === proj.id);
       if (!docs.some((d) => d.type === "quote" && d.status === "accepted")) return null;
       const quoted = docs.filter((d) => d.type === "quote" && d.status === "accepted").reduce((sum, d) => sum + Number(d.total || 0), 0);
       const issued = docs.filter((d) => d.type === "invoice" && ISSUED_STATUSES.has(d.status)).reduce((sum, d) => sum + Number(d.total || 0), 0);
       return { proj, remaining: quoted - issued };
     }).filter((x) => x && x.remaining > 0.01);
-    const draftDocs = divInvoices.filter((i) => i.status === "draft");
-    const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
+    const draftDocs = fyInvoices.filter((i) => i.status === "draft");
+    const recentInvoices = [...fyRealInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
     const attention = [
       ...overdueInvoices.slice(0, 4).map((i) => ({ key: "o" + i.id, tone: "#ef4444", label: `${i.number} — ${daysOverdue(i)} day${daysOverdue(i) === 1 ? "" : "s"} overdue`, sub: i.contact_name || i.contact_company || "", amount: i.total, go: () => { setEditItem(i); setModal("invoice"); } })),
@@ -2812,9 +2911,9 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          {tile("Outstanding", outstanding, `${unpaid.length} unpaid`, { onClick: () => setPage("invoices") })}
-          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due` : "nothing late", { color: overdueTotal > 0 ? "#b91c1c" : undefined, subColor: overdueTotal > 0 ? "#b91c1c" : "#94a3b8", onClick: () => setPage("invoices") })}
-          {tile("Paid This Month", paidThisMonthTotal, `${paidThisMonth.length} invoice${paidThisMonth.length === 1 ? "" : "s"}`)}
+          {tile("Outstanding", outstanding, `${unpaid.length} unpaid · all time`, { onClick: () => setPage("invoices") })}
+          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due · all time` : "nothing late · all time", { color: overdueTotal > 0 ? "#b91c1c" : undefined, subColor: overdueTotal > 0 ? "#b91c1c" : "#94a3b8", onClick: () => setPage("invoices") })}
+          {tile("Paid", paidThisFYTotal, `${paidThisFY.length} invoice${paidThisFY.length === 1 ? "" : "s"} · ${fyTag}`)}
           {tile("Active Projects", projectsRemaining, `${activeProjects.length} active · remaining`, { onClick: () => setPage("projects") })}
         </div>
 
@@ -2837,11 +2936,11 @@ export default function BookkeeperApp() {
 
         <div style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Invoices</h4>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Invoices <span style={{ fontWeight: 500, color: "#94a3b8", fontSize: 12 }}>· {fyTag}</span></h4>
             <button onClick={() => setPage("invoices")} style={s.btnOutline}>View All</button>
           </div>
           {recentInvoices.length === 0 ? (
-            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No invoices yet</div>
+            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No invoices in {fyTag}</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}><tbody>
@@ -2885,7 +2984,7 @@ export default function BookkeeperApp() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Quotes awaiting a decision</h4>
-                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{openQuotes.length} sent · {fmt(openQuotes.reduce((sum, q) => sum + Number(q.total || 0), 0))}</div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{openQuotes.length} sent · {fmt(openQuotes.reduce((sum, q) => sum + Number(q.total || 0), 0))} · all time</div>
               </div>
               <span style={{ fontSize: 20, color: "#94a3b8" }}>→</span>
             </div>
@@ -2918,8 +3017,15 @@ export default function BookkeeperApp() {
     const [selected, setSelected] = useState(() => new Set());
     const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
     const statusTabs = isQuoteList ? ["all", "draft", "sent", "accepted", "declined"] : ["all", "outstanding", "paid", "overdue", "draft"];
-    const sorted = [...divInvoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    const filtered = sorted.filter((i) => {
+    const ofType = (i) => isQuoteList ? i.type === "quote" : i.type !== "quote";
+    const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
+    const sorted = fyInvoices.filter(ofType).sort(byDateDesc);
+    // Debtor views ignore the FY. An unpaid invoice, or a quote nobody has
+    // answered, is still open work whichever year it was issued in, so
+    // Outstanding/Overdue (and Awaiting, for quotes) read the lifetime set.
+    const allTime = divInvoices.filter(ofType).sort(byDateDesc);
+    const debtorFilter = isQuoteList ? filter === "sent" : (filter === "outstanding" || filter === "overdue");
+    const filtered = (debtorFilter ? allTime : sorted).filter((i) => {
       if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; } else if (filter !== "all" && i.status !== filter) return false;
       if (jobFilter && i.job !== jobFilter) return false;
       if (search && !(i.number || "").toLowerCase().includes(search.toLowerCase()) && !(i.contact_name || "").toLowerCase().includes(search.toLowerCase())) return false;
@@ -2927,10 +3033,17 @@ export default function BookkeeperApp() {
     });
     const statusColors = { draft: "#64748b", sent: "#3b82f6", paid: "#34d399", overdue: "#ef4444", accepted: "#34d399", declined: "#64748b" };
     const sumTotals = (arr) => arr.reduce((acc, i) => acc + Number(i.total || 0), 0);
-    const tabs = statusTabs.map((st) => ({ key: st, label: st.charAt(0).toUpperCase() + st.slice(1), count: st === "all" ? sorted.length : st === "outstanding" ? sorted.filter((i) => i.status === "sent" || i.status === "overdue").length : sorted.filter((i) => i.status === st).length }));
+    // Each tab counts the set its own filter will actually draw from, so the
+    // number on the pill always matches the rows behind it.
+    const tabs = statusTabs.map((st) => {
+      const debtorTab = isQuoteList ? st === "sent" : (st === "outstanding" || st === "overdue");
+      const src = debtorTab ? allTime : sorted;
+      return { key: st, label: st.charAt(0).toUpperCase() + st.slice(1), count: st === "all" ? sorted.length : st === "outstanding" ? src.filter((i) => i.status === "sent" || i.status === "overdue").length : src.filter((i) => i.status === st).length };
+    });
+    const fyNote = fy === ALL_FY ? null : fyLabel(fy);
     const tiles = isQuoteList
-      ? [{ label: "Total quoted", value: fmt(sumTotals(sorted)) }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981" }, { label: "Awaiting", value: fmt(sumTotals(sorted.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6" }]
-      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))) }, { label: "Outstanding", value: fmt(sumTotals(sorted.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6" }, { label: "Overdue", value: fmt(sumTotals(sorted.filter((i) => i.status === "overdue"))), color: "#ef4444" }];
+      ? [{ label: "Total quoted", value: fmt(sumTotals(sorted)), note: fyNote }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981", note: fyNote }, { label: "Awaiting", value: fmt(sumTotals(allTime.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6", note: "all time" }]
+      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))), note: fyNote }, { label: "Outstanding", value: fmt(sumTotals(allTime.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6", note: "all time" }, { label: "Overdue", value: fmt(sumTotals(allTime.filter((i) => i.status === "overdue"))), color: "#ef4444", note: "all time" }];
 
     // Invoices: MYOB-style sortable columns + bulk selection. Quotes keep the
     // original date-sorted list untouched.
@@ -2970,7 +3083,7 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-          {tiles.map((t) => <ListStat key={t.label} label={t.label} value={t.value} color={t.color} />)}
+          {tiles.map((t) => <ListStat key={t.label} label={t.label} value={t.value} color={t.color} note={t.note} />)}
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
           <FilterPills tabs={tabs} active={filter} onChange={setFilter} />
@@ -2990,7 +3103,7 @@ export default function BookkeeperApp() {
             </div>
           )}
           {rows.length === 0 ? (
-            <EmptyState icon={isQuoteList ? Icons.Quotes : Icons.Invoices} title={`No ${isQuoteList ? "quotes" : "invoices"} ${filter === "all" && !search && !jobFilter ? "yet" : "found"}`} hint={filter === "all" && !search && !jobFilter ? `New ${isQuoteList ? "quotes" : "invoices"} you create will appear here.` : "Try a different filter or search term."} />
+            <EmptyState icon={isQuoteList ? Icons.Quotes : Icons.Invoices} title={`No ${isQuoteList ? "quotes" : "invoices"} ${filter === "all" && !search && !jobFilter && fy === ALL_FY ? "yet" : "found"}`} hint={filter === "all" && !search && !jobFilter ? (fy === ALL_FY ? `New ${isQuoteList ? "quotes" : "invoices"} you create will appear here.` : `Nothing dated in ${fyLabel(fy)}. Try another financial year.`) : "Try a different filter or search term."} />
           ) : isQuoteList ? (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -3101,7 +3214,12 @@ export default function BookkeeperApp() {
         default: return r.p.job_number || "";
       }
     };
-    const rows = divJobs
+    // fyJobs, not divJobs: a project is included if it is still open (active or
+    // lead) or has a document dated in the FY. Never by created_at — projects run
+    // across years, and one started last June is not last year's work.
+    // The money in each row still comes from divInvoices, so every total stays a
+    // lifetime figure.
+    const rows = fyJobs
       .filter((p) => statusFilter === "all" || (p.status || "active") === statusFilter)
       .filter((p) => !search || (p.name || "").toLowerCase().includes(search.toLowerCase()))
       .map((p) => ({ p, t: projectTotals(p, divInvoices), parties: partiesFor(p) }))
@@ -3114,12 +3232,12 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? divJobs.length : divJobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
+          <FilterPills tabs={[{ key: "active", label: "Active" }, { key: "job_lost", label: "Job Lost" }, { key: "lead", label: "Lead" }, { key: "finalised", label: "Finalised" }, { key: "all", label: "All" }].map((st) => ({ ...st, count: st.key === "all" ? fyJobs.length : fyJobs.filter((p) => (p.status || "active") === st.key).length }))} active={statusFilter} onChange={setStatusFilter} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects..." style={{ ...s.input, maxWidth: 200, flex: "1 1 140px", marginLeft: "auto" }} />
         </div>
         <div style={s.card}>
           {rows.length === 0 ? (
-            <EmptyState icon={Icons.Projects} title={statusFilter === "all" && !search ? "No projects yet" : "No projects found"} hint={statusFilter === "all" && !search ? "Projects build up automatically when you accept quotes." : "Try a different status or search term."} />
+            <EmptyState icon={Icons.Projects} title={statusFilter === "all" && !search && fy === ALL_FY ? "No projects yet" : "No projects found"} hint={statusFilter === "all" && !search ? (fy === ALL_FY ? "Projects build up automatically when you accept quotes." : `No open projects, and none with a document dated in ${fyLabel(fy)}.`) : "Try a different status or search term."} />
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}>
@@ -3225,6 +3343,7 @@ export default function BookkeeperApp() {
         </button>
         </div>
       </div>
+      <div style={{ marginTop: 10 }}>{fySelectEl({ width: "100%" })}</div>
     </div>
   );
 
@@ -3268,24 +3387,18 @@ export default function BookkeeperApp() {
     return map[status] || map.draft;
   };
 
-  const MobileSalesNav = () => (
-    <div style={{ display: "flex", gap: 8, padding: "8px 16px 0" }}>
-      <button onClick={() => setPage("invoices")} style={s.pill(page === "invoices")}>Invoices</button>
-      <button onClick={() => setPage("quotes")} style={s.pill(page === "quotes")}>Quotes</button>
-    </div>
-  );
-
   const MobileDashboard = () => {
-    const thisMonth = new Date().toISOString().slice(0, 7);
+    // Mirrors DashboardPage exactly — same two roots, same exception.
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
+    const fyRealInvoices = fyInvoices.filter((i) => i.type !== "quote");
     const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
     const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
     const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
     const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const paidThisMonth = realInvoices.filter((i) => i.status === "paid" && (i.paid_date || i.date || "").slice(0, 7) === thisMonth);
-    const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
+    const paidThisFY = fyRealInvoices.filter((i) => i.status === "paid");
+    const activeProjects = fyJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
-    const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 4);
+    const recentInvoices = [...fyRealInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 4);
     const tile = (label, value, sub, color) => (
       <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
         <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>{label}</div>
@@ -3296,11 +3409,11 @@ export default function BookkeeperApp() {
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
-          {tile("Outstanding", outstanding, `${unpaid.length} unpaid`)}
-          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due` : "nothing late", overdueTotal > 0 ? "#b91c1c" : undefined)}
+          {tile("Outstanding", outstanding, `${unpaid.length} unpaid · all time`)}
+          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due · all time` : "nothing late · all time", overdueTotal > 0 ? "#b91c1c" : undefined)}
         </div>
         <div style={{ display: "flex", gap: 10, padding: "10px 16px 0" }}>
-          {tile("Paid This Month", paidThisMonth.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisMonth.length} invoice${paidThisMonth.length === 1 ? "" : "s"}`)}
+          {tile("Paid", paidThisFY.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisFY.length} invoice${paidThisFY.length === 1 ? "" : "s"} · ${fyTag}`)}
           {tile("Projects", projectsRemaining, `${activeProjects.length} active`)}
         </div>
         {overdueInvoices.length > 0 && (
@@ -3311,7 +3424,7 @@ export default function BookkeeperApp() {
           </MobileSection>
         )}
         <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
-          {recentInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : recentInvoices.map((inv, i) => (
+          {recentInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices in {fyTag}</div> : recentInvoices.map((inv, i) => (
             <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === recentInvoices.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
           ))}
         </MobileSection>
@@ -3332,29 +3445,34 @@ export default function BookkeeperApp() {
 
   const MobileDocs = ({ docType }) => {
     const isQuoteList = docType === "quote";
-    const [tab, setTab] = useState(isQuoteList ? "All" : "Outstanding");
-    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["Outstanding", "Paid", "Overdue", "Draft"];
-    const sorted = [...divInvoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    const filtered = sorted.filter((inv) => tab === "All" || (tab === "Outstanding" ? (inv.status === "sent" || inv.status === "overdue") : inv.status === tab.toLowerCase()));
+    const [tab, setTab] = useState("All");
+    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["All", "Outstanding", "Paid", "Overdue", "Draft"];
+    const ofType = (i) => isQuoteList ? i.type === "quote" : i.type !== "quote";
+    const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
+    const sorted = fyInvoices.filter(ofType).sort(byDateDesc);
+    // Same debtor exception as the desktop list.
+    const allTime = divInvoices.filter(ofType).sort(byDateDesc);
+    const debtorTab = isQuoteList ? tab === "Sent" : (tab === "Outstanding" || tab === "Overdue");
+    const filtered = (debtorTab ? allTime : sorted).filter((inv) => tab === "All" || (tab === "Outstanding" ? (inv.status === "sent" || inv.status === "overdue") : inv.status === tab.toLowerCase()));
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ paddingTop: 8, paddingBottom: 12 }}>
           <MobileFilterTabs tabs={tabs} active={tab} onChange={setTab} />
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found</div> : filtered.map((inv, i) => (
+          {filtered.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No {isQuoteList ? "quotes" : "invoices"} found{fy !== ALL_FY && !debtorTab ? ` in ${fyLabel(fy)}` : ""}</div> : filtered.map((inv, i) => (
             <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={<>{fmtDate(inv.date)}{inv.job ? ` · ${inv.job}` : ""}{daysOverdue(inv) > 0 && <span style={{ color: "#ef4444", fontWeight: 600 }}> · {daysOverdue(inv)}{daysOverdue(inv) === 1 ? " day overdue" : " days overdue"}</span>}</>} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === filtered.length - 1} onClick={() => viewInvoice(inv)} action={<button onClick={(e) => { e.stopPropagation(); setEditItem(inv); setModal("invoice"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 6 }}><Icons.Edit /></button>} />
           ))}
         </div>
       </div>
     );
   };
-  const MobileInvoices = () => <><MobileSalesNav /><MobileDocs docType="invoice" /></>;
-  const MobileQuotes = () => <><MobileSalesNav /><MobileDocs docType="quote" /></>;
+  const MobileInvoices = () => <MobileDocs docType="invoice" />;
+  const MobileQuotes = () => <MobileDocs docType="quote" />;
 
   const MobileProjects = () => {
     const [tab, setTab] = useState("All");
-    const rows = divJobs
+    const rows = fyJobs
       .filter((p) => tab === "All" || (p.status || "active") === ({ "Active": "active", "Job Lost": "job_lost", "Lead": "lead", "Finalised": "finalised" })[tab])
       .map((p) => ({ p, t: projectTotals(p, divInvoices) }))
       .sort((a, b) => b.t.remaining - a.t.remaining);
@@ -3364,7 +3482,7 @@ export default function BookkeeperApp() {
           <MobileFilterTabs tabs={["Active", "Job Lost", "Lead", "Finalised", "All"]} active={tab} onChange={setTab} />
         </div>
         <div style={{ margin: "0 16px", background: "#ffffff", borderRadius: 14, border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          {rows.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No projects found</div> : rows.map(({ p, t }, i) => (
+          {rows.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No projects found{fy === ALL_FY ? "" : ` for ${fyLabel(fy)}`}</div> : rows.map(({ p, t }, i) => (
             <MobileRow key={p.id} primary={projectLabel(p)} secondary={`${p.job_number ? p.job_number + " · " : ""}${fmt(t.paid)} paid of ${fmt(t.contract)}`} right={fmt(t.remaining)} rightSub="remaining" isLast={i === rows.length - 1} onClick={() => { setEditItem(p); setModal("project"); }} />
           ))}
         </div>
@@ -3452,8 +3570,8 @@ export default function BookkeeperApp() {
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
-          <button key={item.id} onMouseEnter={item.submenu ? (e) => openNavMenu(e, item.submenu) : undefined} onMouseLeave={item.submenu ? closeNavMenuSoon : undefined} onClick={(e) => { if (item.submenu) openNavMenu(e, item.submenu); else setPage(item.id); }} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
-            <item.icon />{!navCollapsed && <span>{item.label}</span>}{!navCollapsed && item.submenu && <span style={{ marginLeft: "auto", display: "inline-flex", opacity: 0.5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg></span>}
+          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
+            <item.icon />{!navCollapsed && <span>{item.label}</span>}
           </button>
         ))}
       </div>
@@ -3505,22 +3623,14 @@ export default function BookkeeperApp() {
       {isMobile ? <MobileLayout /> : (
       <div style={s.app}>
         <div style={{ ...s.sidebar, width: navCollapsed ? 72 : 220, transition: "width .15s ease" }}><SidebarContent /></div>
-        {navMenu && (
-          <div onMouseEnter={holdNavMenu} onMouseLeave={closeNavMenuSoon} style={{ position: "fixed", top: navMenu.y, left: navMenu.x + 8, width: 190, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
-            {navMenu.items.map((opt) => (
-              <button key={opt.id} className="bk-menuitem" onClick={() => { setPage(opt.id); setNavMenu(null); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "9px 11px", background: page === opt.id ? "#ecfdf5" : "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: page === opt.id ? 600 : 400, color: page === opt.id ? "#059669" : "#334155", textAlign: "left", borderRadius: 7 }}>
-                <span style={{ display: "inline-flex", width: 16, justifyContent: "center", color: page === opt.id ? "#059669" : "#64748b" }}><opt.icon /></span>{opt.label}
-              </button>
-            ))}
-          </div>
-        )}
         <div style={s.main}>
           <div style={s.header}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{PAGE_TITLES[page] || ""}</div>
               <div style={{ fontSize: 10, color: accent, fontWeight: 600, marginTop: 2 }}>{divInfo.name}</div>
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              {fySelectEl()}
               {page === "quotes" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
