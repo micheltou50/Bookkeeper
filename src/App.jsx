@@ -1168,7 +1168,11 @@ export default function BookkeeperApp() {
   const fyInvoices = divInvoices.filter((r) => inFY(r, fy));
   // A project is in the FY if it is still open, or if it has a document dated in
   // it. Never by created_at: projects span years.
-  const fyJobs = divJobs.filter((p) => ["active", "lead"].includes(p.status || "active") || fyInvoices.some((d) => d.project_id === p.id));
+  // "All time" means no filtering at all. Without the short-circuit, a closed
+  // project that never had a document — job 26110 is one — passes neither arm of
+  // the test and stays hidden in every year, including All time.
+  const fyJobs = fy === ALL_FY ? divJobs
+    : divJobs.filter((p) => ["active", "lead"].includes(p.status || "active") || fyInvoices.some((d) => d.project_id === p.id));
   // Caption for anything scoped to the selected FY, so a figure never sits on
   // screen without saying what period it covers.
   const fyTag = fy === ALL_FY ? "all time" : fyLabel(fy);
