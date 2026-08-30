@@ -28,7 +28,7 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Sales", quotes: "Sales", projects: "Projects", contacts: "Contacts" };
+const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts" };
 
 
 // One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
@@ -1083,14 +1083,7 @@ export default function BookkeeperApp() {
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
 
-  const [navMenu, setNavMenu] = useState(null); // sidebar sub-menu popover: { x, y, items } | null
   const [divMenuOpen, setDivMenuOpen] = useState(false);
-  const navMenuTimer = useRef(null);
-  // Sidebar sub-menus open on hover; a short close delay lets the cursor travel
-  // from the nav item into the popover without it vanishing.
-  const openNavMenu = (e, items) => { setDivMenuOpen(false); if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; const r = e.currentTarget.getBoundingClientRect(); setNavMenu({ x: r.right, y: r.top, items }); };
-  const holdNavMenu = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = null; };
-  const closeNavMenuSoon = () => { if (navMenuTimer.current) clearTimeout(navMenuTimer.current); navMenuTimer.current = setTimeout(() => setNavMenu(null), 220); };
 
   const divInfo = divisionInfo(division);
   const accent = divInfo.accent;
@@ -2036,13 +2029,12 @@ export default function BookkeeperApp() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
-    { id: "invoices", label: "Sales", icon: Icons.Invoices, submenu: [{ id: "invoices", label: "Invoices", icon: Icons.Invoices }, { id: "quotes", label: "Quotes", icon: Icons.Quotes }] },
+    { id: "invoices", label: "Invoices", icon: Icons.Invoices },
+    { id: "quotes", label: "Quotes", icon: Icons.Quotes },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
   ];
-  // Quotes and Invoices share the one "Sales" nav item, so the quotes page
-  // highlights it too.
-  const activeNav = ({ quotes: "invoices" })[page] || page;
+  const activeNav = page;
 
   const badgeBg = { "#34d399": "#ecfdf5", "#3b82f6": "#eff6ff", "#64748b": "#f1f5f9", "#ef4444": "#fef2f2", "#f59e0b": "#fffbeb" };
   const badgeTx = { "#34d399": "#065f46", "#3b82f6": "#1e40af", "#64748b": "#475569", "#ef4444": "#991b1b", "#f59e0b": "#92400e" };
@@ -3452,8 +3444,8 @@ export default function BookkeeperApp() {
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
-          <button key={item.id} onMouseEnter={item.submenu ? (e) => openNavMenu(e, item.submenu) : undefined} onMouseLeave={item.submenu ? closeNavMenuSoon : undefined} onClick={(e) => { if (item.submenu) openNavMenu(e, item.submenu); else setPage(item.id); }} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
-            <item.icon />{!navCollapsed && <span>{item.label}</span>}{!navCollapsed && item.submenu && <span style={{ marginLeft: "auto", display: "inline-flex", opacity: 0.5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg></span>}
+          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
+            <item.icon />{!navCollapsed && <span>{item.label}</span>}
           </button>
         ))}
       </div>
@@ -3505,15 +3497,6 @@ export default function BookkeeperApp() {
       {isMobile ? <MobileLayout /> : (
       <div style={s.app}>
         <div style={{ ...s.sidebar, width: navCollapsed ? 72 : 220, transition: "width .15s ease" }}><SidebarContent /></div>
-        {navMenu && (
-          <div onMouseEnter={holdNavMenu} onMouseLeave={closeNavMenuSoon} style={{ position: "fixed", top: navMenu.y, left: navMenu.x + 8, width: 190, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 61 }}>
-            {navMenu.items.map((opt) => (
-              <button key={opt.id} className="bk-menuitem" onClick={() => { setPage(opt.id); setNavMenu(null); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "9px 11px", background: page === opt.id ? "#ecfdf5" : "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: page === opt.id ? 600 : 400, color: page === opt.id ? "#059669" : "#334155", textAlign: "left", borderRadius: 7 }}>
-                <span style={{ display: "inline-flex", width: 16, justifyContent: "center", color: page === opt.id ? "#059669" : "#64748b" }}><opt.icon /></span>{opt.label}
-              </button>
-            ))}
-          </div>
-        )}
         <div style={s.main}>
           <div style={s.header}>
             <div>
