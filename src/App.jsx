@@ -1169,6 +1169,9 @@ export default function BookkeeperApp() {
   // A project is in the FY if it is still open, or if it has a document dated in
   // it. Never by created_at: projects span years.
   const fyJobs = divJobs.filter((p) => ["active", "lead"].includes(p.status || "active") || fyInvoices.some((d) => d.project_id === p.id));
+  // Caption for anything scoped to the selected FY, so a figure never sits on
+  // screen without saying what period it covers.
+  const fyTag = fy === ALL_FY ? "all time" : fyLabel(fy);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -2843,16 +2846,23 @@ export default function BookkeeperApp() {
   // Operational dashboard: what is owed, what is late, and what needs a decision.
   // Deliberately no accounting metrics — MYOB owns those now.
   const DashboardPage = () => {
-    const thisMonth = new Date().toISOString().slice(0, 7);
+    // Two roots. The lifetime one feeds the debtor figures: money still owed and
+    // quotes still unanswered do not belong to a financial year. The FY one feeds
+    // everything that is genuinely a period metric.
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
     const quotes = divInvoices.filter((i) => i.type === "quote");
+    const fyRealInvoices = fyInvoices.filter((i) => i.type !== "quote");
     const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
     const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
     const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
     const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const paidThisMonth = realInvoices.filter((i) => i.status === "paid" && (i.paid_date || i.date || "").slice(0, 7) === thisMonth);
-    const paidThisMonthTotal = paidThisMonth.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
+    // Was "paid this month", which a financial year can only ever contain one of;
+    // under any past FY it read $0.00 permanently. Anchored on the issue date, the
+    // same field the FY filter uses, rather than the old (paid_date || date) mix
+    // that put some rows on a cash basis and others on an accrual one.
+    const paidThisFY = fyRealInvoices.filter((i) => i.status === "paid");
+    const paidThisFYTotal = paidThisFY.reduce((sum, i) => sum + Number(i.total || 0), 0);
+    const activeProjects = fyJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
     const openQuotes = quotes.filter((q) => q.status === "sent");
     // Projects that still have accepted-quote value left to invoice.
@@ -2863,15 +2873,18 @@ export default function BookkeeperApp() {
     // quote been invoiced?" answers no for almost every quote, while hiding the
     // ones that genuinely still owe an invoice.
     const ISSUED_STATUSES = new Set(["sent", "overdue", "paid"]);
-    const leftToInvoice = divJobs.map((proj) => {
+    // The project SET is FY-scoped; the documents behind each figure are not.
+    // Slicing the docs would invent phantom balances wherever an accepted quote
+    // and the invoices fulfilling it fall either side of 30 June.
+    const leftToInvoice = fyJobs.map((proj) => {
       const docs = divInvoices.filter((d) => d.project_id === proj.id);
       if (!docs.some((d) => d.type === "quote" && d.status === "accepted")) return null;
       const quoted = docs.filter((d) => d.type === "quote" && d.status === "accepted").reduce((sum, d) => sum + Number(d.total || 0), 0);
       const issued = docs.filter((d) => d.type === "invoice" && ISSUED_STATUSES.has(d.status)).reduce((sum, d) => sum + Number(d.total || 0), 0);
       return { proj, remaining: quoted - issued };
     }).filter((x) => x && x.remaining > 0.01);
-    const draftDocs = divInvoices.filter((i) => i.status === "draft");
-    const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
+    const draftDocs = fyInvoices.filter((i) => i.status === "draft");
+    const recentInvoices = [...fyRealInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
     const attention = [
       ...overdueInvoices.slice(0, 4).map((i) => ({ key: "o" + i.id, tone: "#ef4444", label: `${i.number} — ${daysOverdue(i)} day${daysOverdue(i) === 1 ? "" : "s"} overdue`, sub: i.contact_name || i.contact_company || "", amount: i.total, go: () => { setEditItem(i); setModal("invoice"); } })),
@@ -2890,9 +2903,9 @@ export default function BookkeeperApp() {
     return (
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          {tile("Outstanding", outstanding, `${unpaid.length} unpaid`, { onClick: () => setPage("invoices") })}
-          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due` : "nothing late", { color: overdueTotal > 0 ? "#b91c1c" : undefined, subColor: overdueTotal > 0 ? "#b91c1c" : "#94a3b8", onClick: () => setPage("invoices") })}
-          {tile("Paid This Month", paidThisMonthTotal, `${paidThisMonth.length} invoice${paidThisMonth.length === 1 ? "" : "s"}`)}
+          {tile("Outstanding", outstanding, `${unpaid.length} unpaid · all time`, { onClick: () => setPage("invoices") })}
+          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due · all time` : "nothing late · all time", { color: overdueTotal > 0 ? "#b91c1c" : undefined, subColor: overdueTotal > 0 ? "#b91c1c" : "#94a3b8", onClick: () => setPage("invoices") })}
+          {tile("Paid", paidThisFYTotal, `${paidThisFY.length} invoice${paidThisFY.length === 1 ? "" : "s"} · ${fyTag}`)}
           {tile("Active Projects", projectsRemaining, `${activeProjects.length} active · remaining`, { onClick: () => setPage("projects") })}
         </div>
 
@@ -2915,11 +2928,11 @@ export default function BookkeeperApp() {
 
         <div style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Invoices</h4>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Recent Invoices <span style={{ fontWeight: 500, color: "#94a3b8", fontSize: 12 }}>· {fyTag}</span></h4>
             <button onClick={() => setPage("invoices")} style={s.btnOutline}>View All</button>
           </div>
           {recentInvoices.length === 0 ? (
-            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No invoices yet</div>
+            <div style={{ color: "#94a3b8", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No invoices in {fyTag}</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={s.table}><tbody>
@@ -2963,7 +2976,7 @@ export default function BookkeeperApp() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Quotes awaiting a decision</h4>
-                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{openQuotes.length} sent · {fmt(openQuotes.reduce((sum, q) => sum + Number(q.total || 0), 0))}</div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{openQuotes.length} sent · {fmt(openQuotes.reduce((sum, q) => sum + Number(q.total || 0), 0))} · all time</div>
               </div>
               <span style={{ fontSize: 20, color: "#94a3b8" }}>→</span>
             </div>
@@ -3362,16 +3375,17 @@ export default function BookkeeperApp() {
   };
 
   const MobileDashboard = () => {
-    const thisMonth = new Date().toISOString().slice(0, 7);
+    // Mirrors DashboardPage exactly — same two roots, same exception.
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
+    const fyRealInvoices = fyInvoices.filter((i) => i.type !== "quote");
     const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
     const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
     const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
     const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const paidThisMonth = realInvoices.filter((i) => i.status === "paid" && (i.paid_date || i.date || "").slice(0, 7) === thisMonth);
-    const activeProjects = divJobs.filter((p) => (p.status || "active") === "active");
+    const paidThisFY = fyRealInvoices.filter((i) => i.status === "paid");
+    const activeProjects = fyJobs.filter((p) => (p.status || "active") === "active");
     const projectsRemaining = activeProjects.reduce((sum, p) => sum + projectTotals(p, divInvoices).remaining, 0);
-    const recentInvoices = [...realInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 4);
+    const recentInvoices = [...fyRealInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 4);
     const tile = (label, value, sub, color) => (
       <div style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "14px 16px" }}>
         <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "#94a3b8" }}>{label}</div>
@@ -3382,11 +3396,11 @@ export default function BookkeeperApp() {
     return (
       <div style={{ paddingBottom: 20 }}>
         <div style={{ display: "flex", gap: 10, padding: "8px 16px 0" }}>
-          {tile("Outstanding", outstanding, `${unpaid.length} unpaid`)}
-          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due` : "nothing late", overdueTotal > 0 ? "#b91c1c" : undefined)}
+          {tile("Outstanding", outstanding, `${unpaid.length} unpaid · all time`)}
+          {tile("Overdue", overdueTotal, overdueInvoices.length ? `${overdueInvoices.length} past due · all time` : "nothing late · all time", overdueTotal > 0 ? "#b91c1c" : undefined)}
         </div>
         <div style={{ display: "flex", gap: 10, padding: "10px 16px 0" }}>
-          {tile("Paid This Month", paidThisMonth.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisMonth.length} invoice${paidThisMonth.length === 1 ? "" : "s"}`)}
+          {tile("Paid", paidThisFY.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisFY.length} invoice${paidThisFY.length === 1 ? "" : "s"} · ${fyTag}`)}
           {tile("Projects", projectsRemaining, `${activeProjects.length} active`)}
         </div>
         {overdueInvoices.length > 0 && (
@@ -3397,7 +3411,7 @@ export default function BookkeeperApp() {
           </MobileSection>
         )}
         <MobileSection title="Recent Invoices" onViewAll={() => setPage("invoices")}>
-          {recentInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices yet</div> : recentInvoices.map((inv, i) => (
+          {recentInvoices.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>No invoices in {fyTag}</div> : recentInvoices.map((inv, i) => (
             <MobileRow key={inv.id} primary={`${inv.number} — ${inv.contact_name || inv.contact_company || ""}`} secondary={inv.job || ""} badge={statusBadge(inv.status)} right={fmt(inv.total || 0)} isLast={i === recentInvoices.length - 1} onClick={() => { setEditItem(inv); setModal("invoice"); }} />
           ))}
         </MobileSection>
