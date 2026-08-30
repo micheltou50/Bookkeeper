@@ -3263,13 +3263,6 @@ export default function BookkeeperApp() {
     return map[status] || map.draft;
   };
 
-  const MobileSalesNav = () => (
-    <div style={{ display: "flex", gap: 8, padding: "8px 16px 0" }}>
-      <button onClick={() => setPage("invoices")} style={s.pill(page === "invoices")}>Invoices</button>
-      <button onClick={() => setPage("quotes")} style={s.pill(page === "quotes")}>Quotes</button>
-    </div>
-  );
-
   const MobileDashboard = () => {
     const thisMonth = new Date().toISOString().slice(0, 7);
     const realInvoices = divInvoices.filter((i) => i.type !== "quote");
@@ -3327,8 +3320,8 @@ export default function BookkeeperApp() {
 
   const MobileDocs = ({ docType }) => {
     const isQuoteList = docType === "quote";
-    const [tab, setTab] = useState(isQuoteList ? "All" : "Outstanding");
-    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["Outstanding", "Paid", "Overdue", "Draft"];
+    const [tab, setTab] = useState("All");
+    const tabs = isQuoteList ? ["All", "Draft", "Sent", "Accepted", "Declined"] : ["All", "Outstanding", "Paid", "Overdue", "Draft"];
     const sorted = [...divInvoices].filter((i) => isQuoteList ? i.type === "quote" : i.type !== "quote").sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const filtered = sorted.filter((inv) => tab === "All" || (tab === "Outstanding" ? (inv.status === "sent" || inv.status === "overdue") : inv.status === tab.toLowerCase()));
     return (
@@ -3344,8 +3337,8 @@ export default function BookkeeperApp() {
       </div>
     );
   };
-  const MobileInvoices = () => <><MobileSalesNav /><MobileDocs docType="invoice" /></>;
-  const MobileQuotes = () => <><MobileSalesNav /><MobileDocs docType="quote" /></>;
+  const MobileInvoices = () => <MobileDocs docType="invoice" />;
+  const MobileQuotes = () => <MobileDocs docType="quote" />;
 
   const MobileProjects = () => {
     const [tab, setTab] = useState("All");
