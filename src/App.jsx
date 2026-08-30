@@ -4973,33 +4973,43 @@ export default function BookkeeperApp() {
     </>
   );
 
-  if (isMobile) {
-    return (
-      <>
-        <MobileLayout />
-        {modal && (
-          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
-            <div className="bk-modal" style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
-              {modal === "expense" && <ExpenseForm existing={editItem} />}
-              {modal === "income" && <IncomeForm existing={editItem} />}
-              {modal === "batch" && <BatchReceipts />}
-              {modal === "contact" && <ContactForm existing={editItem} />}
-              {modal === "invoice" && <InvoiceForm existing={editItem} />}
-              {modal === "project" && <ProjectForm existing={editItem} />}
-              {modal === "receipt" && <ReceiptCapture />}
-              {modal === "settings" && <BusinessSettings />}
-            </div>
-          </div>
-        )}
-        {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
-        {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
-        {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
-      </>
-    );
-  }
+  // The modal lives at ONE position in ONE return, for both layouts.
+  //
+  // It used to be duplicated inside two structurally different returns — the
+  // mobile fragment rendered it as child 1, the desktop fragment buried it inside
+  // the s.app div — which shifted every following sibling by one index. React
+  // reconciles unkeyed siblings by position, so crossing the 768px breakpoint
+  // unmounted the modal AND all three viewers below it. That is why typing an
+  // email in ComposeEmail and then resizing across the breakpoint lost the body:
+  // ComposeEmail is already at module scope, so nothing else was protecting it.
+  //
+  // Only the panel's own style differs between layouts (bottom sheet vs centred),
+  // so that is the single ternary. This is a plain element, not a component —
+  // introducing one would either remount the overlay on every App render (if
+  // declared inside App) or need s.modalOverlay/s.modalContent threaded through
+  // for no gain (if declared at module scope).
+  const modalBlock = modal && (
+    <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
+      <div className="bk-modal" style={isMobile
+        ? { ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }
+        : s.modalContent}>
+        {modal === "expense" && <ExpenseForm existing={editItem} />}
+        {modal === "income" && <IncomeForm existing={editItem} />}
+        {modal === "batch" && <BatchReceipts />}
+        {modal === "contact" && <ContactForm existing={editItem} />}
+        {modal === "invoice" && <InvoiceForm existing={editItem} />}
+        {modal === "project" && <ProjectForm existing={editItem} />}
+        {modal === "receipt" && <ReceiptCapture />}
+        {modal === "settings" && <BusinessSettings />}
+      </div>
+    </div>
+  );
 
+  // Slot order below is load-bearing and identical in both layouts:
+  //   0 layout · 1 modal · 2 viewDoc · 3 viewReceipt · 4 composeDoc
   return (
     <>
+      {isMobile ? <MobileLayout /> : (
       <div style={s.app}>
         <div style={{ ...s.sidebar, width: navCollapsed ? 72 : 220, transition: "width .15s ease" }}><SidebarContent /></div>
         {navMenu && (
@@ -5028,21 +5038,9 @@ export default function BookkeeperApp() {
           </div>
           <div style={s.content}><PageComponent /></div>
         </div>
-        {modal && (
-          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
-            <div className="bk-modal" style={s.modalContent}>
-              {modal === "expense" && <ExpenseForm existing={editItem} />}
-              {modal === "income" && <IncomeForm existing={editItem} />}
-              {modal === "batch" && <BatchReceipts />}
-              {modal === "contact" && <ContactForm existing={editItem} />}
-              {modal === "invoice" && <InvoiceForm existing={editItem} />}
-              {modal === "project" && <ProjectForm existing={editItem} />}
-              {modal === "receipt" && <ReceiptCapture />}
-              {modal === "settings" && <BusinessSettings />}
-            </div>
-          </div>
-        )}
       </div>
+      )}
+      {modalBlock}
       {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
       {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
