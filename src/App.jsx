@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
 
@@ -212,8 +212,17 @@ function dueNote(inv) {
   if (!inv || inv.type === "quote" || !inv.due_date) return "";
   const od = daysOverdue(inv);
   if (od > 0) return `${od} day${od === 1 ? "" : "s"} overdue`;
-  if (inv.status === "paid" || inv.status === "draft") return "";
-  const days = Math.round((new Date(inv.due_date) - new Date(today())) / 86400000);
+  // Only a Sent invoice gets a forward countdown. A row whose status is Overdue
+  // but whose due date has since been pushed out would otherwise show a red
+  // "Overdue" badge next to a slate "due in 15 days" in the same row.
+  if (inv.status !== "sent") return "";
+  // Local date parts, not today(): today() is toISOString() and therefore UTC,
+  // which in Sydney reads as the previous day until 10am. daysOverdue() survives
+  // that because it clamps at zero; a countdown would state a wrong number.
+  const now = new Date();
+  const local = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const due = new Date(inv.due_date);
+  const days = Math.round((new Date(due.getFullYear(), due.getMonth(), due.getDate()) - local) / 86400000);
   if (days < 0) return "";
   if (days === 0) return "due today";
   return `due in ${days} day${days === 1 ? "" : "s"}`;
@@ -1195,8 +1204,8 @@ export default function BookkeeperApp() {
     // "all", not "outstanding": with every invoice paid the page opened on
     // "No invoices found", which reads as broken rather than as an empty filter.
     // Outstanding is still one tap away.
-    invoice: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
-    quote: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
+    invoice: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc", selected: [] },
+    quote: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc", selected: [] },
   });
   const [jobs, setJobs] = useState([]);
   const [jobParties, setJobParties] = useState([]); // bk_job_parties rows for this business's projects
@@ -2091,18 +2100,27 @@ export default function BookkeeperApp() {
     if (!doc || !next || next === doc.status) return;
     if (doc.status === "accepted" && next !== "accepted"
       && !window.confirm(`${doc.number} is currently Accepted.\n\nChanging it to ${statusInfo(next).label} does not undo the project it created, the filed PDF, or any invoice already raised against it.\n\nChange the status anyway?`)) return;
-    // Marking an invoice unpaid from the list is one click now, so it asks
-    // first - and says the part that is easy to assume: no money moves.
-    if (doc.type !== "quote" && doc.status === "paid" && next !== "paid"
-      && !window.confirm(`${doc.number} is marked Paid${doc.paid_date ? ` (${fmtDate(doc.paid_date)})` : ""}.\n\nChanging it to ${statusInfo(next).label} clears the payment date and puts it back into Outstanding.${doc.stripe_session_id ? " It does NOT refund the card payment." : ""}\n\nChange the status anyway?`)) return;
-    // Keep paid_date in step with the status, the way markPaid does. Otherwise
-    // an invoice can be Paid with no payment date, or keep a payment date it no
-    // longer has any claim to.
-    const patch = { status: next };
-    if (doc.type !== "quote") {
-      if (next === "paid") patch.paid_date = doc.paid_date || today();
-      else if (doc.status === "paid") patch.paid_date = null;
+    if (doc.type !== "quote" && doc.status === "paid" && next !== "paid") {
+      // A card-paid invoice is not safe to un-pay from a one-click control.
+      // pay-invoice.mjs blocks the pay link only while status is "paid", so
+      // flipping it re-arms the link already sitting in the customer's inbox —
+      // and stripe-webhook.mjs treats a second charge as a duplicate (its guard
+      // is stripe_session_id IS NULL, which no longer holds), so BookKeeper
+      // would never record it. The edit form still allows this deliberately.
+      if (doc.stripe_session_id) {
+        alert(`${doc.number} was paid by card, so its status cannot be changed from here.\n\nUn-marking it would re-activate the payment link already sent to the customer, and a second card payment would not be recorded.\n\nOpen the invoice and change the status there if you really need to.`);
+        return;
+      }
+      // Marking an invoice unpaid puts it back in front of the reminder cron,
+      // which emails the customer without asking again. Say so.
+      if (!window.confirm(`${doc.number} is marked Paid${doc.paid_date ? ` (${fmtDate(doc.paid_date)})` : ""}.\n\nChanging it to ${statusInfo(next).label} treats it as unpaid again.${next === "draft" ? "" : " Once it is past its due date, automatic reminder emails to the customer resume."}\n\nChange the status anyway?`)) return;
     }
+    // Fill in a missing payment date when marking paid, the way markPaid does.
+    // Deliberately NOT cleared on the way back out: the settlement date is a
+    // record that only exists here, and a mis-click followed by a correction
+    // would destroy it with no undo.
+    const patch = { status: next };
+    if (doc.type !== "quote" && next === "paid") patch.paid_date = doc.paid_date || today();
     await updateInvoice(doc.id, patch);
   };
 
@@ -3115,9 +3133,9 @@ export default function BookkeeperApp() {
 
   const DocList = ({ docType }) => {
     const isQuoteList = docType === "quote";
-    // Filter/search/sort come from parent-persisted docView so they survive the
-    // page remount on every action. Selection + menu stay local (resetting those
-    // after an action is the desired behaviour).
+    // Filter/search/sort/selection all come from parent-persisted docView so they
+    // survive the page remount that happens on every action. The overflow menu
+    // stays local — resetting that after an action is the desired behaviour.
     const view = docView[docType];
     const { filter, jobFilter, search, sortKey, sortDir } = view;
     const patchView = (patch) => setDocView((prev) => ({ ...prev, [docType]: { ...prev[docType], ...patch } }));
@@ -3126,7 +3144,11 @@ export default function BookkeeperApp() {
     const setSearch = (v) => patchView({ search: v });
     const setSortKey = (v) => patchView({ sortKey: v });
     const setSortDir = (v) => patchView({ sortDir: typeof v === "function" ? v(view.sortDir) : v });
-    const [selected, setSelected] = useState(() => new Set());
+    // Lifted to docView for the same reason filter/sort were: opening the status
+    // picker sets state on BookkeeperApp, DocList remounts, and a Set held locally
+    // would empty mid-flow — tick three invoices, glance at a status, lose them.
+    const selected = useMemo(() => new Set(view.selected || []), [view.selected]);
+    const setSelected = (next) => patchView({ selected: [...(typeof next === "function" ? next(selected) : next)] });
     const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
     // Two groups, rendered either side of a divider. "All" and "Outstanding" are
     // views — Outstanding is sent + overdue, not something a document can be —
@@ -3274,8 +3296,8 @@ export default function BookkeeperApp() {
                       <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                       <td style={s.td}>{statusPill(inv)}</td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{fmtNum(inv.total || 0)}</td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{fmt(inv.total || 0)}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmt(balance)}</td>
                       <td style={s.tdMeta}>{fmtDate(inv.due_date)}{dueNote(inv) && <span style={{ display: "block", fontWeight: 600, fontSize: 11, marginTop: 2, color: od > 0 ? "#b91c1c" : "#475569" }}>{dueNote(inv)}</span>}</td>
                       {actionsCell(inv)}
                     </tr>
