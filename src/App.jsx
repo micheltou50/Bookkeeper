@@ -1074,7 +1074,10 @@ export default function BookkeeperApp() {
   // the page remounts on any action and local state would snap back to defaults
   // (that was the "Draft tab jumps back to Outstanding" bug).
   const [docView, setDocView] = useState({
-    invoice: { filter: "outstanding", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
+    // "all", not "outstanding": with every invoice paid the page opened on
+    // "No invoices found", which reads as broken rather than as an empty filter.
+    // Outstanding is still one tap away.
+    invoice: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
     quote: { filter: "all", jobFilter: "", search: "", sortKey: "due_date", sortDir: "desc" },
   });
   const [jobs, setJobs] = useState([]);
