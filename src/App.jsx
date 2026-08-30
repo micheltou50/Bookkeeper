@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
 
@@ -182,8 +182,12 @@ function getDefaultDueDate(type, date) { return addDays(date || today(), type ==
 // replaces three drifting copies of a colour map plus a label map whose fallback
 // was `draft` — so any status it did not know about was displayed as a Draft
 // rather than as itself.
+// Colour encodes who has to do something, not what kind of document it is.
+// Filled = someone still has to act, or it ended well. Unfilled = closed, no
+// action. That is what separates the two greys that used to look identical:
+// Draft is dashed (unfinished), Declined is a solid outline (finished, badly).
 const DOC_STATUS = {
-  draft: { label: "Draft", color: "#64748b" },
+  draft: { label: "Draft", color: "#64748b", variant: "ghost" },
   sent: { label: "Sent", color: "#3b82f6" },
   paid: { label: "Paid", color: "#34d399" },
   overdue: { label: "Overdue", color: "#ef4444" },
@@ -192,14 +196,28 @@ const DOC_STATUS = {
   // here. A superseded quote was replaced, not rejected, so it should not wear
   // Declined's grey.
   superseded: { label: "Superseded", color: "#f59e0b" },
-  declined: { label: "Declined", color: "#64748b" },
+  declined: { label: "Declined", color: "#64748b", variant: "outline" },
 };
 const QUOTE_STATUSES = ["draft", "sent", "accepted", "superseded", "declined"];
 // Quotes that are done with: no Accept affordance should be offered on these.
 const QUOTE_CLOSED = new Set(["accepted", "declined", "superseded"]);
 const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue"];
 // Falls back to the raw value, never to another status.
-const statusInfo = (st) => DOC_STATUS[st] || { label: st || "--", color: "#64748b" };
+const statusInfo = (st) => DOC_STATUS[st] || { label: st || "--", color: "#64748b", variant: "outline" };
+
+// Plain-language due line for an invoice: the fact that decides what you do
+// next. daysOverdue() only counts once a document is late, so "due in N days"
+// is computed here from the same date basis.
+function dueNote(inv) {
+  if (!inv || inv.type === "quote" || !inv.due_date) return "";
+  const od = daysOverdue(inv);
+  if (od > 0) return `${od} day${od === 1 ? "" : "s"} overdue`;
+  if (inv.status === "paid" || inv.status === "draft") return "";
+  const days = Math.round((new Date(inv.due_date) - new Date(today())) / 86400000);
+  if (days < 0) return "";
+  if (days === 0) return "due today";
+  return `due in ${days} day${days === 1 ? "" : "s"}`;
+}
 const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES);
 
 // Status picker. Rendered once at the app root rather than inside a list row: it
@@ -211,14 +229,14 @@ function StatusPicker({ doc, anchor, isMobile, badgeStyle, onPick, onClose }) {
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 90, background: isMobile ? "rgba(15,23,42,0.35)" : "transparent" }} />
       <div style={isMobile
         ? { position: "fixed", left: 0, right: 0, bottom: 0, background: "#fff", borderRadius: "16px 16px 0 0", padding: "4px 8px calc(env(safe-area-inset-bottom) + 12px)", zIndex: 91, boxShadow: "0 -8px 32px -12px rgba(16,24,40,0.35)" }
-        : { position: "fixed", top: (anchor?.y || 0) + 6, left: Math.max(8, (anchor?.x || 0) - 176), width: 176, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 91 }}>
+        : { position: "fixed", top: (anchor?.y || 0) + 6, left: Math.max(8, Math.min(anchor?.x || 0, window.innerWidth - 184)), width: 176, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 11, boxShadow: "0 14px 32px -10px rgba(16,24,40,0.30)", padding: 5, zIndex: 91 }}>
         <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8", padding: isMobile ? "12px 12px 8px" : "5px 8px 6px" }}>Status · {doc.number}</div>
         {statusesFor(doc).map((st) => {
           const info = statusInfo(st);
           return (
             <button key={st} className="bk-menuitem" onClick={() => onPick(st)}
               style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: isMobile ? "10px 12px" : "6px 8px", background: "none", border: "none", cursor: "pointer", fontSize: 13, textAlign: "left", borderRadius: 7, color: "#334155" }}>
-              <span style={badgeStyle(info.color)}>{info.label}</span>
+              <span style={badgeStyle(info.color, info.variant)}>{info.label}</span>
               {st === doc.status && <span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>current</span>}
             </button>
           );
@@ -2073,7 +2091,19 @@ export default function BookkeeperApp() {
     if (!doc || !next || next === doc.status) return;
     if (doc.status === "accepted" && next !== "accepted"
       && !window.confirm(`${doc.number} is currently Accepted.\n\nChanging it to ${statusInfo(next).label} does not undo the project it created, the filed PDF, or any invoice already raised against it.\n\nChange the status anyway?`)) return;
-    await updateInvoice(doc.id, { status: next });
+    // Marking an invoice unpaid from the list is one click now, so it asks
+    // first - and says the part that is easy to assume: no money moves.
+    if (doc.type !== "quote" && doc.status === "paid" && next !== "paid"
+      && !window.confirm(`${doc.number} is marked Paid${doc.paid_date ? ` (${fmtDate(doc.paid_date)})` : ""}.\n\nChanging it to ${statusInfo(next).label} clears the payment date and puts it back into Outstanding.${doc.stripe_session_id ? " It does NOT refund the card payment." : ""}\n\nChange the status anyway?`)) return;
+    // Keep paid_date in step with the status, the way markPaid does. Otherwise
+    // an invoice can be Paid with no payment date, or keep a payment date it no
+    // longer has any claim to.
+    const patch = { status: next };
+    if (doc.type !== "quote") {
+      if (next === "paid") patch.paid_date = doc.paid_date || today();
+      else if (doc.status === "paid") patch.paid_date = null;
+    }
+    await updateInvoice(doc.id, patch);
   };
 
   const markOverdueQuiet = async (inv) => {
@@ -2213,7 +2243,19 @@ export default function BookkeeperApp() {
     label: { display: "block", fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" },
     modalOverlay: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.38)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
     modalContent: { background: "#ffffff", borderRadius: 16, border: "1px solid #eef1f0", width: "100%", maxWidth: 560, maxHeight: "85vh", overflow: "auto", padding: "20px", boxShadow: "0 24px 50px -12px rgba(16,24,40,0.32)" },
-    badge: (color) => ({ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, background: badgeBg[color] || color + "15", color: badgeTx[color] || color }),
+    // variant "solid" fills; "outline" and "ghost" stay unfilled so a document
+    // that needs nothing from you never reads as loudly as one that does.
+    // Ghost (dashed) = not finished yet; outline (solid) = finished, badly.
+    badge: (color, variant) => {
+      const base = { display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, letterSpacing: "0.01em", whiteSpace: "nowrap" };
+      if (variant === "ghost") return { ...base, padding: "1px 9px", background: "transparent", color: "#64748b", border: "1px dashed #cbd5e1" };
+      if (variant === "outline") return { ...base, padding: "1px 9px", background: "transparent", color: "#64748b", border: "1px solid #cbd5e1" };
+      return { ...base, background: badgeBg[color] || color + "15", color: badgeTx[color] || color };
+    },
+    // Row meta: dates, jobs, due lines. Was 11px #94a3b8, which is about 2.3:1 on
+    // white — under the 4.5:1 minimum, on exactly the text that decides whether
+    // you chase someone.
+    tdMeta: { padding: "8px 10px", borderBottom: "1px solid #f1f5f9", fontSize: 12, color: "#64748b", whiteSpace: "nowrap" },
     grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
     pill: (active) => ({ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 13px", fontSize: 12, fontWeight: 600, borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap", border: active ? "1px solid transparent" : "1px solid #e2e8f0", background: active ? accent : "#ffffff", color: active ? "#ffffff" : "#64748b" }),
     pillCount: (active) => ({ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 17, height: 16, padding: "0 5px", borderRadius: 8, fontSize: 10, fontWeight: 700, background: active ? "rgba(255,255,255,0.22)" : "#f1f5f9", color: active ? "#ffffff" : "#94a3b8" }),
@@ -2228,12 +2270,16 @@ export default function BookkeeperApp() {
     </select>
   );
 
+  // A tab may set divideBefore to separate saved views from real statuses.
   const FilterPills = ({ tabs, active, onChange }) => (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
       {tabs.map((t) => (
-        <button key={t.key} onClick={() => onChange(t.key)} style={s.pill(active === t.key)}>
-          {t.label}{t.count != null && <span style={s.pillCount(active === t.key)}>{t.count}</span>}
-        </button>
+        <Fragment key={t.key}>
+          {t.divideBefore && <span aria-hidden="true" style={{ width: 1, alignSelf: "stretch", background: "#e2e8f0", margin: "2px 4px" }} />}
+          <button onClick={() => onChange(t.key)} style={s.pill(active === t.key)}>
+            {t.label}{t.count != null && <span style={s.pillCount(active === t.key)}>{t.count}</span>}
+          </button>
+        </Fragment>
       ))}
     </div>
   );
@@ -2722,7 +2768,7 @@ export default function BookkeeperApp() {
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#fff", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
         <span style={{ fontWeight: 600, fontSize: 12, cursor: "pointer" }} onClick={() => openDoc(d)}>{d.number}</span>
         <span style={{ fontSize: 11, color: "#94a3b8" }}>{d.date ? fmtDate(d.date) : ""}</span>
-        <span style={s.badge(statusInfo(d.status).color)}>{statusInfo(d.status).label}</span>
+        <span style={s.badge(statusInfo(d.status).color, statusInfo(d.status).variant)}>{statusInfo(d.status).label}</span>
         <span style={{ marginLeft: "auto", fontWeight: 600, fontSize: 12 }}>{fmt(d.total || 0)}</span>
         {action}
       </div>
@@ -3014,7 +3060,7 @@ export default function BookkeeperApp() {
                   <tr key={inv.id} onClick={() => { setEditItem(inv); setModal("invoice"); }} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, color: "#94a3b8", width: 70, fontSize: 11 }}>{fmtDate(inv.date)}</td>
                     <td style={{ ...s.td, fontWeight: 500 }}>{inv.number}<div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>{inv.contact_name || inv.contact_company || ""}</div></td>
-                    <td style={{ ...s.td }}><span style={s.badge(statusBadge(inv.status).color)}>{statusBadge(inv.status).label}</span></td>
+                    <td style={{ ...s.td }}><span style={s.badge(statusBadge(inv.status).color, statusBadge(inv.status).variant)}>{statusBadge(inv.status).label}</span></td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(inv.total || 0)}</td>
                   </tr>
                 ))}
@@ -3082,7 +3128,23 @@ export default function BookkeeperApp() {
     const setSortDir = (v) => patchView({ sortDir: typeof v === "function" ? v(view.sortDir) : v });
     const [selected, setSelected] = useState(() => new Set());
     const [menu, setMenu] = useState(null); // overflow "⋯" menu: { id, x, y } | null
-    const statusTabs = isQuoteList ? ["all", ...QUOTE_STATUSES] : ["all", "outstanding", "paid", "overdue", "draft"];
+    // Two groups, rendered either side of a divider. "All" and "Outstanding" are
+    // views — Outstanding is sent + overdue, not something a document can be —
+    // and everything after the divider is a status the document actually holds.
+    const viewTabs = isQuoteList ? ["all"] : ["all", "outstanding"];
+    const statusOnlyTabs = isQuoteList ? [...QUOTE_STATUSES] : [...INVOICE_STATUSES];
+    const statusTabs = [...viewTabs, ...statusOnlyTabs];
+    // One clickable pill for both lists — invoices had no status column at all,
+    // so on desktop a row never said whether it was paid while the same row on
+    // mobile did.
+    const statusPill = (inv) => {
+      const info = statusInfo(inv.status);
+      return (
+        <button className="bk-statuspill" title="Change status" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+          <span style={s.badge(info.color, info.variant)}>{info.label}</span>
+        </button>
+      );
+    };
     const ofType = (i) => isQuoteList ? i.type === "quote" : i.type !== "quote";
     const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
     const sorted = fyInvoices.filter(ofType).sort(byDateDesc);
@@ -3090,7 +3152,10 @@ export default function BookkeeperApp() {
     // answered, is still open work whichever year it was issued in, so
     // Outstanding/Overdue (and Awaiting, for quotes) read the lifetime set.
     const allTime = divInvoices.filter(ofType).sort(byDateDesc);
-    const debtorFilter = isQuoteList ? filter === "sent" : (filter === "outstanding" || filter === "overdue");
+    // Anything unpaid or unanswered is a debtor view and ignores the FY: a Sent
+    // invoice from last year is still owed, exactly like an Outstanding one.
+    const isDebtorKey = (k) => isQuoteList ? k === "sent" : (k === "outstanding" || k === "sent" || k === "overdue");
+    const debtorFilter = isDebtorKey(filter);
     const filtered = (debtorFilter ? allTime : sorted).filter((i) => {
       if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; } else if (filter !== "all" && i.status !== filter) return false;
       if (jobFilter && i.job !== jobFilter) return false;
@@ -3101,9 +3166,8 @@ export default function BookkeeperApp() {
     // Each tab counts the set its own filter will actually draw from, so the
     // number on the pill always matches the rows behind it.
     const tabs = statusTabs.map((st) => {
-      const debtorTab = isQuoteList ? st === "sent" : (st === "outstanding" || st === "overdue");
-      const src = debtorTab ? allTime : sorted;
-      return { key: st, label: st.charAt(0).toUpperCase() + st.slice(1), count: st === "all" ? sorted.length : st === "outstanding" ? src.filter((i) => i.status === "sent" || i.status === "overdue").length : src.filter((i) => i.status === st).length };
+      const src = isDebtorKey(st) ? allTime : sorted;
+      return { key: st, label: st === "all" || st === "outstanding" ? st.charAt(0).toUpperCase() + st.slice(1) : statusInfo(st).label, divideBefore: st === statusOnlyTabs[0], count: st === "all" ? sorted.length : st === "outstanding" ? src.filter((i) => i.status === "sent" || i.status === "overdue").length : src.filter((i) => i.status === st).length };
     });
     const fyNote = fy === ALL_FY ? null : fyLabel(fy);
     const tiles = isQuoteList
@@ -3113,7 +3177,7 @@ export default function BookkeeperApp() {
     // Invoices: MYOB-style sortable columns + bulk selection. Quotes keep the
     // original date-sorted list untouched.
     const balanceOf = (i) => i.status === "paid" ? 0 : Number(i.total || 0);
-    const sortVal = (i) => ({ date: i.date || "", number: i.number || "", customer: (i.contact_name || i.contact_company || "").toLowerCase(), total: Number(i.total || 0), balance: balanceOf(i), due_date: i.due_date || "" })[sortKey] ?? "";
+    const sortVal = (i) => ({ date: i.date || "", number: i.number || "", customer: (i.contact_name || i.contact_company || "").toLowerCase(), status: statusInfo(i.status).label, total: Number(i.total || 0), balance: balanceOf(i), due_date: i.due_date || "" })[sortKey] ?? "";
     const rows = isQuoteList ? filtered : [...filtered].sort((a, b) => {
       const va = sortVal(a), vb = sortVal(b);
       const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
@@ -3176,14 +3240,10 @@ export default function BookkeeperApp() {
                 <tbody>{rows.map((inv) => (
                   <tr key={inv.id}>
                     <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{fmtDate(inv.date)}</td>
+                    <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                     <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
-                    <td style={{ ...s.td, color: "#94a3b8", fontSize: 11 }}>{inv.job || ""}</td>
-                    <td style={s.td}>
-                      <button className="bk-statuspill" title="Change status" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.right, y: r.bottom } }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
-                        <span style={s.badge(statusInfo(inv.status).color)}>{statusInfo(inv.status).label}</span>
-                      </button>
-                    </td>
+                    <td style={{ ...s.tdMeta, whiteSpace: "normal" }}>{inv.job || ""}</td>
+                    <td style={s.td}>{statusPill(inv)}</td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     {actionsCell(inv)}
                   </tr>
@@ -3198,8 +3258,9 @@ export default function BookkeeperApp() {
                   <SortTh label="Issue date" k="date" />
                   <SortTh label="Invoice no" k="number" />
                   <SortTh label="Customer" k="customer" />
-                  <SortTh label="Amount ($)" k="total" align="right" />
-                  <SortTh label="Balance due ($)" k="balance" align="right" />
+                  <SortTh label="Status" k="status" />
+                  <SortTh label="Amount" k="total" align="right" />
+                  <SortTh label="Balance due" k="balance" align="right" />
                   <SortTh label="Due date" k="due_date" />
                   <th style={{ ...s.th, width: 100 }}></th>
                 </tr></thead>
@@ -3209,12 +3270,13 @@ export default function BookkeeperApp() {
                   return (
                     <tr key={inv.id} style={selected.has(inv.id) ? { background: "#ecfdf5" } : undefined}>
                       <td style={{ ...s.td, textAlign: "center" }}><input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleOne(inv.id)} style={{ width: 15, height: 15, accentColor: accent, cursor: "pointer" }} /></td>
-                      <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.date)}</td>
+                      <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                       <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(inv.total || 0)}</td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
-                      <td style={{ ...s.td, color: "#94a3b8", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(inv.due_date)}{od > 0 && <span style={{ display: "block", color: "#ef4444", fontWeight: 600, fontSize: 10, marginTop: 2 }}>{od} {od === 1 ? "day" : "days"} overdue</span>}</td>
+                      <td style={s.td}>{statusPill(inv)}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{fmtNum(inv.total || 0)}</td>
+                      <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmtNum(balance)}</td>
+                      <td style={s.tdMeta}>{fmtDate(inv.due_date)}{dueNote(inv) && <span style={{ display: "block", fontWeight: 600, fontSize: 11, marginTop: 2, color: od > 0 ? "#b91c1c" : "#475569" }}>{dueNote(inv)}</span>}</td>
                       {actionsCell(inv)}
                     </tr>
                   );
@@ -3240,7 +3302,7 @@ export default function BookkeeperApp() {
                 {item("Download PDF", <Icons.Download />, () => downloadPDF(mi))}
                 {item("Save to OneDrive", <Icons.Cloud />, () => saveToOneDrive("invoice", mi.id))}
                 {item("Edit", <Icons.Edit />, () => { setEditItem(mi); setModal("invoice"); })}
-                {isQuoteList && item("Change status…", <Icons.Filter />, () => setStatusPick({ doc: mi, anchor: { x: menu.x, y: menu.y } }))}
+                {isQuoteList && item("Change status…", <Icons.Filter />, () => setStatusPick({ doc: mi, anchor: { x: menu.x - 176, y: menu.y } }))}
                 {!isQuoteList && (mi.status === "sent" || mi.status === "overdue") && item("Send payment reminder", <Icons.Bell />, () => sendReminderViaResend(mi))}
                 {!isQuoteList && mi.pay_token && item("Copy pay link", <Icons.Link />, () => {
                   const url = `${API_BASE || "https://bkeeper.netlify.app"}/.netlify/functions/pay-invoice?invoice=${mi.id}&t=${mi.pay_token}`;
@@ -3421,12 +3483,12 @@ export default function BookkeeperApp() {
     <div onClick={onClick} style={{ display: "flex", alignItems: "center", padding: "12px 16px", borderBottom: isLast ? "none" : "0.5px solid #f1f5f9", gap: 10, cursor: onClick ? "pointer" : "default" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 15, fontWeight: 500, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{primary}</div>
-        {secondary && <div style={{ fontSize: 13, color: "#64748b", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
+        {secondary && <div style={{ fontSize: 13, color: "#5b6675", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secondary}</div>}
       </div>
       <div style={{ textAlign: "right", flexShrink: 0 }}>
         {badge && (onBadgeClick
-          ? <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); onBadgeClick(); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}><span style={s.badge(badge.color)}>{badge.label}</span></button>
-          : <span style={s.badge(badge.color)}>{badge.label}</span>)}
+          ? <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); onBadgeClick(); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}><span style={s.badge(badge.color, badge.variant)}>{badge.label}</span></button>
+          : <span style={s.badge(badge.color, badge.variant)}>{badge.label}</span>)}
         {right && <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{right}</div>}
         {rightSub && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 1 }}>{rightSub}</div>}
       </div>
@@ -3515,13 +3577,16 @@ export default function BookkeeperApp() {
   const MobileDocs = ({ docType }) => {
     const isQuoteList = docType === "quote";
     const [tab, setTab] = useState("All");
-    const tabs = isQuoteList ? ["All", ...QUOTE_STATUSES.map((st) => statusInfo(st).label)] : ["All", "Outstanding", "Paid", "Overdue", "Draft"];
+    // Same vocabulary and order as the desktop list, so the two cannot drift.
+    const tabs = isQuoteList
+      ? ["All", ...QUOTE_STATUSES.map((st) => statusInfo(st).label)]
+      : ["All", "Outstanding", ...INVOICE_STATUSES.map((st) => statusInfo(st).label)];
     const ofType = (i) => isQuoteList ? i.type === "quote" : i.type !== "quote";
     const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "");
     const sorted = fyInvoices.filter(ofType).sort(byDateDesc);
     // Same debtor exception as the desktop list.
     const allTime = divInvoices.filter(ofType).sort(byDateDesc);
-    const debtorTab = isQuoteList ? tab === "Sent" : (tab === "Outstanding" || tab === "Overdue");
+    const debtorTab = isQuoteList ? tab === "Sent" : (tab === "Outstanding" || tab === "Sent" || tab === "Overdue");
     const filtered = (debtorTab ? allTime : sorted).filter((inv) => tab === "All" || (tab === "Outstanding" ? (inv.status === "sent" || inv.status === "overdue") : inv.status === tab.toLowerCase()));
     return (
       <div style={{ paddingBottom: 20 }}>
