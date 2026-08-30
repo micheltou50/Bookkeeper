@@ -795,6 +795,292 @@ function ReceiptViewer({ receipt, onClose }) {
   );
 }
 
+// Business settings. At MODULE scope, not inside BookkeeperApp: a component
+// declared inside App is a new function type on every App render, so React
+// unmounts and remounts it and every useState resets — silently emptying the
+// ABN, bank details, email templates and signature while they are being typed.
+// ChangePasswordForm above is the same pattern and the precedent for this.
+//
+// panel() below stays a plain function returning JSX. Promoting it to a
+// component would reintroduce the very bug this hoist removes, one level down:
+// its inputs would remount on every keystroke.
+
+function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setModal, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate }) {
+  const [f, setF] = useState(() => ({
+    ...profile,
+    email_template_invoice: profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE,
+    email_template_quote: profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE,
+  }));
+  const [logoPreview, setLogoPreview] = useState(null);
+  const fileRef = useRef(null);
+  const [reminderRunning, setReminderRunning] = useState(false);
+  const [reminderResult, setReminderResult] = useState(null);
+  const SHOW_MANUAL_REMINDER_CONTROLS = false; // manual Preview/Send Now buttons hidden; daily auto-reminders unaffected
+
+  const runReminderJob = async (dryRun) => {
+    if (!dryRun && !window.confirm("Send overdue payment reminders now? Emails will go out to clients whose invoices are 1, 7, 14 or 30 days overdue.")) return;
+    setReminderRunning(true);
+    setReminderResult(null);
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const resp = await fetch(`${API_BASE}/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}&business_id=${encodeURIComponent(biz)}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const raw = await resp.text();
+      let data;
+      try { data = JSON.parse(raw); } catch { data = null; }
+      if (!resp.ok || !data) throw new Error((data && data.error) || raw.slice(0, 200) || `Request failed (${resp.status})`);
+      setReminderResult(data);
+    } catch (err) {
+      setReminderResult({ error: err.message });
+    } finally {
+      setReminderRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!f.logo_url) { setLogoPreview(null); return; }
+    const match = f.logo_url.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
+    if (match) {
+      const [, bucket, path] = match;
+      supabase.storage.from(bucket).createSignedUrl(path, 3600).then(({ data }) => { if (data?.signedUrl) setLogoPreview(data.signedUrl); });
+    } else {
+      setLogoPreview(f.logo_url);
+    }
+  }, [f.logo_url]);
+
+  const handleLogo = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const filePath = `${session.user.id}/${biz}_logo_${Date.now()}.${file.name.split(".").pop()}`;
+    const { error } = await supabase.storage.from("receipts").upload(filePath, file, { contentType: file.type, upsert: true });
+    if (!error) {
+      const { data } = supabase.storage.from("receipts").getPublicUrl(filePath);
+      // Functional update, not { ...f }: the upload above is awaited, so `f` in
+      // this closure is the state as it was when the file was picked. Spreading
+      // it would silently revert anything typed while the upload was in flight.
+      if (data?.publicUrl) setF((prev) => ({ ...prev, logo_url: data.publicUrl }));
+    }
+  };
+
+  // Collapsible settings sections — collapsed by default so the modal stays
+  // uncluttered; tap a header to expand it. (Defined as a render helper, not a
+  // nested component, so inputs keep focus while typing.)
+  const [openSections, setOpenSections] = useState({});
+  const toggleSection = (id) => setOpenSections((o) => ({ ...o, [id]: !o[id] }));
+  const panel = (id, title, subtitle, content) => (
+    <div style={{ borderTop: "1px solid #e2e8f0", marginTop: 8 }}>
+      <button type="button" onClick={() => toggleSection(id)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "16px 0 12px", textAlign: "left" }}>
+        <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ ...s.label, margin: 0 }}>{title}</span>
+          {subtitle && <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>{subtitle}</span>}
+        </span>
+        <span style={{ color: "#94a3b8", flexShrink: 0, display: "inline-flex", transform: openSections[id] ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}><Icons.ChevronRight /></span>
+      </button>
+      {openSections[id] && <div style={{ paddingBottom: 12 }}>{content}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
+        <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <label style={s.label}>Logo</label>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {logoPreview ? <img src={logoPreview} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #e2e8f0" }} /> : <div style={{ width: 48, height: 48, background: "#f7f9f8", borderRadius: 6, border: "1px dashed #e2e8f0" }} />}
+          <input ref={fileRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
+          <button onClick={() => fileRef.current?.click()} style={s.btnOutline}>Upload Logo</button>
+          {f.logo_url && <button onClick={() => setF({ ...f, logo_url: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
+        </div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn || ""} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
+      </div>
+      <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address || ""} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone || ""} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
+      </div>
+      {panel("bank", "Bank Details (shown on invoices)", "Tap to view or edit your bank account", (
+        <>
+          <div style={s.grid2}>
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Bank Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Commonwealth Bank" style={s.input} /></div>
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="MT Management Pty Ltd" style={s.input} /></div>
+          </div>
+          <div style={s.grid2}>
+            <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
+          </div>
+        </>
+      ))}
+      {panel("saving", "Saving Locations", "Where receipts & project folders are saved in OneDrive", (
+        <>
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Projects folder</label>
+            <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group/Projects" style={s.input} />
+            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Base OneDrive folder for job/project subfolders. New projects get their own "26106 - Address" subfolder here, and invoice PDFs save into the matching one.</div>
+          </div>
+          <div>
+            <label style={s.label}>Receipts folder</label>
+            <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
+            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts saved as PDFs (e.g. 2026-06-20_Vendor_45.00_Category.pdf). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect & reconnect to grant file access.</div>
+          </div>
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 600, color: "#475569", marginBottom: 4 }}>How to change these</div>
+            Type any OneDrive folder path — use <strong>/</strong> for subfolders (e.g. <code style={{ background: "#eef2f6", padding: "1px 4px", borderRadius: 3 }}>Mworx Group/Projects</code>) — then hit <strong>Save Settings</strong>. Folders that don&apos;t exist yet are created automatically. Changing a path doesn&apos;t move files you&apos;ve already saved — only new ones go to the new location.
+          </div>
+        </>
+      ))}
+      {panel("email_conn", "Email Integration", emailConn ? `Outlook connected${emailConn.email ? " · " + emailConn.email : ""}` : "Not connected — tap to connect Outlook", (
+        emailConn ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#ecfdf5", borderRadius: 8, border: "1px solid #a7f3d0" }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Outlook Connected</div>
+              <div style={{ fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{emailConn.email || "Connected"}</div>
+            </div>
+            <button onClick={disconnectOutlook} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", fontSize: 10 }}>Disconnect</button>
+          </div>
+        ) : (
+          <button onClick={connectOutlook} style={{ ...s.btn("#0078d4"), width: "100%", justifyContent: "center" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>
+            Connect Outlook
+          </button>
+        )
+      ))}
+      {panel("email_tpl", "Email Templates", "Customise invoice & quote email wording", (
+        <>
+        <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.8 }}>
+          Variables: {["{first_name}", "{last_name}", "{contact_name}", "{number}", "{amount}", "{due_date}", "{due_date_line}", "{payment_details}", "{business_name}", "{signature}"].map((v) => (
+            <code key={v} style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b", marginRight: 4, whiteSpace: "nowrap" }}>{v}</code>
+          ))}
+          <div style={{ marginTop: 4, color: "#94a3b8" }}><code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{first_name}"}</code> = Cameron · <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{contact_name}"}</code> = Cameron Mawson (full name)</div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Invoice Email</label>
+          <textarea value={f.email_template_invoice || ""} onChange={(e) => setF({ ...f, email_template_invoice: e.target.value })} placeholder={DEFAULT_EMAIL_TEMPLATE_INVOICE} rows={8} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 120 }} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Quote Email</label>
+          <textarea value={f.email_template_quote || ""} onChange={(e) => setF({ ...f, email_template_quote: e.target.value })} placeholder={DEFAULT_EMAIL_TEMPLATE_QUOTE} rows={8} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 120 }} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Signature (HTML allowed)</label>
+          <textarea value={f.email_signature || ""} onChange={(e) => setF({ ...f, email_signature: e.target.value })} placeholder={`${f.name || "Your name"}\n${f.email || "your@email.com"} · ${f.phone || "+61 ..."}`} rows={5} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 80 }} />
+        </div>
+        </>
+      ))}
+      {panel("quote_tpl", "Quote Templates", "Reusable quote content — rename or delete", (
+        <>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+          Templates are created from the quote editor — open any quote and hit “Save as Template”. New quotes offer them under “Start from template”.
+        </div>
+        {quoteTemplates.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#94a3b8", padding: "4px 0 8px" }}>No templates yet.</div>
+        ) : quoteTemplates.map((t) => (
+          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
+            <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+            <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{t.pricing_mode === "lump_sum" ? `Lump sum${t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}` : "Itemised"}</span>
+            <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
+            <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+          </div>
+        ))}
+        </>
+      ))}
+      {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
+        <>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+          Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once — nothing for you to do.
+        </div>
+        {/* Manual Preview / Send Now controls hidden per preference; the daily
+            automatic reminders still run. Flip to true to bring them back. */}
+        {SHOW_MANUAL_REMINDER_CONTROLS && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
+          <button onClick={() => runReminderJob(false)} disabled={reminderRunning} style={{ ...s.btn("#f59e0b"), opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Send Reminders Now"}</button>
+        </div>
+        )}
+        {reminderResult && (
+          <div style={{ marginTop: 10, padding: 12, background: reminderResult.error ? "#fef2f2" : "#f8fafc", border: `1px solid ${reminderResult.error ? "#fecaca" : "#e2e8f0"}`, borderRadius: 8, fontSize: 12, color: "#334155" }}>
+            {reminderResult.error ? (
+              <div style={{ color: "#991b1b" }}>Error: {reminderResult.error}</div>
+            ) : reminderResult.dryRun ? (() => {
+              const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_email_sender: "No email sender configured", skipped_not_due: "Not due yet" };
+              const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_email_sender: "#991b1b", skipped_not_due: "#64748b" };
+              const willSend = reminderResult.preview.filter(p => p.status === "will_send" || p.status === "failed_retryable").length;
+              return (
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Preview — {willSend} reminder{willSend === 1 ? "" : "s"} would be sent now:</div>
+                  {reminderResult.preview.length === 0 ? <div style={{ color: "#64748b" }}>No overdue invoices found for this business.</div> : reminderResult.preview.map((p, i) => (
+                    <div key={i} style={{ color: COLORS[p.status] || "#64748b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue) — <strong>{LABELS[p.status] || p.status}</strong>{p.sendableVia ? ` · ${p.sendableVia}` : ""}</div>
+                  ))}
+                </div>
+              );
+            })() : (
+              <div style={{ fontWeight: 600 }}>Sent {reminderResult.sent} · skipped {reminderResult.skipped} · failed {reminderResult.failed}</div>
+            )}
+          </div>
+        )}
+        </>
+      ))}
+      {panel("stripe", "Card Payments", "Let customers pay invoices by card", (
+        <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
+          When <code>STRIPE_SECRET_KEY</code> is set in Netlify, every invoice gets a secure <strong>Pay by card</strong> button in its PDF and in overdue reminder emails, plus a <strong>Copy pay link</strong> action in each invoice's menu (⋯). Paid invoices are marked <strong>paid</strong> automatically once Stripe confirms — no manual step. A card surcharge (default 1.7%, configurable via <code>STRIPE_SURCHARGE_PCT</code>) is added at checkout so the processing fee is passed to the customer. Cards plus Apple&nbsp;Pay / Google&nbsp;Pay are offered.
+        </div>
+      ))}
+      {panel("security", "Security", `Change the sign-in password for ${session?.user?.email || "your account"}`, (
+        <ChangePasswordForm s={s} accent={accent} />
+      ))}
+      <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
+    </div>
+  );
+}
+
+// Contact form. Module scope for the same reason as BusinessSettings: nested in
+// App it was a fresh function type every render, so React remounted it and the
+// half-typed contact vanished. Thirty lines, no effects, no refs — it never
+// mutated App state itself, it was only ever a bystander to someone else's render.
+
+function ContactForm({ existing, s, accent, setModal, setEditItem, addContact, updateContact, deleteContact }) {
+  const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
+        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="consultant">Consultant</option><option value="supplier">Supplier</option></select></div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} style={s.input} /></div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
+      </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
+      </div>
+      <button disabled={(!f.name && !f.company) || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: (!f.name && !f.company) || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
+      {existing && (
+        <button onClick={() => deleteContact(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
+          <Icons.Trash /> Delete Contact
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function BookkeeperApp() {
   const [session, setSession] = useState(undefined);
   const [recovery, setRecovery] = useState(false);
@@ -913,6 +1199,13 @@ export default function BookkeeperApp() {
   }, []);
 
   // Close any modal, but if a form reported unsaved changes (formDirty), confirm first.
+  // A secondary action that switches to a DIFFERENT modal abandons the open
+  // form: the [modal] effect above clears that form's draft ref as soon as
+  // `modal` changes. Closing asks first; switching away was doing it silently.
+  // Same confirmation, same formDirtyRef — just at the other exit.
+  const confirmLeaveDirtyForm = (what) =>
+    !formDirtyRef.current || window.confirm(`Are you sure? Any unsaved changes to this ${what} will be lost.`);
+
   const requestCloseModal = (alwaysConfirm = false) => {
     if ((alwaysConfirm || formDirtyRef.current) && !window.confirm("Are you sure you want to close? Any unsaved changes will be lost.")) return;
     if (aiData?.receiptPath) supabase.storage.from("receipts").remove([aiData.receiptPath]).catch(() => {});
@@ -1850,7 +2143,7 @@ export default function BookkeeperApp() {
     const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
     const body = `Hi ${firstName(inv.contact_name)},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${sig}`;
     window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-    if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+    markOverdueQuiet(inv);
   };
 
   // Send the reminder email directly via Resend (the same service the automated
@@ -1869,7 +2162,7 @@ export default function BookkeeperApp() {
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.ok) throw new Error((data && data.error) || `Request failed (${resp.status})`);
       alert(`Reminder emailed to ${data.sent_to || inv.contact_email}.`);
-      if (inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent") updateInvoice(inv.id, { status: "overdue" });
+      markOverdueQuiet(inv);
     } catch (err) {
       if (window.confirm(`Couldn't send via the email service (${err.message}).\n\nOpen an email draft instead?`)) sendReminder(inv);
     }
@@ -1896,6 +2189,21 @@ export default function BookkeeperApp() {
   };
 
   // Mark paid without closing the current modal (used inside the Project modal).
+  // Flip a lapsed invoice to "overdue" without disturbing an open form.
+  //
+  // Both reminder senders used updateInvoice for this, but updateInvoice ends by
+  // closing the modal and nulling invoiceDraftRef — so sending a reminder from
+  // inside an open invoice discarded every unsaved edit, with no confirmation.
+  // The status flip is incidental bookkeeping, not a save; it has no business
+  // touching the modal. Same shape as markPaidQuiet below, for the same reason.
+  const markOverdueQuiet = async (inv) => {
+    if (!(inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent")) return;
+    const upd = { status: "overdue" };
+    const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark overdue");
+    if (!ok) return;
+    setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
+  };
+
   const markPaidQuiet = async (inv) => {
     const upd = { status: "paid", paid_date: today() };
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark paid");
@@ -2535,40 +2843,6 @@ export default function BookkeeperApp() {
     );
   };
 
-  const ContactForm = ({ existing }) => {
-    const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
-    const [saving, setSaving] = useState(false);
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
-          <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} style={s.select}><option value="client">Client</option><option value="consultant">Consultant</option><option value="supplier">Supplier</option></select></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Company</label><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} style={s.input} /></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn} onChange={(e) => setF({ ...f, abn: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Notes</label><input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} style={s.input} /></div>
-        </div>
-        <button disabled={(!f.name && !f.company) || saving} onClick={async () => { setSaving(true); existing ? await updateContact(existing.id, f) : await addContact(f); setSaving(false); }} style={{ ...s.btn(accent), opacity: (!f.name && !f.company) || saving ? 0.4 : 1, width: "100%", justifyContent: "center" }}>{saving ? "Saving…" : existing ? "Save Changes" : "Add Contact"}</button>
-        {existing && (
-          <button onClick={() => deleteContact(existing.id)} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
-            <Icons.Trash /> Delete Contact
-          </button>
-        )}
-      </div>
-    );
-  };
 
   const InvoiceForm = ({ existing }) => {
     const defaultType = "invoice";
@@ -3194,7 +3468,7 @@ export default function BookkeeperApp() {
                   <div style={{ fontSize: 11, color: "#64748b" }}>quoted {fmt(c.contract)} · paid {fmt(c.paid)} · <span style={{ fontWeight: 700, color: c.remaining > 0 ? "#0f172a" : "#10b981" }}>{fmt(c.remaining)} left</span></div>
                 </div>
                 {c.quotes.map((q) => (
-                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={async () => { const proj = await acceptQuote(q); if (proj) await offerDepositInvoice(q, proj); }} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
+                  <DocRow key={q.id} d={q} action={q.status !== "accepted" && q.status !== "declined" ? <button onClick={async () => { if (!confirmLeaveDirtyForm("project")) return; const proj = await acceptQuote(q); if (proj) await offerDepositInvoice(q, proj); }} style={{ ...s.btn("#10b981", true), fontSize: 11 }}><Icons.Check /> Accept</button> : null} />
                 ))}
                 {c.invoices.map((iv) => (
                   <DocRow key={iv.id} d={iv} action={iv.status !== "paid" ? <button onClick={() => markPaidQuiet(iv)} style={{ ...s.btnOutline, fontSize: 11, color: "#34d399", borderColor: "#34d39940" }}><Icons.Check /> Paid</button> : null} />
@@ -3221,238 +3495,6 @@ export default function BookkeeperApp() {
     );
   };
 
-  const BusinessSettings = () => {
-    const [f, setF] = useState(() => ({
-      ...profile,
-      email_template_invoice: profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE,
-      email_template_quote: profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE,
-    }));
-    const [logoPreview, setLogoPreview] = useState(null);
-    const fileRef = useRef(null);
-    const [reminderRunning, setReminderRunning] = useState(false);
-    const [reminderResult, setReminderResult] = useState(null);
-    const SHOW_MANUAL_REMINDER_CONTROLS = false; // manual Preview/Send Now buttons hidden; daily auto-reminders unaffected
-
-    const runReminderJob = async (dryRun) => {
-      if (!dryRun && !window.confirm("Send overdue payment reminders now? Emails will go out to clients whose invoices are 1, 7, 14 or 30 days overdue.")) return;
-      setReminderRunning(true);
-      setReminderResult(null);
-      try {
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const resp = await fetch(`${API_BASE}/.netlify/functions/send-reminders?dryRun=${dryRun ? 1 : 0}&business_id=${encodeURIComponent(biz)}`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const raw = await resp.text();
-        let data;
-        try { data = JSON.parse(raw); } catch { data = null; }
-        if (!resp.ok || !data) throw new Error((data && data.error) || raw.slice(0, 200) || `Request failed (${resp.status})`);
-        setReminderResult(data);
-      } catch (err) {
-        setReminderResult({ error: err.message });
-      } finally {
-        setReminderRunning(false);
-      }
-    };
-
-    useEffect(() => {
-      if (!f.logo_url) { setLogoPreview(null); return; }
-      const match = f.logo_url.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
-      if (match) {
-        const [, bucket, path] = match;
-        supabase.storage.from(bucket).createSignedUrl(path, 3600).then(({ data }) => { if (data?.signedUrl) setLogoPreview(data.signedUrl); });
-      } else {
-        setLogoPreview(f.logo_url);
-      }
-    }, [f.logo_url]);
-
-    const handleLogo = async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const filePath = `${session.user.id}/${biz}_logo_${Date.now()}.${file.name.split(".").pop()}`;
-      const { error } = await supabase.storage.from("receipts").upload(filePath, file, { contentType: file.type, upsert: true });
-      if (!error) {
-        const { data } = supabase.storage.from("receipts").getPublicUrl(filePath);
-        if (data?.publicUrl) setF({ ...f, logo_url: data.publicUrl });
-      }
-    };
-
-    // Collapsible settings sections — collapsed by default so the modal stays
-    // uncluttered; tap a header to expand it. (Defined as a render helper, not a
-    // nested component, so inputs keep focus while typing.)
-    const [openSections, setOpenSections] = useState({});
-    const toggleSection = (id) => setOpenSections((o) => ({ ...o, [id]: !o[id] }));
-    const panel = (id, title, subtitle, content) => (
-      <div style={{ borderTop: "1px solid #e2e8f0", marginTop: 8 }}>
-        <button type="button" onClick={() => toggleSection(id)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "16px 0 12px", textAlign: "left" }}>
-          <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ ...s.label, margin: 0 }}>{title}</span>
-            {subtitle && <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>{subtitle}</span>}
-          </span>
-          <span style={{ color: "#94a3b8", flexShrink: 0, display: "inline-flex", transform: openSections[id] ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}><Icons.ChevronRight /></span>
-        </button>
-        {openSections[id] && <div style={{ paddingBottom: 12 }}>{content}</div>}
-      </div>
-    );
-
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
-          <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={s.label}>Logo</label>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {logoPreview ? <img src={logoPreview} alt="Logo" style={{ height: 48, borderRadius: 6, border: "1px solid #e2e8f0" }} /> : <div style={{ width: 48, height: 48, background: "#f7f9f8", borderRadius: 6, border: "1px dashed #e2e8f0" }} />}
-            <input ref={fileRef} type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
-            <button onClick={() => fileRef.current?.click()} style={s.btnOutline}>Upload Logo</button>
-            {f.logo_url && <button onClick={() => setF({ ...f, logo_url: "" })} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440" }}>Remove</button>}
-          </div>
-        </div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn || ""} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
-        </div>
-        <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address || ""} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
-        <div style={s.grid2}>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Phone</label><input value={f.phone || ""} onChange={(e) => setF({ ...f, phone: e.target.value })} style={s.input} /></div>
-        </div>
-        {panel("bank", "Bank Details (shown on invoices)", "Tap to view or edit your bank account", (
-          <>
-            <div style={s.grid2}>
-              <div style={{ marginBottom: 12 }}><label style={s.label}>Bank Name</label><input value={f.bank_name || ""} onChange={(e) => setF({ ...f, bank_name: e.target.value })} placeholder="Commonwealth Bank" style={s.input} /></div>
-              <div style={{ marginBottom: 12 }}><label style={s.label}>Account Name</label><input value={f.account_name || ""} onChange={(e) => setF({ ...f, account_name: e.target.value })} placeholder="MT Management Pty Ltd" style={s.input} /></div>
-            </div>
-            <div style={s.grid2}>
-              <div style={{ marginBottom: 12 }}><label style={s.label}>BSB</label><input value={f.bsb || ""} onChange={(e) => setF({ ...f, bsb: e.target.value })} placeholder="062-000" style={s.input} /></div>
-              <div style={{ marginBottom: 12 }}><label style={s.label}>Account Number</label><input value={f.account_number || ""} onChange={(e) => setF({ ...f, account_number: e.target.value })} placeholder="1234 5678" style={s.input} /></div>
-            </div>
-          </>
-        ))}
-        {panel("saving", "Saving Locations", "Where receipts & project folders are saved in OneDrive", (
-          <>
-            <div style={{ marginBottom: 12 }}>
-              <label style={s.label}>Projects folder</label>
-              <input value={f.onedrive_folder || ""} onChange={(e) => setF({ ...f, onedrive_folder: e.target.value })} placeholder="Mworx Group/Projects" style={s.input} />
-              <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Base OneDrive folder for job/project subfolders. New projects get their own "26106 - Address" subfolder here, and invoice PDFs save into the matching one.</div>
-            </div>
-            <div>
-              <label style={s.label}>Receipts folder</label>
-              <input value={f.onedrive_receipts_folder || ""} onChange={(e) => setF({ ...f, onedrive_receipts_folder: e.target.value })} placeholder="Mworx Group/Receipts" style={s.input} />
-              <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>Separate folder for scanned receipts saved as PDFs (e.g. 2026-06-20_Vendor_45.00_Category.pdf). If empty, receipts fall back to the projects folder. Powered by the Microsoft connection below — if you just enabled OneDrive, Disconnect & reconnect to grant file access.</div>
-            </div>
-            <div style={{ marginTop: 14, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
-              <div style={{ fontWeight: 600, color: "#475569", marginBottom: 4 }}>How to change these</div>
-              Type any OneDrive folder path — use <strong>/</strong> for subfolders (e.g. <code style={{ background: "#eef2f6", padding: "1px 4px", borderRadius: 3 }}>Mworx Group/Projects</code>) — then hit <strong>Save Settings</strong>. Folders that don&apos;t exist yet are created automatically. Changing a path doesn&apos;t move files you&apos;ve already saved — only new ones go to the new location.
-            </div>
-          </>
-        ))}
-        {panel("email_conn", "Email Integration", emailConn ? `Outlook connected${emailConn.email ? " · " + emailConn.email : ""}` : "Not connected — tap to connect Outlook", (
-          emailConn ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#ecfdf5", borderRadius: 8, border: "1px solid #a7f3d0" }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Outlook Connected</div>
-                <div style={{ fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{emailConn.email || "Connected"}</div>
-              </div>
-              <button onClick={disconnectOutlook} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", fontSize: 10 }}>Disconnect</button>
-            </div>
-          ) : (
-            <button onClick={connectOutlook} style={{ ...s.btn("#0078d4"), width: "100%", justifyContent: "center" }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>
-              Connect Outlook
-            </button>
-          )
-        ))}
-        {panel("email_tpl", "Email Templates", "Customise invoice & quote email wording", (
-          <>
-          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.8 }}>
-            Variables: {["{first_name}", "{last_name}", "{contact_name}", "{number}", "{amount}", "{due_date}", "{due_date_line}", "{payment_details}", "{business_name}", "{signature}"].map((v) => (
-              <code key={v} style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3, color: "#64748b", marginRight: 4, whiteSpace: "nowrap" }}>{v}</code>
-            ))}
-            <div style={{ marginTop: 4, color: "#94a3b8" }}><code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{first_name}"}</code> = Cameron · <code style={{ background: "#f1f5f9", padding: "1px 4px", borderRadius: 3 }}>{"{contact_name}"}</code> = Cameron Mawson (full name)</div>
-          </div>
-          <div style={{ marginBottom: 12 }}>
-            <label style={s.label}>Invoice Email</label>
-            <textarea value={f.email_template_invoice || ""} onChange={(e) => setF({ ...f, email_template_invoice: e.target.value })} placeholder={DEFAULT_EMAIL_TEMPLATE_INVOICE} rows={8} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 120 }} />
-          </div>
-          <div style={{ marginBottom: 12 }}>
-            <label style={s.label}>Quote Email</label>
-            <textarea value={f.email_template_quote || ""} onChange={(e) => setF({ ...f, email_template_quote: e.target.value })} placeholder={DEFAULT_EMAIL_TEMPLATE_QUOTE} rows={8} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 120 }} />
-          </div>
-          <div style={{ marginBottom: 12 }}>
-            <label style={s.label}>Signature (HTML allowed)</label>
-            <textarea value={f.email_signature || ""} onChange={(e) => setF({ ...f, email_signature: e.target.value })} placeholder={`${f.name || "Your name"}\n${f.email || "your@email.com"} · ${f.phone || "+61 ..."}`} rows={5} style={{ ...s.input, fontFamily: "monospace", fontSize: 11, resize: "vertical", minHeight: 80 }} />
-          </div>
-          </>
-        ))}
-        {panel("quote_tpl", "Quote Templates", "Reusable quote content — rename or delete", (
-          <>
-          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Templates are created from the quote editor — open any quote and hit “Save as Template”. New quotes offer them under “Start from template”.
-          </div>
-          {quoteTemplates.length === 0 ? (
-            <div style={{ fontSize: 12, color: "#94a3b8", padding: "4px 0 8px" }}>No templates yet.</div>
-          ) : quoteTemplates.map((t) => (
-            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
-              <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
-              <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{t.pricing_mode === "lump_sum" ? `Lump sum${t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}` : "Itemised"}</span>
-              <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-              <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
-            </div>
-          ))}
-          </>
-        ))}
-        {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
-          <>
-          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-            Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once — nothing for you to do.
-          </div>
-          {/* Manual Preview / Send Now controls hidden per preference; the daily
-              automatic reminders still run. Flip to true to bring them back. */}
-          {SHOW_MANUAL_REMINDER_CONTROLS && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={() => runReminderJob(true)} disabled={reminderRunning} style={{ ...s.btnOutline, opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Preview (dry run)"}</button>
-            <button onClick={() => runReminderJob(false)} disabled={reminderRunning} style={{ ...s.btn("#f59e0b"), opacity: reminderRunning ? 0.5 : 1 }}>{reminderRunning ? "Running…" : "Send Reminders Now"}</button>
-          </div>
-          )}
-          {reminderResult && (
-            <div style={{ marginTop: 10, padding: 12, background: reminderResult.error ? "#fef2f2" : "#f8fafc", border: `1px solid ${reminderResult.error ? "#fecaca" : "#e2e8f0"}`, borderRadius: 8, fontSize: 12, color: "#334155" }}>
-              {reminderResult.error ? (
-                <div style={{ color: "#991b1b" }}>Error: {reminderResult.error}</div>
-              ) : reminderResult.dryRun ? (() => {
-                const LABELS = { will_send: "Will send", failed_retryable: "Failed before — will retry", already_sent: "Already sent", in_progress: "Send in progress", no_email_sender: "No email sender configured", skipped_not_due: "Not due yet" };
-                const COLORS = { will_send: "#065f46", failed_retryable: "#92400e", already_sent: "#64748b", in_progress: "#64748b", no_email_sender: "#991b1b", skipped_not_due: "#64748b" };
-                const willSend = reminderResult.preview.filter(p => p.status === "will_send" || p.status === "failed_retryable").length;
-                return (
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Preview — {willSend} reminder{willSend === 1 ? "" : "s"} would be sent now:</div>
-                    {reminderResult.preview.length === 0 ? <div style={{ color: "#64748b" }}>No overdue invoices found for this business.</div> : reminderResult.preview.map((p, i) => (
-                      <div key={i} style={{ color: COLORS[p.status] || "#64748b" }}>• {p.invoice} → {p.to} ({p.daysOverdue}d overdue) — <strong>{LABELS[p.status] || p.status}</strong>{p.sendableVia ? ` · ${p.sendableVia}` : ""}</div>
-                    ))}
-                  </div>
-                );
-              })() : (
-                <div style={{ fontWeight: 600 }}>Sent {reminderResult.sent} · skipped {reminderResult.skipped} · failed {reminderResult.failed}</div>
-              )}
-            </div>
-          )}
-          </>
-        ))}
-        {panel("stripe", "Card Payments", "Let customers pay invoices by card", (
-          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
-            When <code>STRIPE_SECRET_KEY</code> is set in Netlify, every invoice gets a secure <strong>Pay by card</strong> button in its PDF and in overdue reminder emails, plus a <strong>Copy pay link</strong> action in each invoice's menu (⋯). Paid invoices are marked <strong>paid</strong> automatically once Stripe confirms — no manual step. A card surcharge (default 1.7%, configurable via <code>STRIPE_SURCHARGE_PCT</code>) is added at checkout so the processing fee is passed to the customer. Cards plus Apple&nbsp;Pay / Google&nbsp;Pay are offered.
-          </div>
-        ))}
-        {panel("security", "Security", `Change the sign-in password for ${session?.user?.email || "your account"}`, (
-          <ChangePasswordForm s={s} accent={accent} />
-        ))}
-        <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
-      </div>
-    );
-  };
 
   const PnlPage = () => {
     const now = new Date();
@@ -4973,33 +5015,46 @@ export default function BookkeeperApp() {
     </>
   );
 
-  if (isMobile) {
-    return (
-      <>
-        <MobileLayout />
-        {modal && (
-          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
-            <div className="bk-modal" style={{ ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }}>
-              {modal === "expense" && <ExpenseForm existing={editItem} />}
-              {modal === "income" && <IncomeForm existing={editItem} />}
-              {modal === "batch" && <BatchReceipts />}
-              {modal === "contact" && <ContactForm existing={editItem} />}
-              {modal === "invoice" && <InvoiceForm existing={editItem} />}
-              {modal === "project" && <ProjectForm existing={editItem} />}
-              {modal === "receipt" && <ReceiptCapture />}
-              {modal === "settings" && <BusinessSettings />}
-            </div>
-          </div>
-        )}
-        {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
-        {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
-        {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
-      </>
-    );
-  }
+  // The modal lives at ONE position in ONE return, for both layouts.
+  //
+  // It used to be duplicated inside two structurally different returns — the
+  // mobile fragment rendered it as child 1, the desktop fragment buried it inside
+  // the s.app div — which shifted every following sibling by one index. React
+  // reconciles unkeyed siblings by position, so crossing the 768px breakpoint
+  // unmounted the modal AND all three viewers below it. That is why typing an
+  // email in ComposeEmail and then resizing across the breakpoint lost the body:
+  // ComposeEmail is already at module scope, so nothing else was protecting it.
+  //
+  // Only the panel's own style differs between layouts (bottom sheet vs centred),
+  // so that is the single ternary. This is a plain element, not a component —
+  // introducing one would either remount the overlay on every App render (if
+  // declared inside App) or need s.modalOverlay/s.modalContent threaded through
+  // for no gain (if declared at module scope).
+  const modalBlock = modal && (
+    <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
+      <div className="bk-modal" style={isMobile
+        ? { ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }
+        : s.modalContent}>
+        {modal === "expense" && <ExpenseForm existing={editItem} />}
+        {modal === "income" && <IncomeForm existing={editItem} />}
+        {modal === "batch" && <BatchReceipts />}
+        {/* key: now that this form no longer remounts, opening a different
+            contact must still start from that contact's values rather than
+            reusing the previous one's state. */}
+        {modal === "contact" && <ContactForm key={editItem?.id ?? "new"} existing={editItem} s={s} accent={accent} setModal={setModal} setEditItem={setEditItem} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} />}
+        {modal === "invoice" && <InvoiceForm existing={editItem} />}
+        {modal === "project" && <ProjectForm existing={editItem} />}
+        {modal === "receipt" && <ReceiptCapture />}
+        {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} setModal={setModal} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} />}
+      </div>
+    </div>
+  );
 
+  // Slot order below is load-bearing and identical in both layouts:
+  //   0 layout · 1 modal · 2 viewDoc · 3 viewReceipt · 4 composeDoc
   return (
     <>
+      {isMobile ? <MobileLayout /> : (
       <div style={s.app}>
         <div style={{ ...s.sidebar, width: navCollapsed ? 72 : 220, transition: "width .15s ease" }}><SidebarContent /></div>
         {navMenu && (
@@ -5028,21 +5083,9 @@ export default function BookkeeperApp() {
           </div>
           <div style={s.content}><PageComponent /></div>
         </div>
-        {modal && (
-          <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
-            <div className="bk-modal" style={s.modalContent}>
-              {modal === "expense" && <ExpenseForm existing={editItem} />}
-              {modal === "income" && <IncomeForm existing={editItem} />}
-              {modal === "batch" && <BatchReceipts />}
-              {modal === "contact" && <ContactForm existing={editItem} />}
-              {modal === "invoice" && <InvoiceForm existing={editItem} />}
-              {modal === "project" && <ProjectForm existing={editItem} />}
-              {modal === "receipt" && <ReceiptCapture />}
-              {modal === "settings" && <BusinessSettings />}
-            </div>
-          </div>
-        )}
       </div>
+      )}
+      {modalBlock}
       {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
       {viewReceipt && <ReceiptViewer receipt={viewReceipt} onClose={() => setViewReceipt(null)} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
