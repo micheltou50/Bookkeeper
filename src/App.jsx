@@ -2249,6 +2249,32 @@ export default function BookkeeperApp() {
     return data;
   };
 
+  // Copy a document into a new draft: same client, project, scope, notes and
+  // terms, its own number and today's date. The source is not touched — no
+  // status change, no link written. Superseding the original stays a manual
+  // decision, which is now one click on the status pill.
+  const duplicateDoc = (doc) => {
+    if (!doc) return;
+    setInvoiceSeed({
+      type: doc.type === "quote" ? "quote" : "invoice",
+      contact_name: doc.contact_name || "",
+      contact_email: doc.contact_email || "",
+      contact_company: doc.contact_company || "",
+      contact_abn: doc.contact_abn || "",
+      contact_address: doc.contact_address || "",
+      contact_phone: doc.contact_phone || "",
+      project_id: doc.project_id || "",
+      projectName: doc.job || "",
+      pricing_mode: doc.pricing_mode || "lump_sum",
+      lump_amount: doc.pricing_mode === "lump_sum" ? String(doc.total ?? "") : "",
+      items: splitScopeRows(doc.items, doc.pricing_mode).map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
+      notes: doc.notes,
+      terms: doc.terms,
+    });
+    setEditItem(null);
+    setModal("invoice");
+  };
+
   const changeDocStatus = async (doc, next) => {
     if (!doc || !next || next === doc.status) return;
     if (doc.status === "accepted" && next !== "accepted"
@@ -2483,7 +2509,7 @@ export default function BookkeeperApp() {
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
+      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
     // seed — so a restored draft can never land in the wrong form.
@@ -3411,6 +3437,7 @@ export default function BookkeeperApp() {
     items.push({ key: "onedrive", label: "Save to OneDrive", icon: <Icons.Cloud />, run: () => saveToOneDrive("invoice", inv.id) });
     items.push({ key: "status", label: "Change status…", icon: <Icons.Filter />, run: () => setStatusPick({ doc: inv, anchor }) });
     items.push({ key: "edit", label: "Edit", icon: <Icons.Edit />, run: () => { setEditItem(inv); setModal("invoice"); } });
+    items.push({ key: "duplicate", label: isQuote ? "Duplicate quote" : "Duplicate invoice", icon: <Icons.Plus />, run: () => duplicateDoc(inv) });
     items.push({ key: "delete", label: isQuote ? "Delete quote" : "Delete invoice", icon: <Icons.Trash />, danger: true, run: () => deleteInvoice(inv.id) });
     // The row already shows the primary; repeating it in the menu is noise.
     return items.filter((it) => !(prim && it.key === prim.key));
