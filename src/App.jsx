@@ -235,6 +235,33 @@ const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_S
 // Judged on the document as it stands and used ONLY at the moment of a
 // transition — never on stored state, or opening one of those older records
 // would be refused.
+// Where a sent quote stands. Derived every time from the dates the document
+// already carries — no new status, and nothing to keep in step.
+//
+// Deliberately does NOT depend on sent_at being present. Only 3 of 12 quotes
+// have one, and a stamp written when someone corrects a status by hand can be
+// years off the real send. due_date is on every quote and is what the client was
+// actually told, so expiry hangs off that; sent_at is used for "how long it has
+// been out" when it exists, and the issue date otherwise.
+function quoteFollowUp(q) {
+  if (!q || q.type !== "quote" || q.status !== "sent") return null;
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayDiff = (from) => {
+    const d = new Date(from);
+    if (isNaN(d.getTime())) return null;
+    return Math.round((startOfToday - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  };
+  const outFor = q.sent_at ? dayDiff(q.sent_at) : dayDiff(q.date);
+  const basis = q.sent_at ? "sent" : "issued";
+  let expiredDays = null;
+  if (q.due_date) {
+    const past = dayDiff(q.due_date);
+    if (past !== null && past > 0) expiredDays = past;
+  }
+  return { outFor, basis, expiredDays, expired: expiredDays !== null };
+}
+
 function docGaps(doc) {
   const hasScope = (doc?.items || []).some((i) => String(i?.description || "").trim());
   const hasValue = Number(doc?.total || 0) > 0;
@@ -3478,13 +3505,32 @@ Are you sure you want it ${verb}?`);
         </div>
 
         {openQuotes.length > 0 && (
-          <div className="bk-card-hover" style={{ ...s.card, cursor: "pointer" }} onClick={() => setPage("quotes")}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={s.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div>
                 <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Quotes awaiting a decision</h4>
                 <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{openQuotes.length} sent · {fmt(openQuotes.reduce((sum, q) => sum + Number(q.total || 0), 0))} · all time</div>
               </div>
-              <span style={{ fontSize: 20, color: "#94a3b8" }}>→</span>
+              <button onClick={() => setPage("quotes")} style={s.btnOutline}>View All</button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={s.table}><tbody>
+                {[...openQuotes]
+                  .sort((a, b) => (quoteFollowUp(b)?.outFor ?? 0) - (quoteFollowUp(a)?.outFor ?? 0))
+                  .slice(0, 5).map((q) => {
+                    const fu = quoteFollowUp(q) || {};
+                    return (
+                      <tr key={q.id} onClick={() => { setEditItem(q); setModal("invoice"); }} style={{ cursor: "pointer" }}>
+                        <td style={{ ...s.td, fontWeight: 500 }}>{q.number}<div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>{q.contact_name || q.contact_company || ""}</div></td>
+                        <td style={s.tdMeta}>
+                          {fu.outFor != null ? `${fu.outFor === 0 ? "today" : fu.outFor + " day" + (fu.outFor === 1 ? "" : "s")} ${fu.basis === "sent" ? "since sent" : "since issued"}` : ""}
+                          {fu.expired && <span style={{ display: "block", color: "#92400e", fontWeight: 600 }}>expired {fu.expiredDays} day{fu.expiredDays === 1 ? "" : "s"} ago</span>}
+                        </td>
+                        <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(q.total || 0)}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody></table>
             </div>
           </div>
         )}
@@ -3694,7 +3740,12 @@ Are you sure you want it ${verb}?`);
                     <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                     <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
                     <td style={{ ...s.tdMeta, whiteSpace: "normal" }}>{inv.job || ""}</td>
-                    <td style={s.td}>{statusPill(inv)}</td>
+                    <td style={s.td}>
+                      {statusPill(inv)}
+                      {(() => { const fu = quoteFollowUp(inv); return fu?.expired
+                        ? <span title={`Valid until ${fmtDate(inv.due_date)}`} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>expired</span>
+                        : null; })()}
+                    </td>
                     <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmt(inv.total || 0)}</td>
                     {actionsCell(inv)}
                   </tr>
@@ -3724,7 +3775,12 @@ Are you sure you want it ${verb}?`);
                       <td style={s.tdMeta}>{fmtDate(inv.date)}</td>
                       <td style={{ ...s.td, fontWeight: 600 }}>{inv.number}{inv.stripe_session_id && <span title={`Paid by card — ${fmtNum(inv.paid_amount || inv.total || 0)}${inv.surcharge_amount ? ` (incl. ${fmtNum(inv.surcharge_amount)} surcharge)` : ""}`} style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: "#0d9488", border: "1px solid #99f6e4", borderRadius: 4, padding: "1px 5px", verticalAlign: "middle" }}>CARD</span>}</td>
                       <td style={s.td}>{inv.contact_name || inv.contact_company || "--"}</td>
-                      <td style={s.td}>{statusPill(inv)}</td>
+                      <td style={s.td}>
+                      {statusPill(inv)}
+                      {(() => { const fu = quoteFollowUp(inv); return fu?.expired
+                        ? <span title={`Valid until ${fmtDate(inv.due_date)}`} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>expired</span>
+                        : null; })()}
+                    </td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{fmt(inv.total || 0)}</td>
                       <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: balance === 0 ? "#94a3b8" : "#0f172a" }}>{fmt(balance)}</td>
                       <td style={s.tdMeta}>{fmtDate(inv.due_date)}{dueNote(inv) && <span style={{ display: "block", fontWeight: 600, fontSize: 11, marginTop: 2, color: od > 0 ? "#b91c1c" : "#475569" }}>{dueNote(inv)}</span>}</td>
