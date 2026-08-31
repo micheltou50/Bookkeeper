@@ -3220,7 +3220,10 @@ export default function BookkeeperApp() {
     if (isQuote && !QUOTE_CLOSED.has(inv.status)) items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
     items.push({ key: "email", label: emailConn ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
     if (!isQuote && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "remind", label: "Send payment reminder", icon: <Icons.Bell />, run: () => sendReminderViaResend(inv) });
-    if (!isQuote && inv.pay_token) items.push({ key: "paylink", label: "Copy pay link", icon: <Icons.Link />, run: () => {
+    // Only where the link actually does something: pay-invoice.mjs answers
+    // "Already paid" once the invoice is paid, and a draft has not been issued
+    // to anyone yet.
+    if (!isQuote && inv.pay_token && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "paylink", label: "Copy pay link", icon: <Icons.Link />, run: () => {
       const url = `${API_BASE || "https://bkeeper.netlify.app"}/.netlify/functions/pay-invoice?invoice=${inv.id}&t=${inv.pay_token}`;
       navigator.clipboard?.writeText(url);
       alert("Card payment link copied to clipboard.");
