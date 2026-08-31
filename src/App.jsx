@@ -1689,9 +1689,16 @@ export default function BookkeeperApp() {
   };
 
   const updateInvoice = async (id, updates) => {
-    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode"];
+    // sent_at is here so every send path can record itself, not just the Outlook
+    // one — which is why only 3 of 12 quotes carry a send timestamp. It is
+    // guarded below: the form spreads the whole row on save, so a stale copy
+    // must never be able to blank the value the server wrote.
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at"];
     const dbUpdates = {};
     for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
+    // Only ever set, never cleared. updateInvoice receives the whole form row,
+    // and that row was built from a snapshot taken when the form opened.
+    if ("sent_at" in dbUpdates && !dbUpdates.sent_at) delete dbUpdates.sent_at;
     if ("date" in dbUpdates) dbUpdates.date = dbUpdates.date || null;
     if ("due_date" in dbUpdates) dbUpdates.due_date = dbUpdates.due_date || null;
     if ("paid_date" in dbUpdates) dbUpdates.paid_date = dbUpdates.paid_date || null;
@@ -2230,7 +2237,7 @@ export default function BookkeeperApp() {
       ? `Mark invoice ${inv.number} as Sent?\n\nThis starts due-date tracking and enables the automatic payment reminders.`
       : `Mark quote ${inv.number} as Sent?`;
     if (!window.confirm(msg)) return false;
-    await updateInvoice(inv.id, { status: "sent" });
+    await updateInvoice(inv.id, { status: "sent", sent_at: inv.sent_at || new Date().toISOString() });
     fileIssuedToOneDrive(inv.id); // now issued → move into the project folder
     return true;
   };
@@ -2338,6 +2345,7 @@ Are you sure you want it ${verb}?`);
     // record that only exists here, and a mis-click followed by a correction
     // would destroy it with no undo.
     const patch = { status: next };
+    if (next === "sent" && !doc.sent_at) patch.sent_at = new Date().toISOString();
     if (doc.type !== "quote" && next === "paid") patch.paid_date = doc.paid_date || today();
     await updateInvoice(doc.id, patch);
   };
