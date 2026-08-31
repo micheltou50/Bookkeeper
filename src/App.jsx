@@ -229,6 +229,25 @@ function dueNote(inv) {
 }
 const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES);
 
+// A lump-sum scope used to be stored as ONE row with newlines inside it. The
+// editor now shows one row per printed line, and an <input> silently strips
+// newlines — so a stored blob is split on the way in, or opening an old quote
+// and saving it would flatten the whole scope to its first line.
+// Round-trips exactly: both renderers join the descriptions with a newline and
+// then split on newline again, so N rows and one blob render identically.
+function splitScopeRows(items, pricingMode) {
+  const rows = items || [];
+  if (pricingMode !== "lump_sum" || !rows.some((i) => String(i?.description || "").includes("\n"))) return rows;
+  const out = [];
+  for (const it of rows) {
+    const lines = String(it.description || "").split("\n").filter((l) => l.trim());
+    if (!lines.length) { out.push(it); continue; }
+    // Keep the leading space that carries the sub-item indent.
+    for (const l of lines) out.push({ description: (/^\s/.test(l) ? " " : "") + l.trim(), note: "", qty: 1, rate: "" });
+  }
+  return out.length ? out : rows;
+}
+
 // An invoice settled by card cannot be manually un-paid. pay-invoice.mjs blocks
 // the payment link only while the status is "paid", so un-marking it re-activates
 // the link already sent to the customer, and reminder emails resume. Both the
@@ -2378,7 +2397,7 @@ export default function BookkeeperApp() {
     const seedType = seed.type || defaultType;
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
-      ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
+      ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
       : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
@@ -2421,6 +2440,27 @@ export default function BookkeeperApp() {
     const initialSnapshot = useRef(JSON.stringify(init));
     useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f]);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
+    // Indentation is carried by a single leading space, because that is exactly
+    // what bulletizeScope tests for when it decides between a bullet and a
+    // sub-bullet. Keep it in the text and neither renderer needs to change.
+    const setScopeLine = (idx, text, sub) => updateItem(idx, "description", (sub ? " " : "") + text.replace(/^\s+/, ""));
+    const toggleScopeIndent = (idx) => {
+      const d = f.items[idx]?.description || "";
+      updateItem(idx, "description", /^\s/.test(d) ? d.replace(/^\s+/, "") : " " + d);
+    };
+    // Pasting an old single-blob scope splits it into rows, so the existing way
+    // of working still works and immediately becomes structured.
+    const pasteScopeLines = (e, idx, sub) => {
+      const text = e.clipboardData?.getData("text") || "";
+      if (!text.includes("\n")) return;
+      e.preventDefault();
+      const lines = text.split("\n").filter((l) => l.trim());
+      if (!lines.length) return;
+      const rows = lines.map((l) => ({ description: (/^\s/.test(l) ? " " : (sub ? " " : "")) + l.trim(), note: "", qty: 1, rate: "" }));
+      const items = [...f.items];
+      items.splice(idx, 1, ...rows);
+      setF({ ...f, items });
+    };
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
     const isLump = f.pricing_mode === "lump_sum";
@@ -2456,7 +2496,7 @@ export default function BookkeeperApp() {
     const saveInv = async () => {
       // Guard editing a sent invoice's figures: warn before overwriting the record.
       if (figuresChanged && !window.confirm(`Invoice ${existing.number} was already sent to the client${existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}, and you've changed its figures.\n\nSaving overwrites your record of what was billed. Normally you'd issue a REVISED invoice instead — Cancel, then "Create revised invoice".\n\nSave over the original anyway?`)) return null;
-      const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items };
+      const inv = { ...f, total, items: f.items };
       let saved;
       // Gate on success: updateInvoice/addInvoice return falsy on failure, so a
       // failed save yields saved=null and saveAndSend won't email a stale doc.
@@ -2500,7 +2540,7 @@ export default function BookkeeperApp() {
         business_id: biz,
         name: name.trim(),
         pricing_mode: f.pricing_mode || "itemised",
-        items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
+        items: f.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
         lump_amount: isLump ? (Number(f.lump_amount) || 0) : null,
         notes: f.notes || null,
         terms: f.terms || null,
@@ -2515,8 +2555,7 @@ export default function BookkeeperApp() {
     // items, contact and project. The quote is preserved.
     const convertToInvoice = async () => {
       if (!window.confirm(`Convert quote ${f.number} to an invoice?\n\nThe quote is marked Accepted, and a new draft invoice opens — pre-filled with these line items and linked to the same project.`)) return;
-      const itemsForLump = [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }];
-      await updateInvoice(existing.id, { ...f, total, items: isLump ? itemsForLump : f.items });
+      await updateInvoice(existing.id, { ...f, total, items: f.items });
       const proj = await acceptQuote({ ...existing, ...f, total });
       setInvoiceSeed({
         type: "invoice",
@@ -2525,7 +2564,7 @@ export default function BookkeeperApp() {
         projectName: proj ? projectLabel(proj) : f.job,
         pricing_mode: f.pricing_mode || "itemised",
         lump_amount: isLump ? String(total) : "",
-        items: isLump ? itemsForLump : f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
+        items: f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
       });
       setEditItem(null);
       setModal("invoice");
@@ -2647,8 +2686,26 @@ export default function BookkeeperApp() {
           <label style={s.label}>{isLump ? "Scope of Works" : "Line Items"}</label>
           {isLump ? (
             <>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>One deliverable per line — press Enter for each new line. Indent a line (start with spaces) to make it a sub-item. Bullets are added automatically. The price is the single lump sum below.</div>
-              <textarea value={f.items[0]?.description || ""} onChange={(e) => updateItem(0, "description", e.target.value)} placeholder={"Redrawing the plans for CC approval with:\n   RLs to the floor areas\n   Wall Schedule\n   Window Schedule"} style={{ ...s.input, fontSize: 12, minHeight: 150, resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }} />
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>One deliverable per line. Use the bullet to make a line a sub-item. Paste a whole scope and it splits into lines. The price is the single lump sum below.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto", padding: "2px 2px 6px" }}>
+                {f.items.map((item, idx) => {
+                  const sub = /^\s/.test(item.description || "");
+                  return (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 28px", gap: 6, alignItems: "center" }}>
+                      <button type="button" onClick={() => toggleScopeIndent(idx)} title={sub ? "Make a heading" : "Make a sub-item"}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, border: "1px solid #e2e8f0", background: sub ? "#f1f5f9" : "#ffffff", color: "#64748b", cursor: "pointer", fontSize: 13 }}>{sub ? "◦" : "•"}</button>
+                      <input value={(item.description || "").replace(/^\s+/, "")}
+                        onChange={(e) => setScopeLine(idx, e.target.value, sub)}
+                        onPaste={(e) => pasteScopeLines(e, idx, sub)}
+                        placeholder={idx === 0 ? "Production of the following documentation:" : "Site Plan"}
+                        style={{ ...s.input, fontSize: 13, paddingLeft: sub ? 22 : 12 }} />
+                      {f.items.length > 1 && <button type="button" onClick={() => removeItem(idx)} title="Remove line"
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13 }}>✕</button>}
+                    </div>
+                  );
+                })}
+              </div>
+              <button type="button" onClick={addItem} style={{ ...s.btnOutline, marginTop: 6 }}>+ Add line</button>
             </>
           ) : (
             <>
