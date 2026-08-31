@@ -229,6 +229,19 @@ function dueNote(inv) {
 }
 const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES);
 
+// Overdue had two definitions that disagreed. The dashboards derived it from
+// daysOverdue(), which needs a due date, so an invoice flagged overdue with no
+// due date was invisible to them. The list tile read the stored status, so a
+// sent invoice that lapsed while the page was open was invisible to it — the
+// server only flips the status on load.
+// One rule now, used by both: the status says overdue, or it is sent and past
+// its due date. Anything that satisfies either is overdue everywhere.
+const isOverdue = (inv) => {
+  if (!inv || inv.type === "quote") return false;
+  if (inv.status === "overdue") return true;
+  return inv.status === "sent" && !!inv.due_date && daysOverdue(inv) > 0;
+};
+
 // What is missing from a document, for the guards below. Two accepted quotes in
 // the system are worth $0.00 with no scope and both created projects, so their
 // zeros sit in project contract values and left-to-invoice.
@@ -3221,8 +3234,12 @@ Are you sure you want it ${verb}?`);
     // Job/project number: shown read-only in view mode; editable in edit mode
     // (new projects pre-fill the next number in the business-wide sequence).
     const projNumber = existing ? (existing.job_number || "—") : f.job_number;
-    const t = existing ? projectTotals(existing, invoices) : { contract: 0, invoiced: 0, paid: 0, remaining: 0, outstanding: 0, leftToInvoice: 0 };
-    const consultants = existing ? projectConsultants(existing, invoices) : [];
+    // divInvoices, not invoices: these read every division's documents, so the
+    // drawer's Contract/Invoiced/Paid could include MT Management figures while
+    // the Projects row for the same project excluded them. Click a row and the
+    // numbers changed. Invisible today because every document is mworx.
+    const t = existing ? projectTotals(existing, divInvoices) : { contract: 0, invoiced: 0, paid: 0, remaining: 0, outstanding: 0, leftToInvoice: 0 };
+    const consultants = existing ? projectConsultants(existing, divInvoices) : [];
     const pct = t.contract > 0 ? Math.min(100, Math.round((t.paid / t.contract) * 100)) : 0;
     const save = async () => {
       // Manual number is allowed, but warn if it collides with another project.
@@ -3505,7 +3522,7 @@ Are you sure you want it ${verb}?`);
     const fyRealInvoices = fyInvoices.filter((i) => i.type !== "quote");
     const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
     const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
+    const overdueInvoices = unpaid.filter(isOverdue).sort((a, b) => daysOverdue(b) - daysOverdue(a));
     const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
     // Was "paid this month", which a financial year can only ever contain one of;
     // under any past FY it read $0.00 permanently. Anchored on the issue date, the
@@ -3767,7 +3784,9 @@ Are you sure you want it ${verb}?`);
     const isDebtorKey = (k) => isQuoteList ? k === "sent" : (k === "outstanding" || k === "sent" || k === "overdue");
     const debtorFilter = isDebtorKey(filter);
     const filtered = (debtorFilter ? allTime : sorted).filter((i) => {
-      if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; } else if (filter !== "all" && i.status !== filter) return false;
+      if (filter === "outstanding") { if (i.status !== "sent" && i.status !== "overdue") return false; }
+      else if (filter === "overdue" && !isQuoteList) { if (!isOverdue(i)) return false; }
+      else if (filter !== "all" && i.status !== filter) return false;
       if (jobFilter && i.job !== jobFilter) return false;
       if (search && !(i.number || "").toLowerCase().includes(search.toLowerCase()) && !(i.contact_name || "").toLowerCase().includes(search.toLowerCase())) return false;
       return true;
@@ -3777,12 +3796,12 @@ Are you sure you want it ${verb}?`);
     // number on the pill always matches the rows behind it.
     const tabs = statusTabs.map((st) => {
       const src = isDebtorKey(st) ? allTime : sorted;
-      return { key: st, label: st === "all" || st === "outstanding" ? st.charAt(0).toUpperCase() + st.slice(1) : statusInfo(st).label, divideBefore: st === statusOnlyTabs[0], count: st === "all" ? sorted.length : st === "outstanding" ? src.filter((i) => i.status === "sent" || i.status === "overdue").length : src.filter((i) => i.status === st).length };
+      return { key: st, label: st === "all" || st === "outstanding" ? st.charAt(0).toUpperCase() + st.slice(1) : statusInfo(st).label, divideBefore: st === statusOnlyTabs[0], count: st === "all" ? sorted.length : st === "outstanding" ? src.filter((i) => i.status === "sent" || i.status === "overdue").length : (st === "overdue" && !isQuoteList) ? src.filter(isOverdue).length : src.filter((i) => i.status === st).length };
     });
     const fyNote = fy === ALL_FY ? null : fyLabel(fy);
     const tiles = isQuoteList
       ? [{ label: "Total quoted", value: fmt(sumTotals(sorted.filter((i) => i.status !== "superseded"))), note: fyNote }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981", note: fyNote }, { label: "Awaiting", value: fmt(sumTotals(allTime.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6", note: "all time" }]
-      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))), note: fyNote }, { label: "Outstanding", value: fmt(sumTotals(allTime.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6", note: "all time" }, { label: "Overdue", value: fmt(sumTotals(allTime.filter((i) => i.status === "overdue"))), color: "#ef4444", note: "all time" }];
+      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))), note: fyNote }, { label: "Outstanding", value: fmt(sumTotals(allTime.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6", note: "all time" }, { label: "Overdue", value: fmt(sumTotals(allTime.filter(isOverdue))), color: "#ef4444", note: "all time" }];
 
     // Invoices: MYOB-style sortable columns + bulk selection. Quotes keep the
     // original date-sorted list untouched.
@@ -4117,7 +4136,7 @@ Are you sure you want it ${verb}?`);
     const fyRealInvoices = fyInvoices.filter((i) => i.type !== "quote");
     const unpaid = realInvoices.filter((i) => i.status === "sent" || i.status === "overdue");
     const outstanding = unpaid.reduce((sum, i) => sum + Number(i.total || 0), 0);
-    const overdueInvoices = unpaid.filter((i) => daysOverdue(i) > 0).sort((a, b) => daysOverdue(b) - daysOverdue(a));
+    const overdueInvoices = unpaid.filter(isOverdue).sort((a, b) => daysOverdue(b) - daysOverdue(a));
     const overdueTotal = overdueInvoices.reduce((sum, i) => sum + Number(i.total || 0), 0);
     const paidThisFY = fyRealInvoices.filter((i) => i.status === "paid");
     const activeProjects = fyJobs.filter((p) => (p.status || "active") === "active");
