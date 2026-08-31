@@ -229,6 +229,24 @@ function dueNote(inv) {
 }
 const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES);
 
+// What is missing from a document, for the guards below. Two accepted quotes in
+// the system are worth $0.00 with no scope and both created projects, so their
+// zeros sit in project contract values and left-to-invoice.
+// Judged on the document as it stands and used ONLY at the moment of a
+// transition — never on stored state, or opening one of those older records
+// would be refused.
+function docGaps(doc) {
+  const hasScope = (doc?.items || []).some((i) => String(i?.description || "").trim());
+  const hasValue = Number(doc?.total || 0) > 0;
+  return { hasScope, hasValue, empty: !hasScope && !hasValue, partial: hasScope !== hasValue };
+}
+function docGapText(g) {
+  if (g.empty) return "no scope of works and no amount";
+  if (!g.hasScope) return "no scope of works";
+  if (!g.hasValue) return "an amount of $0.00";
+  return "";
+}
+
 // A lump-sum scope used to be stored as ONE row with newlines inside it. The
 // editor now shows one row per printed line, and an <input> silently strips
 // newlines — so a stored blob is split on the way in, or opening an old quote
@@ -1879,6 +1897,7 @@ export default function BookkeeperApp() {
   // one from the quote if needed). The project contract value is computed as the sum
   // of all accepted quotes, so there's nothing to seed here.
   const acceptQuote = async (quote) => {
+    if (!guardIssueOrAccept(quote, "accept")) return null;
     let projectId = quote.project_id;
     let project = projectId ? jobs.find((j) => j.id === projectId) : null;
     if (!project) {
@@ -2253,6 +2272,25 @@ export default function BookkeeperApp() {
   // terms, its own number and today's date. The source is not touched — no
   // status change, no link written. Superseding the original stays a manual
   // decision, which is now one click on the status pill.
+  // Refuse to issue or accept a document that has nothing in it, and ask before
+  // one that is only half filled in. Returns true to proceed.
+  const guardIssueOrAccept = (doc, action) => {
+    if (!doc) return false;
+    const g = docGaps(doc);
+    if (!g.empty && !g.partial) return true;
+    const verb = action === "accept" ? "accepted" : "issued";
+    const label = doc.number || (doc.type === "quote" ? "This quote" : "This invoice");
+    if (g.empty) {
+      alert(`${label} has ${docGapText(g)}, so it cannot be ${verb}.
+
+Add the scope and the amount first.`);
+      return false;
+    }
+    return window.confirm(`${label} has ${docGapText(g)}.
+
+Are you sure you want it ${verb}?`);
+  };
+
   const duplicateDoc = (doc) => {
     if (!doc) return;
     setInvoiceSeed({
@@ -2277,6 +2315,7 @@ export default function BookkeeperApp() {
 
   const changeDocStatus = async (doc, next) => {
     if (!doc || !next || next === doc.status) return;
+    if ((next === "accepted" || next === "sent") && !guardIssueOrAccept(doc, next === "accepted" ? "accept" : "issue")) return;
     if (doc.status === "accepted" && next !== "accepted"
       && !window.confirm(`${doc.number} is currently Accepted.\n\nChanging it to ${statusInfo(next).label} does not undo the project it created, the filed PDF, or any invoice already raised against it.\n\nChange the status anyway?`)) return;
     if (doc.type !== "quote" && doc.status === "paid" && next !== "paid") {
