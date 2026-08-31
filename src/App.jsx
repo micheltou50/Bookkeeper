@@ -2298,6 +2298,25 @@ Add the scope and the amount first.`);
 Are you sure you want it ${verb}?`);
   };
 
+  // The client a project belongs to: an attached party marked client first,
+  // then whoever the project itself is linked to. Used to fill the contact in
+  // when a project is picked, so the quote is addressed without a second lookup.
+  const projectClient = (project) => {
+    if (!project) return null;
+    const party = jobParties.find((p) => p.job_id === project.id && p.role === "client")
+      || jobParties.find((p) => p.job_id === project.id);
+    const byParty = party && contacts.find((c) => c.id === party.contact_id);
+    if (byParty) return byParty;
+    const linked = contacts.find((c) => c.id === project.contact_id);
+    if (linked) return linked;
+    // Older projects predate the parties list, so fall back to whoever the most
+    // recent document on the project was addressed to.
+    const lastDoc = divInvoices
+      .filter((d) => d.project_id === project.id && (d.contact_name || "").trim())
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+    return lastDoc ? (contacts.find((c) => (c.name || c.company) === lastDoc.contact_name) || { name: lastDoc.contact_name, email: lastDoc.contact_email, company: lastDoc.contact_company, abn: lastDoc.contact_abn, address: lastDoc.contact_address, phone: lastDoc.contact_phone }) : null;
+  };
+
   const duplicateDoc = (doc) => {
     if (!doc) return;
     setInvoiceSeed({
@@ -2670,6 +2689,10 @@ Are you sure you want it ${verb}?`);
       // Guard editing a sent invoice's figures: warn before overwriting the record.
       if (figuresChanged && !window.confirm(`Invoice ${existing.number} was already sent to the client${existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}, and you've changed its figures.\n\nSaving overwrites your record of what was billed. Normally you'd issue a REVISED invoice instead — Cancel, then "Create revised invoice".\n\nSave over the original anyway?`)) return null;
       const inv = { ...f, total, items: f.items };
+      const statusChanged = existing && existing.status !== f.status;
+      if (statusChanged && (f.status === "sent" || f.status === "accepted")
+        && !guardIssueOrAccept({ ...existing, ...inv }, f.status === "accepted" ? "accept" : "issue")) return null;
+      if (statusChanged && f.status === "sent" && !existing.sent_at) inv.sent_at = new Date().toISOString();
       let saved;
       // Gate on success: updateInvoice/addInvoice return falsy on failure, so a
       // failed save yields saved=null and saveAndSend won't email a stale doc.
@@ -2778,6 +2801,16 @@ Are you sure you want it ${verb}?`);
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => updateDate(e.target.value)} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}{invOverdue > 0 && <span style={{ color: "#ef4444", fontWeight: 600, textTransform: "none", marginLeft: 6 }}>· {invOverdue} {invOverdue === 1 ? "day" : "days"} overdue</span>}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
         </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Project</label>
+          <div style={{ display: "flex", gap: 4 }}>
+            <select value={f.project_id || ""} onChange={(e) => { const p = jobs.find((j) => j.id === e.target.value); const c = p ? projectClient(p) : null; setF({ ...f, project_id: e.target.value || "", job: p ? projectLabel(p) : (e.target.value ? f.job : ""), ...(c && !f.contact_name ? { contact_name: c.name || c.company || "", contact_email: c.email || "", contact_company: c.company || "", contact_abn: c.abn || "", contact_address: c.address || "", contact_phone: c.phone || "" } : {}) }); }} style={{ ...s.select, flex: 1 }}>
+              <option value="">No project</option>
+              {sortedJobs.map((j) => <option key={j.id} value={j.id}>{(j.job_number ? j.job_number + " — " : "") + projectLabel(j)}</option>)}
+            </select>
+            <button type="button" onClick={() => setProjectAdd((v) => !v)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="New project">+</button>
+          </div>
+        </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}>
             <label style={s.label}>Contact</label>
@@ -2827,16 +2860,6 @@ Are you sure you want it ${verb}?`);
             </div>
           </div>
         )}
-        <div style={{ marginBottom: 12 }}>
-          <label style={s.label}>Project</label>
-          <div style={{ display: "flex", gap: 4 }}>
-            <select value={f.project_id || ""} onChange={(e) => { const p = jobs.find((j) => j.id === e.target.value); setF({ ...f, project_id: e.target.value || "", job: p ? projectLabel(p) : (e.target.value ? f.job : "") }); }} style={{ ...s.select, flex: 1 }}>
-              <option value="">No project</option>
-              {sortedJobs.map((j) => <option key={j.id} value={j.id}>{projectLabel(j)}</option>)}
-            </select>
-            <button type="button" onClick={() => setProjectAdd((v) => !v)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="New project">+</button>
-          </div>
-        </div>
         {projectAdd && (
           <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>New Project</div>
