@@ -229,6 +229,43 @@ function dueNote(inv) {
 }
 const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_STATUSES);
 
+// What is missing from a document, for the guards below. Two accepted quotes in
+// the system are worth $0.00 with no scope and both created projects, so their
+// zeros sit in project contract values and left-to-invoice.
+// Judged on the document as it stands and used ONLY at the moment of a
+// transition — never on stored state, or opening one of those older records
+// would be refused.
+function docGaps(doc) {
+  const hasScope = (doc?.items || []).some((i) => String(i?.description || "").trim());
+  const hasValue = Number(doc?.total || 0) > 0;
+  return { hasScope, hasValue, empty: !hasScope && !hasValue, partial: hasScope !== hasValue };
+}
+function docGapText(g) {
+  if (g.empty) return "no scope of works and no amount";
+  if (!g.hasScope) return "no scope of works";
+  if (!g.hasValue) return "an amount of $0.00";
+  return "";
+}
+
+// A lump-sum scope used to be stored as ONE row with newlines inside it. The
+// editor now shows one row per printed line, and an <input> silently strips
+// newlines — so a stored blob is split on the way in, or opening an old quote
+// and saving it would flatten the whole scope to its first line.
+// Round-trips exactly: both renderers join the descriptions with a newline and
+// then split on newline again, so N rows and one blob render identically.
+function splitScopeRows(items, pricingMode) {
+  const rows = items || [];
+  if (pricingMode !== "lump_sum" || !rows.some((i) => String(i?.description || "").includes("\n"))) return rows;
+  const out = [];
+  for (const it of rows) {
+    const lines = String(it.description || "").split("\n").filter((l) => l.trim());
+    if (!lines.length) { out.push(it); continue; }
+    // Keep the leading space that carries the sub-item indent.
+    for (const l of lines) out.push({ description: (/^\s/.test(l) ? " " : "") + l.trim(), note: "", qty: 1, rate: "" });
+  }
+  return out.length ? out : rows;
+}
+
 // An invoice settled by card cannot be manually un-paid. pay-invoice.mjs blocks
 // the payment link only while the status is "paid", so un-marking it re-activates
 // the link already sent to the customer, and reminder emails resume. Both the
@@ -268,6 +305,64 @@ function SheetItem({ icon, label, danger, isMobile, trailing, onClick }) {
       {label}
       {trailing}
     </button>
+  );
+}
+
+// Pick reusable scope lines. Rendered as a centred dialog rather than an
+// anchored popover: it lives inside the invoice modal, which scrolls, and a
+// fixed-position panel anchored to a button would detach from it.
+function ScopeLibrary({ lines, isMobile, s, onClose, onAdd }) {
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState(() => new Set());
+  const norm = q.trim().toLowerCase();
+  const shown = (lines || []).filter((l) => !norm || l.text.toLowerCase().includes(norm) || String(l.category || "").toLowerCase().includes(norm));
+  const cats = [...new Set(shown.map((l) => l.category || "Other"))];
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const addAll = (ids) => setPicked((p) => { const n = new Set(p); ids.forEach((i) => n.add(i)); return n; });
+  const chosen = (lines || []).filter((l) => picked.has(l.id));
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 95 }} />
+      <div style={{ position: "fixed", zIndex: 96, background: "#fff", display: "flex", flexDirection: "column",
+        ...(isMobile
+          ? { left: 0, right: 0, bottom: 0, maxHeight: "85vh", borderRadius: "16px 16px 0 0" }
+          : { top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 460, maxWidth: "94vw", maxHeight: "78vh", borderRadius: 14, boxShadow: "0 24px 60px -18px rgba(16,24,40,0.45)" }) }}>
+        <div style={{ padding: "14px 16px 10px", borderBottom: "1px solid #e2e8f0" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>Add from library</div>
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search lines..." style={{ ...s.input, fontSize: 13 }} />
+        </div>
+        <div style={{ overflowY: "auto", padding: "6px 8px", flex: 1 }}>
+          {shown.length === 0 && <div style={{ padding: 26, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Nothing matches "{q}"</div>}
+          {cats.map((cat) => {
+            const inCat = shown.filter((l) => (l.category || "Other") === cat);
+            return (
+              <div key={cat} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px 4px" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: "#94a3b8" }}>{cat}</span>
+                  <button type="button" onClick={() => addAll(inCat.map((l) => l.id))} style={{ marginLeft: "auto", background: "none", border: "none", color: "#3b82f6", fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "8px 10px", borderRadius: 7 }}>Add all {inCat.length}</button>
+                </div>
+                {inCat.map((l) => (
+                  <label key={l.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 10px", minHeight: 40, boxSizing: "border-box", borderRadius: 8, cursor: "pointer", background: picked.has(l.id) ? "#eff6ff" : "transparent" }}>
+                    <input type="checkbox" checked={picked.has(l.id)} onChange={() => toggle(l.id)} style={{ width: 16, height: 16, marginTop: 2, accentColor: "#3b82f6", cursor: "pointer", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: "#334155", lineHeight: 1.45, paddingLeft: l.kind === "item" ? 10 : 0 }}>
+                      {l.text}
+                      {l.kind === "caveat" && <span style={{ marginLeft: 6, fontSize: 10, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "1px 5px" }}>note</span>}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "10px 14px calc(env(safe-area-inset-bottom) + 12px)", borderTop: "1px solid #e2e8f0" }}>
+          <button type="button" onClick={onClose} style={{ ...s.btnOutline, padding: "12px 18px" }}>Cancel</button>
+          <button type="button" disabled={!chosen.length} onClick={() => onAdd(chosen)}
+            style={{ ...s.btn("#3b82f6", true), flex: 1, justifyContent: "center", padding: "12px 18px", opacity: chosen.length ? 1 : 0.5, cursor: chosen.length ? "pointer" : "default" }}>
+            {chosen.length ? `Add ${chosen.length} line${chosen.length === 1 ? "" : "s"}` : "Select lines to add"}
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -346,7 +441,7 @@ function fyChoices(rows, selected) {
   if (selected && selected !== ALL_FY) years.add(selected);
   return [...years].sort((a, b) => Number(b) - Number(a));
 }
-const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid for 30 days from the date of issue. Pricing may be subject to change after this period.
+const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid until the "Valid Until" date shown on the first page. Pricing may be subject to change after that date.
 2. Acceptance: Work commences upon written acceptance of this quote.
 3. Fees: Fees are as quoted above.
 4. Payment: Fees are invoiced on agreed milestones or on completion and are due within 7 days of each invoice. Final drawings and lodgement of documents are released upon full payment of all invoices.
@@ -366,8 +461,11 @@ function getDefaultDocTerms(type) { return type === "quote" ? DEFAULT_QUOTE_TERM
 
 // Printed acceptance form for quotes: the client fills in their invoicing details
 // and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
-const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
+const acceptanceBlock = (inv) => `<div style="margin-top:30px">
   <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
+  <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
+    Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmt(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
+  </div>
   <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
   <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
@@ -665,13 +763,14 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
   const isLump = inv.pricing_mode === "lump_sum";
 
   const lumpScope = (inv.items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
+  const lumpNotes = (inv.items || []).map((i) => i.note || "").filter((n) => n.trim()).join("\n");
 
   const itemsTable = isLump
     ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <thead><tr style="background:#f8fafc">
           <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
         </tr></thead>
-        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}</td></tr></tbody>
+        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}${lumpNotes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb;font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${lumpNotes}</div>` : ""}</td></tr></tbody>
       </table>`
     : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <thead><tr style="background:#f8fafc">
@@ -708,7 +807,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       </table>
     </div>` : `
     <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:14px 20px;margin-top:24px">
-      <div style="font-size:11px;color:#0f766e;line-height:1.6">This quote is valid for 30 days from the date of issue. Payment details will be provided upon acceptance.</div>
+      <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
     </div>`;
 
   return `<div style="width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column">
@@ -719,7 +818,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
         <div style="margin-top:10px">
           ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
           <div style="font-size:10px;color:#6b7280;line-height:1.6">
-            ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+            ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
           </div>
         </div>
       </div>
@@ -770,7 +869,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
     ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
       ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
       <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
-      ${isQuote ? ACCEPTANCE_BLOCK : ""}
+      ${isQuote ? acceptanceBlock(inv) : ""}
     </div>` : ""}
 
     <div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
@@ -822,7 +921,7 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#eef2f5", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
-        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 4 }}><Icons.X /></button>
+        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 0, width: 32, height: 32, justifyContent: "center" }}><Icons.X /></button>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
         {!isMobile && <button onClick={printDoc} style={{ ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
         <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {pdfLoading === inv.id ? "..." : "Download PDF"}</button>
@@ -869,7 +968,7 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
       <div style={{ background: "#fff", width: isMobile ? "100%" : 560, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", borderRadius: isMobile ? "16px 16px 0 0" : 14, boxShadow: "0 20px 60px -15px rgba(16,24,40,0.4)", padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Send {docType} {inv.number}</h3>
-          <button onClick={onClose} disabled={sending} style={{ background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
+          <button onClick={onClose} disabled={sending} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 8, background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
         </div>
         <div style={{ marginBottom: 12 }}><label style={lbl}>To</label><input value={to} onChange={(e) => setTo(e.target.value)} style={inp} placeholder="client@example.com" /></div>
         <div style={{ marginBottom: 12 }}><label style={lbl}>Subject</label><input value={subject} onChange={(e) => setSubject(e.target.value)} style={inp} /></div>
@@ -990,7 +1089,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
-        <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        <button onClick={() => setModal(null)} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
       </div>
       <div style={{ marginBottom: 16 }}>
         <label style={s.label}>Logo</label>
@@ -1085,8 +1184,8 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
           <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
             <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
             <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{t.pricing_mode === "lump_sum" ? `Lump sum${t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}` : "Itemised"}</span>
-            <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-            <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+            <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Edit /></button>
+            <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Trash /></button>
           </div>
         ))}
         </>
@@ -1152,7 +1251,7 @@ function ContactForm({ existing, s, accent, setModal, setEditItem, addContact, u
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
-        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
       </div>
       <div style={s.grid2}>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
@@ -1253,6 +1352,9 @@ export default function BookkeeperApp() {
   const [jobs, setJobs] = useState([]);
   const [jobParties, setJobParties] = useState([]); // bk_job_parties rows for this business's projects
   const [quoteTemplates, setQuoteTemplates] = useState([]);
+  // The reusable scope lines. One row = one printed line, so "Site Plan" is
+  // stored once and used by every DA, CC and CDC quote that needs it.
+  const [scopeLines, setScopeLines] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
 
@@ -1347,13 +1449,14 @@ export default function BookkeeperApp() {
     if (!session) return;
     setLoading(true);
     try {
-    const [cRes, iRes, pRes, jRes, eRes, qtRes] = await Promise.all([
+    const [cRes, iRes, pRes, jRes, eRes, qtRes, slRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
       supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
       supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
+      supabase.from("bk_scope_lines").select("*").eq("business_id", businessId).eq("archived", false).order("sort_order"),
     ]);
 
     const loadedInvoices = iRes.data || [];
@@ -1382,6 +1485,7 @@ export default function BookkeeperApp() {
     setJobs(loadedJobs);
     setJobParties(loadedParties);
     setQuoteTemplates(qtRes.data || []);
+    setScopeLines(slRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
     setEmailConn(eRes.data || null);
     setLoading(false);
@@ -1585,9 +1689,16 @@ export default function BookkeeperApp() {
   };
 
   const updateInvoice = async (id, updates) => {
-    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode"];
+    // sent_at is here so every send path can record itself, not just the Outlook
+    // one — which is why only 3 of 12 quotes carry a send timestamp. It is
+    // guarded below: the form spreads the whole row on save, so a stale copy
+    // must never be able to blank the value the server wrote.
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at"];
     const dbUpdates = {};
     for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
+    // Only ever set, never cleared. updateInvoice receives the whole form row,
+    // and that row was built from a snapshot taken when the form opened.
+    if ("sent_at" in dbUpdates && !dbUpdates.sent_at) delete dbUpdates.sent_at;
     if ("date" in dbUpdates) dbUpdates.date = dbUpdates.date || null;
     if ("due_date" in dbUpdates) dbUpdates.due_date = dbUpdates.due_date || null;
     if ("paid_date" in dbUpdates) dbUpdates.paid_date = dbUpdates.paid_date || null;
@@ -1793,6 +1904,7 @@ export default function BookkeeperApp() {
   // one from the quote if needed). The project contract value is computed as the sum
   // of all accepted quotes, so there's nothing to seed here.
   const acceptQuote = async (quote) => {
+    if (!guardIssueOrAccept(quote, "accept")) return null;
     let projectId = quote.project_id;
     let project = projectId ? jobs.find((j) => j.id === projectId) : null;
     if (!project) {
@@ -2125,7 +2237,7 @@ export default function BookkeeperApp() {
       ? `Mark invoice ${inv.number} as Sent?\n\nThis starts due-date tracking and enables the automatic payment reminders.`
       : `Mark quote ${inv.number} as Sent?`;
     if (!window.confirm(msg)) return false;
-    await updateInvoice(inv.id, { status: "sent" });
+    await updateInvoice(inv.id, { status: "sent", sent_at: inv.sent_at || new Date().toISOString() });
     fileIssuedToOneDrive(inv.id); // now issued → move into the project folder
     return true;
   };
@@ -2142,8 +2254,94 @@ export default function BookkeeperApp() {
   // "accepted" is confirmed: accepting a quote creates or promotes a project,
   // files the PDF and may have raised a deposit invoice, and none of that is
   // undone here.
+  // Save a line the user has typed back into the library, so a phrase is typed
+  // once and picked thereafter. Category is asked for in the same step rather
+  // than left blank, or the picker degrades into one long list.
+  const addScopeLine = async ({ text, kind, category }) => {
+    const clean = String(text || "").trim();
+    if (!clean) return null;
+    if (scopeLines.some((l) => l.text.trim().toLowerCase() === clean.toLowerCase())) {
+      alert("That line is already in the library.");
+      return null;
+    }
+    const row = {
+      user_id: session.user.id, business_id: biz, text: clean, kind: kind || "item",
+      category: category || "Other",
+      sort_order: (scopeLines.reduce((m, l) => Math.max(m, l.sort_order || 0), 0) || 0) + 10,
+    };
+    const { ok, data } = await sbInsert("bk_scope_lines", row, "save scope line");
+    if (!ok || !data) return null;
+    setScopeLines((prev) => [...prev, data].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)));
+    return data;
+  };
+
+  // Copy a document into a new draft: same client, project, scope, notes and
+  // terms, its own number and today's date. The source is not touched — no
+  // status change, no link written. Superseding the original stays a manual
+  // decision, which is now one click on the status pill.
+  // Refuse to issue or accept a document that has nothing in it, and ask before
+  // one that is only half filled in. Returns true to proceed.
+  const guardIssueOrAccept = (doc, action) => {
+    if (!doc) return false;
+    const g = docGaps(doc);
+    if (!g.empty && !g.partial) return true;
+    const verb = action === "accept" ? "accepted" : "issued";
+    const label = doc.number || (doc.type === "quote" ? "This quote" : "This invoice");
+    if (g.empty) {
+      alert(`${label} has ${docGapText(g)}, so it cannot be ${verb}.
+
+Add the scope and the amount first.`);
+      return false;
+    }
+    return window.confirm(`${label} has ${docGapText(g)}.
+
+Are you sure you want it ${verb}?`);
+  };
+
+  // The client a project belongs to: an attached party marked client first,
+  // then whoever the project itself is linked to. Used to fill the contact in
+  // when a project is picked, so the quote is addressed without a second lookup.
+  const projectClient = (project) => {
+    if (!project) return null;
+    const party = jobParties.find((p) => p.job_id === project.id && p.role === "client")
+      || jobParties.find((p) => p.job_id === project.id);
+    const byParty = party && contacts.find((c) => c.id === party.contact_id);
+    if (byParty) return byParty;
+    const linked = contacts.find((c) => c.id === project.contact_id);
+    if (linked) return linked;
+    // Older projects predate the parties list, so fall back to whoever the most
+    // recent document on the project was addressed to.
+    const lastDoc = divInvoices
+      .filter((d) => d.project_id === project.id && (d.contact_name || "").trim())
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+    return lastDoc ? (contacts.find((c) => (c.name || c.company) === lastDoc.contact_name) || { name: lastDoc.contact_name, email: lastDoc.contact_email, company: lastDoc.contact_company, abn: lastDoc.contact_abn, address: lastDoc.contact_address, phone: lastDoc.contact_phone }) : null;
+  };
+
+  const duplicateDoc = (doc) => {
+    if (!doc) return;
+    setInvoiceSeed({
+      type: doc.type === "quote" ? "quote" : "invoice",
+      contact_name: doc.contact_name || "",
+      contact_email: doc.contact_email || "",
+      contact_company: doc.contact_company || "",
+      contact_abn: doc.contact_abn || "",
+      contact_address: doc.contact_address || "",
+      contact_phone: doc.contact_phone || "",
+      project_id: doc.project_id || "",
+      projectName: doc.job || "",
+      pricing_mode: doc.pricing_mode || "lump_sum",
+      lump_amount: doc.pricing_mode === "lump_sum" ? String(doc.total ?? "") : "",
+      items: splitScopeRows(doc.items, doc.pricing_mode).map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
+      notes: doc.notes,
+      terms: doc.terms,
+    });
+    setEditItem(null);
+    setModal("invoice");
+  };
+
   const changeDocStatus = async (doc, next) => {
     if (!doc || !next || next === doc.status) return;
+    if ((next === "accepted" || next === "sent") && !guardIssueOrAccept(doc, next === "accepted" ? "accept" : "issue")) return;
     if (doc.status === "accepted" && next !== "accepted"
       && !window.confirm(`${doc.number} is currently Accepted.\n\nChanging it to ${statusInfo(next).label} does not undo the project it created, the filed PDF, or any invoice already raised against it.\n\nChange the status anyway?`)) return;
     if (doc.type !== "quote" && doc.status === "paid" && next !== "paid") {
@@ -2166,6 +2364,7 @@ export default function BookkeeperApp() {
     // record that only exists here, and a mis-click followed by a correction
     // would destroy it with no undo.
     const patch = { status: next };
+    if (next === "sent" && !doc.sent_at) patch.sent_at = new Date().toISOString();
     if (doc.type !== "quote" && next === "paid") patch.paid_date = doc.paid_date || today();
     await updateInvoice(doc.id, patch);
   };
@@ -2375,8 +2574,8 @@ export default function BookkeeperApp() {
     const seedType = seed.type || defaultType;
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
-      ? { ...existing, pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seedContact?.email || "", contact_company: seedContact?.company || "", contact_abn: seedContact?.abn || "", contact_address: seedContact?.address || "", contact_phone: seedContact?.phone || "", job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || "itemised", lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
+      ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
+      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
     // seed — so a restored draft can never land in the wrong form.
@@ -2418,6 +2617,42 @@ export default function BookkeeperApp() {
     const initialSnapshot = useRef(JSON.stringify(init));
     useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f]);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
+    // Indentation is carried by a single leading space, because that is exactly
+    // what bulletizeScope tests for when it decides between a bullet and a
+    // sub-bullet. Keep it in the text and neither renderer needs to change.
+    const setScopeLine = (idx, text, sub) => updateItem(idx, "description", (sub ? " " : "") + text.replace(/^\s+/, ""));
+    const [libOpen, setLibOpen] = useState(false);
+    const [saveLine, setSaveLine] = useState(null); // { idx, anchor } for the star
+    // Caveats go to the notes, never into the scope list: the renderer bullets
+    // every scope line, which is why the $330 and $750 caveats were printing as
+    // bold deliverables beside "Site Plan" on the quotes that were actually sent.
+    const addFromLibrary = (chosen) => {
+      const caveats = chosen.filter((l) => l.kind === "caveat");
+      const scope = chosen.filter((l) => l.kind !== "caveat");
+      const rows = scope.map((l) => ({ description: (l.kind === "item" ? " " : "") + l.text, note: "", qty: 1, rate: "" }));
+      const kept = f.items.filter((it) => String(it.description || "").trim());
+      const items = [...kept, ...rows];
+      const notes = caveats.length ? [f.notes, ...caveats.map((c) => c.text)].filter((x) => String(x || "").trim()).join("\n") : f.notes;
+      setF({ ...f, items: items.length ? items : f.items, notes });
+      setLibOpen(false);
+    };
+    const toggleScopeIndent = (idx) => {
+      const d = f.items[idx]?.description || "";
+      updateItem(idx, "description", /^\s/.test(d) ? d.replace(/^\s+/, "") : " " + d);
+    };
+    // Pasting an old single-blob scope splits it into rows, so the existing way
+    // of working still works and immediately becomes structured.
+    const pasteScopeLines = (e, idx, sub) => {
+      const text = e.clipboardData?.getData("text") || "";
+      if (!text.includes("\n")) return;
+      e.preventDefault();
+      const lines = text.split("\n").filter((l) => l.trim());
+      if (!lines.length) return;
+      const rows = lines.map((l) => ({ description: (/^\s/.test(l) ? " " : (sub ? " " : "")) + l.trim(), note: "", qty: 1, rate: "" }));
+      const items = [...f.items];
+      items.splice(idx, 1, ...rows);
+      setF({ ...f, items });
+    };
     const addItem = () => setF({ ...f, items: [...f.items, { description: "", note: "", qty: 1, rate: "" }] });
     const removeItem = (idx) => setF({ ...f, items: f.items.filter((_, i) => i !== idx) });
     const isLump = f.pricing_mode === "lump_sum";
@@ -2453,7 +2688,11 @@ export default function BookkeeperApp() {
     const saveInv = async () => {
       // Guard editing a sent invoice's figures: warn before overwriting the record.
       if (figuresChanged && !window.confirm(`Invoice ${existing.number} was already sent to the client${existing.sent_at ? ` on ${fmtDate(existing.sent_at)}` : ""}, and you've changed its figures.\n\nSaving overwrites your record of what was billed. Normally you'd issue a REVISED invoice instead — Cancel, then "Create revised invoice".\n\nSave over the original anyway?`)) return null;
-      const inv = { ...f, total, items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items };
+      const inv = { ...f, total, items: f.items };
+      const statusChanged = existing && existing.status !== f.status;
+      if (statusChanged && (f.status === "sent" || f.status === "accepted")
+        && !guardIssueOrAccept({ ...existing, ...inv }, f.status === "accepted" ? "accept" : "issue")) return null;
+      if (statusChanged && f.status === "sent" && !existing.sent_at) inv.sent_at = new Date().toISOString();
       let saved;
       // Gate on success: updateInvoice/addInvoice return falsy on failure, so a
       // failed save yields saved=null and saveAndSend won't email a stale doc.
@@ -2497,7 +2736,7 @@ export default function BookkeeperApp() {
         business_id: biz,
         name: name.trim(),
         pricing_mode: f.pricing_mode || "itemised",
-        items: isLump ? [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }] : f.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
+        items: f.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
         lump_amount: isLump ? (Number(f.lump_amount) || 0) : null,
         notes: f.notes || null,
         terms: f.terms || null,
@@ -2512,8 +2751,7 @@ export default function BookkeeperApp() {
     // items, contact and project. The quote is preserved.
     const convertToInvoice = async () => {
       if (!window.confirm(`Convert quote ${f.number} to an invoice?\n\nThe quote is marked Accepted, and a new draft invoice opens — pre-filled with these line items and linked to the same project.`)) return;
-      const itemsForLump = [{ description: f.items[0]?.description || "", note: "", qty: 1, rate: 0 }];
-      await updateInvoice(existing.id, { ...f, total, items: isLump ? itemsForLump : f.items });
+      await updateInvoice(existing.id, { ...f, total, items: f.items });
       const proj = await acceptQuote({ ...existing, ...f, total });
       setInvoiceSeed({
         type: "invoice",
@@ -2522,7 +2760,7 @@ export default function BookkeeperApp() {
         projectName: proj ? projectLabel(proj) : f.job,
         pricing_mode: f.pricing_mode || "itemised",
         lump_amount: isLump ? String(total) : "",
-        items: isLump ? itemsForLump : f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
+        items: f.items.map((it) => ({ description: it.description, note: it.note, qty: it.qty, rate: it.rate })),
       });
       setEditItem(null);
       setModal("invoice");
@@ -2532,7 +2770,7 @@ export default function BookkeeperApp() {
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} {f.type === "quote" ? "Quote" : "Invoice"}</h3>
-          <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
         </div>
         {isIssued && (
           <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
@@ -2562,6 +2800,16 @@ export default function BookkeeperApp() {
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => updateDate(e.target.value)} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}{invOverdue > 0 && <span style={{ color: "#ef4444", fontWeight: 600, textTransform: "none", marginLeft: 6 }}>· {invOverdue} {invOverdue === 1 ? "day" : "days"} overdue</span>}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Project</label>
+          <div style={{ display: "flex", gap: 4 }}>
+            <select value={f.project_id || ""} onChange={(e) => { const p = jobs.find((j) => j.id === e.target.value); const c = p ? projectClient(p) : null; setF({ ...f, project_id: e.target.value || "", job: p ? projectLabel(p) : (e.target.value ? f.job : ""), ...(c && !f.contact_name ? { contact_name: c.name || c.company || "", contact_email: c.email || "", contact_company: c.company || "", contact_abn: c.abn || "", contact_address: c.address || "", contact_phone: c.phone || "" } : {}) }); }} style={{ ...s.select, flex: 1 }}>
+              <option value="">No project</option>
+              {sortedJobs.map((j) => <option key={j.id} value={j.id}>{(j.job_number ? j.job_number + " — " : "") + projectLabel(j)}</option>)}
+            </select>
+            <button type="button" onClick={() => setProjectAdd((v) => !v)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="New project">+</button>
+          </div>
         </div>
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}>
@@ -2612,16 +2860,6 @@ export default function BookkeeperApp() {
             </div>
           </div>
         )}
-        <div style={{ marginBottom: 12 }}>
-          <label style={s.label}>Project</label>
-          <div style={{ display: "flex", gap: 4 }}>
-            <select value={f.project_id || ""} onChange={(e) => { const p = jobs.find((j) => j.id === e.target.value); setF({ ...f, project_id: e.target.value || "", job: p ? projectLabel(p) : (e.target.value ? f.job : "") }); }} style={{ ...s.select, flex: 1 }}>
-              <option value="">No project</option>
-              {sortedJobs.map((j) => <option key={j.id} value={j.id}>{projectLabel(j)}</option>)}
-            </select>
-            <button type="button" onClick={() => setProjectAdd((v) => !v)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="New project">+</button>
-          </div>
-        </div>
         {projectAdd && (
           <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${accent}30` }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>New Project</div>
@@ -2644,8 +2882,45 @@ export default function BookkeeperApp() {
           <label style={s.label}>{isLump ? "Scope of Works" : "Line Items"}</label>
           {isLump ? (
             <>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>One deliverable per line — press Enter for each new line. Indent a line (start with spaces) to make it a sub-item. Bullets are added automatically. The price is the single lump sum below.</div>
-              <textarea value={f.items[0]?.description || ""} onChange={(e) => updateItem(0, "description", e.target.value)} placeholder={"Redrawing the plans for CC approval with:\n   RLs to the floor areas\n   Wall Schedule\n   Window Schedule"} style={{ ...s.input, fontSize: 12, minHeight: 150, resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }} />
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>One deliverable per line. Use the bullet to make a line a sub-item. Paste a whole scope and it splits into lines. The price is the single lump sum below.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto", padding: "2px 2px 6px" }}>
+                {f.items.map((item, idx) => {
+                  const sub = /^\s/.test(item.description || "");
+                  return (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 28px 28px", gap: 4, alignItems: "center" }}>
+                      <button type="button" onClick={() => toggleScopeIndent(idx)} title={sub ? "Make a heading" : "Make a sub-item"}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, border: "1px solid #e2e8f0", background: sub ? "#f1f5f9" : "#ffffff", color: "#64748b", cursor: "pointer", fontSize: 13 }}>{sub ? "◦" : "•"}</button>
+                      <input value={(item.description || "").replace(/^\s+/, "")}
+                        onChange={(e) => setScopeLine(idx, e.target.value, sub)}
+                        onPaste={(e) => pasteScopeLines(e, idx, sub)}
+                        placeholder={idx === 0 ? "Production of the following documentation:" : "Site Plan"}
+                        style={{ ...s.input, fontSize: 13, paddingLeft: sub ? 22 : 12 }} />
+                      <button type="button" title="Save this line to the library"
+                        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setSaveLine({ idx, anchor: { x: r.left - 150, y: r.bottom } }); }}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14 }}>☆</button>
+                      {f.items.length > 1 && <button type="button" onClick={() => removeItem(idx)} title="Remove line"
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13 }}>✕</button>}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <button type="button" onClick={addItem} style={{ ...s.btnOutline }}>+ Add line</button>
+                <button type="button" onClick={() => setLibOpen(true)} style={{ ...s.btnOutline, color: "#3b82f6", borderColor: "#3b82f640" }}>+ Add from library</button>
+              </div>
+              {libOpen && <ScopeLibrary lines={scopeLines} isMobile={isMobile} s={s} onClose={() => setLibOpen(false)} onAdd={addFromLibrary} />}
+              {saveLine && (
+                <PopoverSheet anchor={saveLine.anchor} isMobile={isMobile} width={190} title="Save to library as" onClose={() => setSaveLine(null)}>
+                  {["Headings", "Drawings", "Reports", "Applications", "Coordination", "Site", "Caveats", "Other"].map((cat) => (
+                    <SheetItem key={cat} label={cat} isMobile={isMobile} onClick={async () => {
+                      const d = f.items[saveLine.idx]?.description || "";
+                      setSaveLine(null);
+                      const saved = await addScopeLine({ text: d, kind: cat === "Caveats" ? "caveat" : (/^\s/.test(d) ? "item" : "heading"), category: cat });
+                      if (saved) alert("Saved to the scope library.");
+                    }} />
+                  ))}
+                </PopoverSheet>
+              )}
             </>
           ) : (
             <>
@@ -2655,7 +2930,7 @@ export default function BookkeeperApp() {
                     <textarea value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description (you can use multiple lines — heading + sub-items)" rows={1} style={{ ...s.input, fontSize: 12, minHeight: 36, resize: "vertical", lineHeight: 1.4 }} />
                     <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
                     <input type="number" step="0.01" value={item.rate} onChange={(e) => updateItem(idx, "rate", e.target.value)} placeholder="Rate" style={{ ...s.input, fontSize: 12 }} />
-                    {f.items.length > 1 && <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: "8px 0 0" }}><Icons.Trash /></button>}
+                    {f.items.length > 1 && <button onClick={() => removeItem(idx)} title="Remove line" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: 6, background: "none", border: "none", color: "#ef4444", cursor: "pointer", borderRadius: 7 }}><Icons.Trash /></button>}
                   </div>
                   <textarea value={item.note || ""} onChange={(e) => updateItem(idx, "note", e.target.value)} placeholder="Note (optional — shown on PDF)" rows={1} style={{ ...s.input, fontSize: 11, marginTop: 4, color: "#94a3b8", minHeight: 30, resize: "vertical", lineHeight: 1.4 }} />
                 </div>
@@ -2748,7 +3023,6 @@ export default function BookkeeperApp() {
     // backdrop/X only nag about unsaved changes when there actually are any.
     const [editMode, setEditMode] = useState(() => (pDraft ? pDraft.editMode : !existing));
     const initialSnapshot = useRef(JSON.stringify(init));
-    useEffect(() => { formDirtyRef.current = editMode && JSON.stringify(f) !== initialSnapshot.current; }, [f, editMode]);
     // Application type options: built-ins + any custom types already in use.
     const [appTypeCustom, setAppTypeCustom] = useState(() => (pDraft ? pDraft.appTypeCustom : false));
     const appTypeOptions = [...new Set([...APPLICATION_TYPES, ...jobs.map((j) => j.application_type).filter(Boolean), ...(f.application_type ? [f.application_type] : [])])];
@@ -2773,6 +3047,15 @@ export default function BookkeeperApp() {
     };
     const [pQuickAdd, setPQuickAdd] = useState(() => pDraft?.pQuickAdd ?? false);
     const [pQa, setPQa] = useState(() => pDraft?.pQa || { name: "", company: "", email: "", phone: "" });
+    // "Unsaved" has to mean everything the user has typed, not just the main
+    // fields: a half-filled Quick add client, or contacts attached but not yet
+    // saved, are work that closing would throw away.
+    useEffect(() => {
+      const formChanged = editMode && JSON.stringify(f) !== initialSnapshot.current;
+      const quickAddStarted = !!(pQa.name || pQa.company || pQa.email || pQa.phone);
+      const partiesPending = (newParties || []).length > 0;
+      formDirtyRef.current = formChanged || quickAddStarted || partiesPending;
+    }, [f, editMode, pQa, newParties]);
     // Keep the draft current so any remount restores the latest values.
     const liveDraft = { key: draftKey, f, newParties, editMode, appTypeCustom, pickId, pickRole, pQuickAdd, pQa };
     useEffect(() => { projectDraftRef.current = liveDraft; });
@@ -2805,7 +3088,19 @@ export default function BookkeeperApp() {
       }
       if (existing) {
         const updated = await updateProject(existing.id, f);
-        if (updated) { initialSnapshot.current = JSON.stringify(f); formDirtyRef.current = false; setEditItem(updated); setEditMode(false); }
+        // Close on success, the same way creating one does. Dropping back to a
+        // read-only view left the modal sitting there and read as "nothing
+        // happened". Only on success: updateProject returns null on failure and
+        // the user has already been shown the error, so closing would throw away
+        // everything they typed.
+        if (updated) {
+          initialSnapshot.current = JSON.stringify(f);
+          projectDraftRef.current = null;
+          formDirtyRef.current = false;
+          setEditMode(false);
+          setModal(null);
+          setEditItem(null);
+        }
       } else {
         // Only tear the form down once the insert actually succeeded. createProject
         // returns null on failure (RLS, network, missing division migration) — the
@@ -2850,7 +3145,7 @@ export default function BookkeeperApp() {
             {existing && !editMode && (
               <button onClick={() => setEditMode(true)} style={{ ...s.btnOutline, fontSize: 11, gap: 5 }}><Icons.Edit /> Edit</button>
             )}
-            <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+            <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
           </div>
         </div>
 
@@ -2946,7 +3241,7 @@ export default function BookkeeperApp() {
                 <span key={p.contact_id} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 16, padding: "4px 10px", fontSize: 12, fontWeight: 600 }}>
                   {c.name || c.company}
                   <span style={s.badge(p.role === "consultant" ? "#8b5cf6" : "#34d399")}>{p.role}</span>
-                  <button onClick={() => removeParty(p)} title="Remove from project" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 0, fontSize: 12, lineHeight: 1 }}>✕</button>
+                  <button onClick={() => removeParty(p)} title="Remove from project" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13, borderRadius: 7 }}>✕</button>
                 </span>
               ); })}
             </div>
@@ -3232,6 +3527,7 @@ export default function BookkeeperApp() {
     items.push({ key: "onedrive", label: "Save to OneDrive", icon: <Icons.Cloud />, run: () => saveToOneDrive("invoice", inv.id) });
     items.push({ key: "status", label: "Change status…", icon: <Icons.Filter />, run: () => setStatusPick({ doc: inv, anchor }) });
     items.push({ key: "edit", label: "Edit", icon: <Icons.Edit />, run: () => { setEditItem(inv); setModal("invoice"); } });
+    items.push({ key: "duplicate", label: isQuote ? "Duplicate quote" : "Duplicate invoice", icon: <Icons.Plus />, run: () => duplicateDoc(inv) });
     items.push({ key: "delete", label: isQuote ? "Delete quote" : "Delete invoice", icon: <Icons.Trash />, danger: true, run: () => deleteInvoice(inv.id) });
     // The row already shows the primary; repeating it in the menu is noise.
     return items.filter((it) => !(prim && it.key === prim.key));
@@ -3267,7 +3563,7 @@ export default function BookkeeperApp() {
     const statusPill = (inv) => {
       const info = statusInfo(inv.status);
       return (
-        <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+        <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ display: "inline-flex", alignItems: "center", background: "none", border: "none", padding: "5px 0", cursor: "pointer" }}>
           <span style={s.badge(info.color, info.variant)}>{info.label}</span>
         </button>
       );
@@ -3335,7 +3631,7 @@ export default function BookkeeperApp() {
                 {prim.icon}{prim.label}
               </button>
             )}
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); const anchor = { x: r.right - 212, y: r.bottom }; setActionMenu({ doc: inv, anchor, items: docMenuItems(inv, anchor) }); }} title="More actions" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); const anchor = { x: r.right - 212, y: r.bottom }; setActionMenu({ doc: inv, anchor, items: docMenuItems(inv, anchor) }); }} title="More actions" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.More /></button>
           </div>
         </td>
       );
@@ -3523,8 +3819,8 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{c.email || "--"}</td>
                     <td style={s.td}><span style={s.badge(c.type === "client" ? "#34d399" : c.type === "consultant" ? "#8b5cf6" : "#f59e0b")}>{c.type}</span></td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Edit /></button>
+                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Trash /></button>
                     </td>
                   </tr>
                 ))}</tbody>
@@ -3611,7 +3907,7 @@ export default function BookkeeperApp() {
   const MobileFilterTabs = ({ tabs, active, onChange }) => (
     <div style={{ display: "flex", gap: 6, padding: "0 20px", overflowX: "auto" }}>
       {tabs.map(tab => (
-        <button key={tab} onClick={() => onChange(tab)} style={{ padding: "5px 12px", fontSize: 13, fontWeight: 500, borderRadius: 16, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, border: active === tab ? "none" : "1px solid #e2e8f0", background: active === tab ? accent : "#ffffff", color: active === tab ? "#fff" : "#64748b" }}>{tab}</button>
+        <button key={tab} onClick={() => onChange(tab)} style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500, borderRadius: 16, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, border: active === tab ? "none" : "1px solid #e2e8f0", background: active === tab ? accent : "#ffffff", color: active === tab ? "#fff" : "#64748b" }}>{tab}</button>
       ))}
     </div>
   );
@@ -3708,7 +4004,7 @@ export default function BookkeeperApp() {
                   {/* Status leads, where the eye starts; the amount sits on its own
                       line so a pill can never collide with a number again. */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); setStatusPick({ doc: inv }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+                    <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); setStatusPick({ doc: inv }); }} style={{ display: "inline-flex", alignItems: "center", background: "none", border: "none", padding: "5px 0", cursor: "pointer" }}>
                       <span style={s.badge(info.color, info.variant)}>{info.label}</span>
                     </button>
                     <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>{fmtDate(inv.date)}</span>
@@ -3725,7 +4021,7 @@ export default function BookkeeperApp() {
                           {prim.icon}{prim.label}
                         </button>
                       )}
-                      <button onClick={() => setActionMenu({ doc: inv, items: docMenuItems(inv) })} title="More actions" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 6 }}><Icons.More /></button>
+                      <button onClick={() => setActionMenu({ doc: inv, items: docMenuItems(inv) })} title="More actions" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 10 }}><Icons.More /></button>
                     </span>
                   </div>
                 </div>

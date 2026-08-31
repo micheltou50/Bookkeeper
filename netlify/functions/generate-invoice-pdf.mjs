@@ -83,8 +83,11 @@ function bulletizeScope(text, always = false) {
 
 // Printed acceptance form for quotes: the client fills in their invoicing details
 // and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
-const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
+const acceptanceBlock = (inv) => `<div style="margin-top:30px">
   <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
+  <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
+    Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmtAUD(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
+  </div>
   <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
   <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
@@ -131,13 +134,14 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   const isLump = inv.pricing_mode === "lump_sum";
 
   const lumpScope = (items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
+  const lumpNotes = (items || []).map((i) => i.note || "").filter((n) => n.trim()).join("\n");
 
   const itemsTable = isLump
     ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <thead><tr style="background:#f8fafc">
           <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
         </tr></thead>
-        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}</td></tr></tbody>
+        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}${lumpNotes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb;font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${lumpNotes}</div>` : ""}</td></tr></tbody>
       </table>`
     : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <thead><tr style="background:#f8fafc">
@@ -176,7 +180,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       </table>
     </div>` : `
     <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:14px 20px;margin-top:24px">
-      <div style="font-size:11px;color:#0f766e;line-height:1.6">This quote is valid for 30 days from the date of issue. Payment details will be provided upon acceptance.</div>
+      <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
     </div>`;
 
   // "Pay by card" button for invoices (not quotes) when Stripe is enabled. The
@@ -211,7 +215,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       <div style="margin-top:10px">
         ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
         <div style="font-size:10px;color:#6b7280;line-height:1.6">
-          ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+          ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
         </div>
       </div>
     </div>
@@ -269,7 +273,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
     ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
     <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
-    ${isQuote ? ACCEPTANCE_BLOCK : ""}
+    ${isQuote ? acceptanceBlock(inv) : ""}
   </div>` : ""}
 
   <!-- Footer -->

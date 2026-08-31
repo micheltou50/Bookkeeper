@@ -85,6 +85,11 @@ tbody tr:hover { background: #f8fafc; }
 }
 
 /* Status pills that open the inline status picker: a ring on hover so the pill
-   reads as a control, not just as a label, inside an already-hoverable row. */
-.bk-statuspill { border-radius: 20px; }
-.bk-statuspill:hover { box-shadow: 0 0 0 2px #cbd5e1; }
+   reads as a control, not just as a label, inside an already-hoverable row.
+   The ring goes on the inner badge, not the button — the button is deliberately
+   taller than the badge to give it a real tap target, and ringing the button
+   would draw a box around empty space. */
+.bk-statuspill > span { border-radius: 20px; }
+.bk-statuspill:hover > span { box-shadow: 0 0 0 2px #cbd5e1; }
+.bk-statuspill:focus-visible { outline: none; }
+.bk-statuspill:focus-visible > span { box-shadow: 0 0 0 3px var(--bk-ring); }
