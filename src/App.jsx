@@ -321,10 +321,10 @@ function ScopeLibrary({ lines, isMobile, s, onClose, onAdd }) {
               <div key={cat} style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px 4px" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: "#94a3b8" }}>{cat}</span>
-                  <button type="button" onClick={() => addAll(inCat.map((l) => l.id))} style={{ marginLeft: "auto", background: "none", border: "none", color: "#3b82f6", fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 6px" }}>Add all {inCat.length}</button>
+                  <button type="button" onClick={() => addAll(inCat.map((l) => l.id))} style={{ marginLeft: "auto", background: "none", border: "none", color: "#3b82f6", fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "8px 10px", borderRadius: 7 }}>Add all {inCat.length}</button>
                 </div>
                 {inCat.map((l) => (
-                  <label key={l.id} style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "8px 9px", borderRadius: 8, cursor: "pointer", background: picked.has(l.id) ? "#eff6ff" : "transparent" }}>
+                  <label key={l.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 10px", minHeight: 40, boxSizing: "border-box", borderRadius: 8, cursor: "pointer", background: picked.has(l.id) ? "#eff6ff" : "transparent" }}>
                     <input type="checkbox" checked={picked.has(l.id)} onChange={() => toggle(l.id)} style={{ width: 16, height: 16, marginTop: 2, accentColor: "#3b82f6", cursor: "pointer", flexShrink: 0 }} />
                     <span style={{ fontSize: 13, color: "#334155", lineHeight: 1.45, paddingLeft: l.kind === "item" ? 10 : 0 }}>
                       {l.text}
@@ -337,9 +337,9 @@ function ScopeLibrary({ lines, isMobile, s, onClose, onAdd }) {
           })}
         </div>
         <div style={{ display: "flex", gap: 8, padding: "10px 14px calc(env(safe-area-inset-bottom) + 12px)", borderTop: "1px solid #e2e8f0" }}>
-          <button type="button" onClick={onClose} style={{ ...s.btnOutline, padding: "9px 14px" }}>Cancel</button>
+          <button type="button" onClick={onClose} style={{ ...s.btnOutline, padding: "12px 18px" }}>Cancel</button>
           <button type="button" disabled={!chosen.length} onClick={() => onAdd(chosen)}
-            style={{ ...s.btn("#3b82f6", true), flex: 1, justifyContent: "center", padding: "9px 14px", opacity: chosen.length ? 1 : 0.5, cursor: chosen.length ? "pointer" : "default" }}>
+            style={{ ...s.btn("#3b82f6", true), flex: 1, justifyContent: "center", padding: "12px 18px", opacity: chosen.length ? 1 : 0.5, cursor: chosen.length ? "pointer" : "default" }}>
             {chosen.length ? `Add ${chosen.length} line${chosen.length === 1 ? "" : "s"}` : "Select lines to add"}
           </button>
         </div>
