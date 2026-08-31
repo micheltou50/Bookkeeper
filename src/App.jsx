@@ -2953,7 +2953,6 @@ export default function BookkeeperApp() {
     // backdrop/X only nag about unsaved changes when there actually are any.
     const [editMode, setEditMode] = useState(() => (pDraft ? pDraft.editMode : !existing));
     const initialSnapshot = useRef(JSON.stringify(init));
-    useEffect(() => { formDirtyRef.current = editMode && JSON.stringify(f) !== initialSnapshot.current; }, [f, editMode]);
     // Application type options: built-ins + any custom types already in use.
     const [appTypeCustom, setAppTypeCustom] = useState(() => (pDraft ? pDraft.appTypeCustom : false));
     const appTypeOptions = [...new Set([...APPLICATION_TYPES, ...jobs.map((j) => j.application_type).filter(Boolean), ...(f.application_type ? [f.application_type] : [])])];
@@ -2978,6 +2977,15 @@ export default function BookkeeperApp() {
     };
     const [pQuickAdd, setPQuickAdd] = useState(() => pDraft?.pQuickAdd ?? false);
     const [pQa, setPQa] = useState(() => pDraft?.pQa || { name: "", company: "", email: "", phone: "" });
+    // "Unsaved" has to mean everything the user has typed, not just the main
+    // fields: a half-filled Quick add client, or contacts attached but not yet
+    // saved, are work that closing would throw away.
+    useEffect(() => {
+      const formChanged = editMode && JSON.stringify(f) !== initialSnapshot.current;
+      const quickAddStarted = !!(pQa.name || pQa.company || pQa.email || pQa.phone);
+      const partiesPending = (newParties || []).length > 0;
+      formDirtyRef.current = formChanged || quickAddStarted || partiesPending;
+    }, [f, editMode, pQa, newParties]);
     // Keep the draft current so any remount restores the latest values.
     const liveDraft = { key: draftKey, f, newParties, editMode, appTypeCustom, pickId, pickRole, pQuickAdd, pQa };
     useEffect(() => { projectDraftRef.current = liveDraft; });
@@ -3010,7 +3018,19 @@ export default function BookkeeperApp() {
       }
       if (existing) {
         const updated = await updateProject(existing.id, f);
-        if (updated) { initialSnapshot.current = JSON.stringify(f); formDirtyRef.current = false; setEditItem(updated); setEditMode(false); }
+        // Close on success, the same way creating one does. Dropping back to a
+        // read-only view left the modal sitting there and read as "nothing
+        // happened". Only on success: updateProject returns null on failure and
+        // the user has already been shown the error, so closing would throw away
+        // everything they typed.
+        if (updated) {
+          initialSnapshot.current = JSON.stringify(f);
+          projectDraftRef.current = null;
+          formDirtyRef.current = false;
+          setEditMode(false);
+          setModal(null);
+          setEditItem(null);
+        }
       } else {
         // Only tear the form down once the insert actually succeeded. createProject
         // returns null on failure (RLS, network, missing division migration) — the
