@@ -346,7 +346,7 @@ function fyChoices(rows, selected) {
   if (selected && selected !== ALL_FY) years.add(selected);
   return [...years].sort((a, b) => Number(b) - Number(a));
 }
-const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid for 30 days from the date of issue. Pricing may be subject to change after this period.
+const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid until the "Valid Until" date shown on the first page. Pricing may be subject to change after that date.
 2. Acceptance: Work commences upon written acceptance of this quote.
 3. Fees: Fees are as quoted above.
 4. Payment: Fees are invoiced on agreed milestones or on completion and are due within 7 days of each invoice. Final drawings and lodgement of documents are released upon full payment of all invoices.
@@ -366,8 +366,11 @@ function getDefaultDocTerms(type) { return type === "quote" ? DEFAULT_QUOTE_TERM
 
 // Printed acceptance form for quotes: the client fills in their invoicing details
 // and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
-const ACCEPTANCE_BLOCK = `<div style="margin-top:30px">
+const acceptanceBlock = (inv) => `<div style="margin-top:30px">
   <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
+  <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
+    Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmt(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
+  </div>
   <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
   <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
@@ -708,7 +711,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       </table>
     </div>` : `
     <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:14px 20px;margin-top:24px">
-      <div style="font-size:11px;color:#0f766e;line-height:1.6">This quote is valid for 30 days from the date of issue. Payment details will be provided upon acceptance.</div>
+      <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
     </div>`;
 
   return `<div style="width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column">
@@ -719,7 +722,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
         <div style="margin-top:10px">
           ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
           <div style="font-size:10px;color:#6b7280;line-height:1.6">
-            ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+            ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
           </div>
         </div>
       </div>
@@ -770,7 +773,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
     ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
       ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
       <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
-      ${isQuote ? ACCEPTANCE_BLOCK : ""}
+      ${isQuote ? acceptanceBlock(inv) : ""}
     </div>` : ""}
 
     <div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
