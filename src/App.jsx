@@ -290,6 +290,64 @@ function SheetItem({ icon, label, danger, isMobile, trailing, onClick }) {
   );
 }
 
+// Pick reusable scope lines. Rendered as a centred dialog rather than an
+// anchored popover: it lives inside the invoice modal, which scrolls, and a
+// fixed-position panel anchored to a button would detach from it.
+function ScopeLibrary({ lines, isMobile, s, onClose, onAdd }) {
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState(() => new Set());
+  const norm = q.trim().toLowerCase();
+  const shown = (lines || []).filter((l) => !norm || l.text.toLowerCase().includes(norm) || String(l.category || "").toLowerCase().includes(norm));
+  const cats = [...new Set(shown.map((l) => l.category || "Other"))];
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const addAll = (ids) => setPicked((p) => { const n = new Set(p); ids.forEach((i) => n.add(i)); return n; });
+  const chosen = (lines || []).filter((l) => picked.has(l.id));
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 95 }} />
+      <div style={{ position: "fixed", zIndex: 96, background: "#fff", display: "flex", flexDirection: "column",
+        ...(isMobile
+          ? { left: 0, right: 0, bottom: 0, maxHeight: "85vh", borderRadius: "16px 16px 0 0" }
+          : { top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 460, maxWidth: "94vw", maxHeight: "78vh", borderRadius: 14, boxShadow: "0 24px 60px -18px rgba(16,24,40,0.45)" }) }}>
+        <div style={{ padding: "14px 16px 10px", borderBottom: "1px solid #e2e8f0" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>Add from library</div>
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search lines..." style={{ ...s.input, fontSize: 13 }} />
+        </div>
+        <div style={{ overflowY: "auto", padding: "6px 8px", flex: 1 }}>
+          {shown.length === 0 && <div style={{ padding: 26, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Nothing matches "{q}"</div>}
+          {cats.map((cat) => {
+            const inCat = shown.filter((l) => (l.category || "Other") === cat);
+            return (
+              <div key={cat} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px 4px" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: "#94a3b8" }}>{cat}</span>
+                  <button type="button" onClick={() => addAll(inCat.map((l) => l.id))} style={{ marginLeft: "auto", background: "none", border: "none", color: "#3b82f6", fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "4px 6px" }}>Add all {inCat.length}</button>
+                </div>
+                {inCat.map((l) => (
+                  <label key={l.id} style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "8px 9px", borderRadius: 8, cursor: "pointer", background: picked.has(l.id) ? "#eff6ff" : "transparent" }}>
+                    <input type="checkbox" checked={picked.has(l.id)} onChange={() => toggle(l.id)} style={{ width: 16, height: 16, marginTop: 2, accentColor: "#3b82f6", cursor: "pointer", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: "#334155", lineHeight: 1.45, paddingLeft: l.kind === "item" ? 10 : 0 }}>
+                      {l.text}
+                      {l.kind === "caveat" && <span style={{ marginLeft: 6, fontSize: 10, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "1px 5px" }}>note</span>}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "10px 14px calc(env(safe-area-inset-bottom) + 12px)", borderTop: "1px solid #e2e8f0" }}>
+          <button type="button" onClick={onClose} style={{ ...s.btnOutline, padding: "9px 14px" }}>Cancel</button>
+          <button type="button" disabled={!chosen.length} onClick={() => onAdd(chosen)}
+            style={{ ...s.btn("#3b82f6", true), flex: 1, justifyContent: "center", padding: "9px 14px", opacity: chosen.length ? 1 : 0.5, cursor: chosen.length ? "pointer" : "default" }}>
+            {chosen.length ? `Add ${chosen.length} line${chosen.length === 1 ? "" : "s"}` : "Select lines to add"}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function StatusPicker({ doc, anchor, isMobile, badgeStyle, onPick, onClose }) {
   return (
     <PopoverSheet anchor={anchor} isMobile={isMobile} title={`Status · ${doc.number}`} onClose={onClose}>
@@ -1275,6 +1333,9 @@ export default function BookkeeperApp() {
   const [jobs, setJobs] = useState([]);
   const [jobParties, setJobParties] = useState([]); // bk_job_parties rows for this business's projects
   const [quoteTemplates, setQuoteTemplates] = useState([]);
+  // The reusable scope lines. One row = one printed line, so "Site Plan" is
+  // stored once and used by every DA, CC and CDC quote that needs it.
+  const [scopeLines, setScopeLines] = useState([]);
   const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
   const [emailConn, setEmailConn] = useState(null);
 
@@ -1369,13 +1430,14 @@ export default function BookkeeperApp() {
     if (!session) return;
     setLoading(true);
     try {
-    const [cRes, iRes, pRes, jRes, eRes, qtRes] = await Promise.all([
+    const [cRes, iRes, pRes, jRes, eRes, qtRes, slRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
       supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
       supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
+      supabase.from("bk_scope_lines").select("*").eq("business_id", businessId).eq("archived", false).order("sort_order"),
     ]);
 
     const loadedInvoices = iRes.data || [];
@@ -1404,6 +1466,7 @@ export default function BookkeeperApp() {
     setJobs(loadedJobs);
     setJobParties(loadedParties);
     setQuoteTemplates(qtRes.data || []);
+    setScopeLines(slRes.data || []);
     setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
     setEmailConn(eRes.data || null);
     setLoading(false);
@@ -2164,6 +2227,27 @@ export default function BookkeeperApp() {
   // "accepted" is confirmed: accepting a quote creates or promotes a project,
   // files the PDF and may have raised a deposit invoice, and none of that is
   // undone here.
+  // Save a line the user has typed back into the library, so a phrase is typed
+  // once and picked thereafter. Category is asked for in the same step rather
+  // than left blank, or the picker degrades into one long list.
+  const addScopeLine = async ({ text, kind, category }) => {
+    const clean = String(text || "").trim();
+    if (!clean) return null;
+    if (scopeLines.some((l) => l.text.trim().toLowerCase() === clean.toLowerCase())) {
+      alert("That line is already in the library.");
+      return null;
+    }
+    const row = {
+      user_id: session.user.id, business_id: biz, text: clean, kind: kind || "item",
+      category: category || "Other",
+      sort_order: (scopeLines.reduce((m, l) => Math.max(m, l.sort_order || 0), 0) || 0) + 10,
+    };
+    const { ok, data } = await sbInsert("bk_scope_lines", row, "save scope line");
+    if (!ok || !data) return null;
+    setScopeLines((prev) => [...prev, data].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)));
+    return data;
+  };
+
   const changeDocStatus = async (doc, next) => {
     if (!doc || !next || next === doc.status) return;
     if (doc.status === "accepted" && next !== "accepted"
@@ -2444,6 +2528,21 @@ export default function BookkeeperApp() {
     // what bulletizeScope tests for when it decides between a bullet and a
     // sub-bullet. Keep it in the text and neither renderer needs to change.
     const setScopeLine = (idx, text, sub) => updateItem(idx, "description", (sub ? " " : "") + text.replace(/^\s+/, ""));
+    const [libOpen, setLibOpen] = useState(false);
+    const [saveLine, setSaveLine] = useState(null); // { idx, anchor } for the star
+    // Caveats go to the notes, never into the scope list: the renderer bullets
+    // every scope line, which is why the $330 and $750 caveats were printing as
+    // bold deliverables beside "Site Plan" on the quotes that were actually sent.
+    const addFromLibrary = (chosen) => {
+      const caveats = chosen.filter((l) => l.kind === "caveat");
+      const scope = chosen.filter((l) => l.kind !== "caveat");
+      const rows = scope.map((l) => ({ description: (l.kind === "item" ? " " : "") + l.text, note: "", qty: 1, rate: "" }));
+      const kept = f.items.filter((it) => String(it.description || "").trim());
+      const items = [...kept, ...rows];
+      const notes = caveats.length ? [f.notes, ...caveats.map((c) => c.text)].filter((x) => String(x || "").trim()).join("\n") : f.notes;
+      setF({ ...f, items: items.length ? items : f.items, notes });
+      setLibOpen(false);
+    };
     const toggleScopeIndent = (idx) => {
       const d = f.items[idx]?.description || "";
       updateItem(idx, "description", /^\s/.test(d) ? d.replace(/^\s+/, "") : " " + d);
@@ -2691,7 +2790,7 @@ export default function BookkeeperApp() {
                 {f.items.map((item, idx) => {
                   const sub = /^\s/.test(item.description || "");
                   return (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 28px", gap: 6, alignItems: "center" }}>
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 28px 28px", gap: 4, alignItems: "center" }}>
                       <button type="button" onClick={() => toggleScopeIndent(idx)} title={sub ? "Make a heading" : "Make a sub-item"}
                         style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, border: "1px solid #e2e8f0", background: sub ? "#f1f5f9" : "#ffffff", color: "#64748b", cursor: "pointer", fontSize: 13 }}>{sub ? "◦" : "•"}</button>
                       <input value={(item.description || "").replace(/^\s+/, "")}
@@ -2699,13 +2798,32 @@ export default function BookkeeperApp() {
                         onPaste={(e) => pasteScopeLines(e, idx, sub)}
                         placeholder={idx === 0 ? "Production of the following documentation:" : "Site Plan"}
                         style={{ ...s.input, fontSize: 13, paddingLeft: sub ? 22 : 12 }} />
+                      <button type="button" title="Save this line to the library"
+                        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setSaveLine({ idx, anchor: { x: r.left - 150, y: r.bottom } }); }}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14 }}>☆</button>
                       {f.items.length > 1 && <button type="button" onClick={() => removeItem(idx)} title="Remove line"
                         style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13 }}>✕</button>}
                     </div>
                   );
                 })}
               </div>
-              <button type="button" onClick={addItem} style={{ ...s.btnOutline, marginTop: 6 }}>+ Add line</button>
+              <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <button type="button" onClick={addItem} style={{ ...s.btnOutline }}>+ Add line</button>
+                <button type="button" onClick={() => setLibOpen(true)} style={{ ...s.btnOutline, color: "#3b82f6", borderColor: "#3b82f640" }}>+ Add from library</button>
+              </div>
+              {libOpen && <ScopeLibrary lines={scopeLines} isMobile={isMobile} s={s} onClose={() => setLibOpen(false)} onAdd={addFromLibrary} />}
+              {saveLine && (
+                <PopoverSheet anchor={saveLine.anchor} isMobile={isMobile} width={190} title="Save to library as" onClose={() => setSaveLine(null)}>
+                  {["Headings", "Drawings", "Reports", "Applications", "Coordination", "Site", "Caveats", "Other"].map((cat) => (
+                    <SheetItem key={cat} label={cat} isMobile={isMobile} onClick={async () => {
+                      const d = f.items[saveLine.idx]?.description || "";
+                      setSaveLine(null);
+                      const saved = await addScopeLine({ text: d, kind: cat === "Caveats" ? "caveat" : (/^\s/.test(d) ? "item" : "heading"), category: cat });
+                      if (saved) alert("Saved to the scope library.");
+                    }} />
+                  ))}
+                </PopoverSheet>
+              )}
             </>
           ) : (
             <>
