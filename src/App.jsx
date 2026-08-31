@@ -822,7 +822,7 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#eef2f5", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
-        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 4 }}><Icons.X /></button>
+        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 0, width: 32, height: 32, justifyContent: "center" }}><Icons.X /></button>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
         {!isMobile && <button onClick={printDoc} style={{ ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
         <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {pdfLoading === inv.id ? "..." : "Download PDF"}</button>
@@ -869,7 +869,7 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
       <div style={{ background: "#fff", width: isMobile ? "100%" : 560, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", borderRadius: isMobile ? "16px 16px 0 0" : 14, boxShadow: "0 20px 60px -15px rgba(16,24,40,0.4)", padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Send {docType} {inv.number}</h3>
-          <button onClick={onClose} disabled={sending} style={{ background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
+          <button onClick={onClose} disabled={sending} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 8, background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
         </div>
         <div style={{ marginBottom: 12 }}><label style={lbl}>To</label><input value={to} onChange={(e) => setTo(e.target.value)} style={inp} placeholder="client@example.com" /></div>
         <div style={{ marginBottom: 12 }}><label style={lbl}>Subject</label><input value={subject} onChange={(e) => setSubject(e.target.value)} style={inp} /></div>
@@ -990,7 +990,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
-        <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        <button onClick={() => setModal(null)} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
       </div>
       <div style={{ marginBottom: 16 }}>
         <label style={s.label}>Logo</label>
@@ -1085,8 +1085,8 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
           <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
             <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
             <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{t.pricing_mode === "lump_sum" ? `Lump sum${t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}` : "Itemised"}</span>
-            <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-            <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+            <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Edit /></button>
+            <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Trash /></button>
           </div>
         ))}
         </>
@@ -1152,7 +1152,7 @@ function ContactForm({ existing, s, accent, setModal, setEditItem, addContact, u
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
-        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
       </div>
       <div style={s.grid2}>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
@@ -2532,7 +2532,7 @@ export default function BookkeeperApp() {
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} {f.type === "quote" ? "Quote" : "Invoice"}</h3>
-          <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+          <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
         </div>
         {isIssued && (
           <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
@@ -2655,7 +2655,7 @@ export default function BookkeeperApp() {
                     <textarea value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} placeholder="Description (you can use multiple lines — heading + sub-items)" rows={1} style={{ ...s.input, fontSize: 12, minHeight: 36, resize: "vertical", lineHeight: 1.4 }} />
                     <input type="number" value={item.qty} onChange={(e) => updateItem(idx, "qty", e.target.value)} placeholder="Qty" style={{ ...s.input, fontSize: 12 }} />
                     <input type="number" step="0.01" value={item.rate} onChange={(e) => updateItem(idx, "rate", e.target.value)} placeholder="Rate" style={{ ...s.input, fontSize: 12 }} />
-                    {f.items.length > 1 && <button onClick={() => removeItem(idx)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: "8px 0 0" }}><Icons.Trash /></button>}
+                    {f.items.length > 1 && <button onClick={() => removeItem(idx)} title="Remove line" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: 6, background: "none", border: "none", color: "#ef4444", cursor: "pointer", borderRadius: 7 }}><Icons.Trash /></button>}
                   </div>
                   <textarea value={item.note || ""} onChange={(e) => updateItem(idx, "note", e.target.value)} placeholder="Note (optional — shown on PDF)" rows={1} style={{ ...s.input, fontSize: 11, marginTop: 4, color: "#94a3b8", minHeight: 30, resize: "vertical", lineHeight: 1.4 }} />
                 </div>
@@ -2850,7 +2850,7 @@ export default function BookkeeperApp() {
             {existing && !editMode && (
               <button onClick={() => setEditMode(true)} style={{ ...s.btnOutline, fontSize: 11, gap: 5 }}><Icons.Edit /> Edit</button>
             )}
-            <button onClick={() => requestCloseModal()} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer" }}><Icons.X /></button>
+            <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
           </div>
         </div>
 
@@ -2946,7 +2946,7 @@ export default function BookkeeperApp() {
                 <span key={p.contact_id} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 16, padding: "4px 10px", fontSize: 12, fontWeight: 600 }}>
                   {c.name || c.company}
                   <span style={s.badge(p.role === "consultant" ? "#8b5cf6" : "#34d399")}>{p.role}</span>
-                  <button onClick={() => removeParty(p)} title="Remove from project" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 0, fontSize: 12, lineHeight: 1 }}>✕</button>
+                  <button onClick={() => removeParty(p)} title="Remove from project" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13, borderRadius: 7 }}>✕</button>
                 </span>
               ); })}
             </div>
@@ -3267,7 +3267,7 @@ export default function BookkeeperApp() {
     const statusPill = (inv) => {
       const info = statusInfo(inv.status);
       return (
-        <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+        <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setStatusPick({ doc: inv, anchor: { x: r.left, y: r.bottom } }); }} style={{ display: "inline-flex", alignItems: "center", background: "none", border: "none", padding: "5px 0", cursor: "pointer" }}>
           <span style={s.badge(info.color, info.variant)}>{info.label}</span>
         </button>
       );
@@ -3335,7 +3335,7 @@ export default function BookkeeperApp() {
                 {prim.icon}{prim.label}
               </button>
             )}
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); const anchor = { x: r.right - 212, y: r.bottom }; setActionMenu({ doc: inv, anchor, items: docMenuItems(inv, anchor) }); }} title="More actions" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 4, borderRadius: 6 }}><Icons.More /></button>
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); const anchor = { x: r.right - 212, y: r.bottom }; setActionMenu({ doc: inv, anchor, items: docMenuItems(inv, anchor) }); }} title="More actions" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.More /></button>
           </div>
         </td>
       );
@@ -3523,8 +3523,8 @@ export default function BookkeeperApp() {
                     <td style={{ ...s.td, color: "#64748b", fontSize: 11 }}>{c.email || "--"}</td>
                     <td style={s.td}><span style={s.badge(c.type === "client" ? "#34d399" : c.type === "consultant" ? "#8b5cf6" : "#f59e0b")}>{c.type}</span></td>
                     <td style={{ ...s.td, display: "flex", gap: 4 }}>
-                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Edit /></button>
-                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 2 }}><Icons.Trash /></button>
+                      <button onClick={() => { setEditItem(c); setModal("contact"); }} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Edit /></button>
+                      <button onClick={() => deleteContact(c.id)} title="Delete" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Trash /></button>
                     </td>
                   </tr>
                 ))}</tbody>
@@ -3611,7 +3611,7 @@ export default function BookkeeperApp() {
   const MobileFilterTabs = ({ tabs, active, onChange }) => (
     <div style={{ display: "flex", gap: 6, padding: "0 20px", overflowX: "auto" }}>
       {tabs.map(tab => (
-        <button key={tab} onClick={() => onChange(tab)} style={{ padding: "5px 12px", fontSize: 13, fontWeight: 500, borderRadius: 16, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, border: active === tab ? "none" : "1px solid #e2e8f0", background: active === tab ? accent : "#ffffff", color: active === tab ? "#fff" : "#64748b" }}>{tab}</button>
+        <button key={tab} onClick={() => onChange(tab)} style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500, borderRadius: 16, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, border: active === tab ? "none" : "1px solid #e2e8f0", background: active === tab ? accent : "#ffffff", color: active === tab ? "#fff" : "#64748b" }}>{tab}</button>
       ))}
     </div>
   );
@@ -3708,7 +3708,7 @@ export default function BookkeeperApp() {
                   {/* Status leads, where the eye starts; the amount sits on its own
                       line so a pill can never collide with a number again. */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); setStatusPick({ doc: inv }); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}>
+                    <button className="bk-statuspill" title="Change status" onClick={(e) => { e.stopPropagation(); setStatusPick({ doc: inv }); }} style={{ display: "inline-flex", alignItems: "center", background: "none", border: "none", padding: "5px 0", cursor: "pointer" }}>
                       <span style={s.badge(info.color, info.variant)}>{info.label}</span>
                     </button>
                     <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>{fmtDate(inv.date)}</span>
@@ -3725,7 +3725,7 @@ export default function BookkeeperApp() {
                           {prim.icon}{prim.label}
                         </button>
                       )}
-                      <button onClick={() => setActionMenu({ doc: inv, items: docMenuItems(inv) })} title="More actions" style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", padding: 6 }}><Icons.More /></button>
+                      <button onClick={() => setActionMenu({ doc: inv, items: docMenuItems(inv) })} title="More actions" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 10 }}><Icons.More /></button>
                     </span>
                   </div>
                 </div>
