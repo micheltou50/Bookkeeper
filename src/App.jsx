@@ -3118,6 +3118,15 @@ Are you sure you want it ${verb}?`);
     const cancelEdit = () => { setF(init); setAppTypeCustom(false); formDirtyRef.current = false; setEditMode(false); };
     const projStatusMeta = { active: { label: "Active", color: "#10b981" }, lead: { label: "Lead", color: "#f59e0b" }, job_lost: { label: "Job Lost", color: "#94a3b8" }, finalised: { label: "Finalised", color: "#3b82f6" } };
     const openDoc = (inv) => { setEditItem(inv); setModal("invoice"); };
+    // Who this project has actually been billed to. Older projects predate the
+    // parties list, so without this the drawer claims nobody is attached while
+    // listing their quotes immediately below.
+    const billedContacts = existing
+      ? [...new Map(divInvoices
+          .filter((d) => d.project_id === existing.id && String(d.contact_name || "").trim())
+          .map((d) => [d.contact_name, { key: d.contact_name, name: d.contact_name }])).values()]
+      : [];
+
     const newDoc = (type, contactName) => { setInvoiceSeed({ type, project_id: existing.id, projectName: projectLabel(existing), contact_name: contactName || "" }); setEditItem(null); setModal("invoice"); };
 
     const Stat = ({ label, value, color }) => (
@@ -3195,7 +3204,18 @@ Are you sure you want it ${verb}?`);
             <div style={{ marginBottom: 16 }}>
               <label style={s.label}>Clients &amp; Consultants</label>
               {partyList.length === 0 ? (
-                <div style={{ fontSize: 12, color: "#94a3b8" }}>None attached yet — hit Edit to add people.</div>
+                billedContacts.length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                    {billedContacts.map((c) => (
+                      <span key={c.key} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 16, padding: "4px 10px", fontSize: 12, color: "#334155" }}>
+                        {c.name}<span style={{ color: "#94a3b8", fontSize: 11 }}>from quotes</span>
+                      </span>
+                    ))}
+                    <span style={{ fontSize: 11, color: "#94a3b8" }}>Hit Edit to attach them properly.</span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: "#94a3b8" }}>None attached yet — hit Edit to add people.</div>
+                )
               ) : (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {partyList.map((p) => { const c = partyContactOf(p); if (!c) return null; return (
@@ -3286,7 +3306,10 @@ Are you sure you want it ${verb}?`);
           <div style={{ marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <label style={{ ...s.label, margin: 0 }}>Quotes &amp; Invoices by Contact ({consultants.length})</label>
-              <button onClick={() => newDoc("quote")} style={{ ...s.btn(accent, true), fontSize: 11 }}><Icons.Plus /> New Quote</button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => newDoc("quote")} style={{ ...s.btn(accent, true), fontSize: 11 }}><Icons.Plus /> New Quote</button>
+                <button onClick={() => newDoc("invoice", billedContacts.length === 1 ? billedContacts[0].name : "")} style={{ ...s.btn("#3b82f6", true), fontSize: 11 }}><Icons.Plus /> New Invoice</button>
+              </div>
             </div>
             {consultants.length === 0 ? (
               <div style={{ fontSize: 12, color: "#94a3b8", padding: "8px 0" }}>No quotes or invoices yet. Add a quote per consultant/client — each accepted quote adds to the contract.</div>
