@@ -168,6 +168,28 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 
   const accountName = profile.account_name || profile.name || bName;
 
+  const planRows = isQuote && Array.isArray(inv.payment_plan) && inv.payment_plan.length
+    ? (() => {
+        const t = Number(inv.total) || 0;
+        const rows = inv.payment_plan.map((st) => ({ label: st.label || "", amount: Math.round(((t * (Number(st.percent) || 0)) / 100) * 100) / 100, percent: Number(st.percent) || 0 }));
+        const summed = rows.reduce((s, r) => s + r.amount, 0);
+        const pct = inv.payment_plan.reduce((s, st) => s + (Number(st.percent) || 0), 0);
+        if (rows.length && Math.abs(pct - 100) < 0.005) rows[rows.length - 1].amount = Math.round((rows[rows.length - 1].amount + (t - summed)) * 100) / 100;
+        return rows;
+      })()
+    : [];
+  const paymentPlanHTML = planRows.length ? `
+    <div style="margin-top:18px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
+      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Plan</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;color:#1e293b">
+        ${planRows.map((r, i) => `<tr>
+          <td style="padding:8px 12px;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.label}</td>
+          <td style="padding:8px 12px;text-align:right;color:#64748b;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.percent}%</td>
+          <td style="padding:8px 12px;text-align:right;font-weight:600;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${fmtAUD(r.amount)}</td>
+        </tr>`).join("")}
+      </table>
+    </div>` : "";
+
   const paymentSection = !isQuote ? `
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
@@ -263,6 +285,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   </div>
 
   <!-- Payment / Quote notice -->
+  ${paymentPlanHTML}
   ${paymentSection}
   ${payButtonHTML}
 

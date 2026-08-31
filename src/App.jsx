@@ -235,6 +235,51 @@ const statusesFor = (doc) => (doc?.type === "quote" ? QUOTE_STATUSES : INVOICE_S
 // Judged on the document as it stands and used ONLY at the moment of a
 // transition — never on stored state, or opening one of those older records
 // would be refused.
+// When each stage of a quote falls due. Presets rather than a template keyed on
+// job type: the billing history has one, two and three-stage jobs whose amounts
+// follow no pattern, and a DA/CC/CDC template would fight every Drafting Only
+// and BCA job. Pick a shape, then edit both the split and the wording.
+//
+// A stage is a TRIGGER, not a date. Nobody knows the date of a CDC lodgement
+// when they are writing the quote; what the client needs to know is what causes
+// each payment. The date appears later, on the invoice raised for that stage.
+const PAYMENT_PRESETS = [
+  { key: "100", label: "100%", stages: [{ label: "On completion", percent: 100 }] },
+  { key: "50-50", label: "50 / 50", stages: [{ label: "Deposit on acceptance", percent: 50 }, { label: "On completion", percent: 50 }] },
+  { key: "30-40-30", label: "30 / 40 / 30", stages: [{ label: "Deposit on acceptance", percent: 30 }, { label: "On finalisation of the plans", percent: 40 }, { label: "On submission of the application", percent: 30 }] },
+  { key: "25x4", label: "25 / 25 / 25 / 25", stages: [{ label: "Deposit on acceptance", percent: 25 }, { label: "On finalisation of the plans", percent: 25 }, { label: "On submission of the application", percent: 25 }, { label: "On completion", percent: 25 }] },
+];
+
+// Wording that recurs, offered as suggestions on the stage field. A datalist
+// rather than a table: they are a handful of strings, always free to override.
+const STAGE_SUGGESTIONS = [
+  "Deposit on acceptance",
+  "On finalisation of the existing plans",
+  "On finalisation of the plans",
+  "On submission of the application",
+  "On lodgement of the DA",
+  "On issue of the certificate",
+  "Progress payment",
+  "On completion",
+];
+
+// The last stage carries the rounding, so stages always add to the total exactly
+// and no money is stranded by a fraction of a cent.
+function planAmounts(stages, total) {
+  const t = Number(total) || 0;
+  const rows = (stages || []).map((st) => ({ ...st, amount: Math.round(((t * (Number(st.percent) || 0)) / 100) * 100) / 100 }));
+  // Only absorb sub-cent rounding, and only when the split is actually 100%.
+  // Otherwise the amounts would silently total the quote while the percentages
+  // said something else, contradicting the warning beside them.
+  const pct = (stages || []).reduce((s, st) => s + (Number(st.percent) || 0), 0);
+  if (rows.length && Math.abs(pct - 100) < 0.005) {
+    const summed = rows.reduce((s, r) => s + r.amount, 0);
+    rows[rows.length - 1].amount = Math.round((rows[rows.length - 1].amount + (t - summed)) * 100) / 100;
+  }
+  return rows;
+}
+const planPercentTotal = (stages) => Math.round((stages || []).reduce((s, st) => s + (Number(st.percent) || 0), 0) * 100) / 100;
+
 function docGaps(doc) {
   const hasScope = (doc?.items || []).some((i) => String(i?.description || "").trim());
   const hasValue = Number(doc?.total || 0) > 0;
@@ -795,6 +840,28 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
 
   const subtotal = isLump ? (Number(inv.total) || 0) : (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
 
+  const planRows = isQuote && Array.isArray(inv.payment_plan) && inv.payment_plan.length
+    ? (() => {
+        const t = Number(inv.total) || 0;
+        const rows = inv.payment_plan.map((st) => ({ label: st.label || "", amount: Math.round(((t * (Number(st.percent) || 0)) / 100) * 100) / 100, percent: Number(st.percent) || 0 }));
+        const summed = rows.reduce((s, r) => s + r.amount, 0);
+        const pct = inv.payment_plan.reduce((s, st) => s + (Number(st.percent) || 0), 0);
+        if (rows.length && Math.abs(pct - 100) < 0.005) rows[rows.length - 1].amount = Math.round((rows[rows.length - 1].amount + (t - summed)) * 100) / 100;
+        return rows;
+      })()
+    : [];
+  const paymentPlanHTML = planRows.length ? `
+    <div style="margin-top:18px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
+      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Plan</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;color:#1e293b">
+        ${planRows.map((r, i) => `<tr>
+          <td style="padding:8px 12px;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.label}</td>
+          <td style="padding:8px 12px;text-align:right;color:#64748b;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.percent}%</td>
+          <td style="padding:8px 12px;text-align:right;font-weight:600;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${fmt(r.amount)}</td>
+        </tr>`).join("")}
+      </table>
+    </div>` : "";
+
   const paymentSection = !isQuote ? `
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
@@ -862,6 +929,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       </div>
     </div>
 
+    ${paymentPlanHTML}
     ${paymentSection}
 
     ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
@@ -1693,7 +1761,7 @@ export default function BookkeeperApp() {
     // one — which is why only 3 of 12 quotes carry a send timestamp. It is
     // guarded below: the form spreads the whole row on save, so a stale copy
     // must never be able to blank the value the server wrote.
-    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at"];
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at", "payment_plan"];
     const dbUpdates = {};
     for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
     // Only ever set, never cleared. updateInvoice receives the whole form row,
@@ -2334,6 +2402,7 @@ Are you sure you want it ${verb}?`);
       items: splitScopeRows(doc.items, doc.pricing_mode).map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
       notes: doc.notes,
       terms: doc.terms,
+      payment_plan: doc.payment_plan || null,
     });
     setEditItem(null);
     setModal("invoice");
@@ -2575,7 +2644,7 @@ Are you sure you want it ${verb}?`);
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
+      : { payment_plan: seed.payment_plan ?? null, number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
     // seed — so a restored draft can never land in the wrong form.
@@ -2949,6 +3018,55 @@ Are you sure you want it ${verb}?`);
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, color: "#0f172a" }}><span>Total</span><span>{fmt(total)}</span></div>
           )}
         </div>
+        {f.type === "quote" && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+              <label style={{ ...s.label, margin: 0 }}>Payment Plan</label>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginLeft: "auto" }}>
+                {PAYMENT_PRESETS.map((p) => (
+                  <button key={p.key} type="button" onClick={() => setF({ ...f, payment_plan: p.stages.map((st) => ({ ...st })) })}
+                    style={{ ...s.btnOutline, fontSize: 11, padding: "6px 10px" }}>{p.label}</button>
+                ))}
+                {(f.payment_plan || []).length > 0 && (
+                  <button type="button" onClick={() => setF({ ...f, payment_plan: null })} style={{ ...s.btnOutline, fontSize: 11, padding: "6px 10px", color: "#ef4444", borderColor: "#ef444440" }}>Clear</button>
+                )}
+              </div>
+            </div>
+            {(f.payment_plan || []).length === 0 ? (
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>No plan — the quote just shows the total. Pick a split above to say when each stage falls due.</div>
+            ) : (
+              <>
+                <datalist id="bk-stage-suggestions">{STAGE_SUGGESTIONS.map((x) => <option key={x} value={x} />)}</datalist>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {planAmounts(f.payment_plan, total).map((st, idx) => (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 74px 92px 28px", gap: 6, alignItems: "center" }}>
+                      <input list="bk-stage-suggestions" value={st.label || ""} placeholder="When this stage is due"
+                        onChange={(e) => { const p = [...f.payment_plan]; p[idx] = { ...p[idx], label: e.target.value }; setF({ ...f, payment_plan: p }); }}
+                        style={{ ...s.input, fontSize: 13 }} />
+                      <div style={{ position: "relative" }}>
+                        <input type="number" step="0.01" value={st.percent ?? ""} placeholder="0"
+                          onChange={(e) => { const p = [...f.payment_plan]; p[idx] = { ...p[idx], percent: e.target.value === "" ? "" : Number(e.target.value) }; setF({ ...f, payment_plan: p }); }}
+                          style={{ ...s.input, fontSize: 13, textAlign: "right", paddingRight: 22 }} />
+                        <span style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "#94a3b8", pointerEvents: "none" }}>%</span>
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(st.amount)}</div>
+                      <button type="button" title="Remove stage" onClick={() => { const p = f.payment_plan.filter((_, i) => i !== idx); setF({ ...f, payment_plan: p.length ? p : null }); }}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                  <button type="button" onClick={() => setF({ ...f, payment_plan: [...(f.payment_plan || []), { label: "", percent: 0 }] })} style={{ ...s.btnOutline, fontSize: 11 }}>+ Add stage</button>
+                  {(() => {
+                    const pct = planPercentTotal(f.payment_plan);
+                    const ok = Math.abs(pct - 100) < 0.005;
+                    return <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: ok ? "#059669" : "#b91c1c" }}>{pct}% {ok ? "of the total" : "— should be 100%"}</span>;
+                  })()}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <div style={{ marginBottom: 16 }}><label style={s.label}>Notes / Payment Terms</label><textarea value={f.notes} onChange={(e) => { setNotesEdited(true); setF({ ...f, notes: e.target.value }); }} placeholder="Payment terms, notes, etc." style={{ ...s.input, minHeight: 60, resize: "vertical" }} /></div>
         <div style={{ marginBottom: 16 }}>
           <label style={s.label}>Terms &amp; Conditions {f.terms ? "(prints on its own page at the end)" : "(optional)"}</label>
