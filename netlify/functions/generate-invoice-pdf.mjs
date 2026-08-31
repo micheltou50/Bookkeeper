@@ -134,13 +134,14 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   const isLump = inv.pricing_mode === "lump_sum";
 
   const lumpScope = (items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
+  const lumpNotes = (items || []).map((i) => i.note || "").filter((n) => n.trim()).join("\n");
 
   const itemsTable = isLump
     ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <thead><tr style="background:#f8fafc">
           <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
         </tr></thead>
-        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}</td></tr></tbody>
+        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}${lumpNotes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb;font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${lumpNotes}</div>` : ""}</td></tr></tbody>
       </table>`
     : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <thead><tr style="background:#f8fafc">
