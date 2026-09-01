@@ -237,7 +237,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       <div style="margin-top:10px">
         ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
         <div style="font-size:10px;color:#6b7280;line-height:1.6">
-          ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+          ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
         </div>
       </div>
     </div>

@@ -405,9 +405,15 @@ function ScopeLibrary({ lines, isMobile, s, onClose, onAdd }) {
   const toggle = (id) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const addAll = (ids) => setPicked((p) => { const n = new Set(p); ids.forEach((i) => n.add(i)); return n; });
   const chosen = (lines || []).filter((l) => picked.has(l.id));
+  // Ticking a dozen lines and brushing the edge of the sheet used to lose the
+  // lot. The search text is not worth asking about; the selection is.
+  const requestCloseLibrary = () => {
+    if (picked.size && !window.confirm("Discard the lines you have ticked?")) return;
+    onClose();
+  };
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 95 }} />
+      <div onClick={requestCloseLibrary} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 95 }} />
       <div style={{ position: "fixed", zIndex: 96, background: "#fff", display: "flex", flexDirection: "column",
         ...(isMobile
           ? { left: 0, right: 0, bottom: 0, maxHeight: "85vh", borderRadius: "16px 16px 0 0" }
@@ -440,7 +446,7 @@ function ScopeLibrary({ lines, isMobile, s, onClose, onAdd }) {
           })}
         </div>
         <div style={{ display: "flex", gap: 8, padding: "10px 14px calc(env(safe-area-inset-bottom) + 12px)", borderTop: "1px solid #e2e8f0" }}>
-          <button type="button" onClick={onClose} style={{ ...s.btnOutline, padding: "12px 18px" }}>Cancel</button>
+          <button type="button" onClick={requestCloseLibrary} style={{ ...s.btnOutline, padding: "12px 18px" }}>Cancel</button>
           <button type="button" disabled={!chosen.length} onClick={() => onAdd(chosen)}
             style={{ ...s.btn("#3b82f6", true), flex: 1, justifyContent: "center", padding: "12px 18px", opacity: chosen.length ? 1 : 0.5, cursor: chosen.length ? "pointer" : "default" }}>
             {chosen.length ? `Add ${chosen.length} line${chosen.length === 1 ? "" : "s"}` : "Select lines to add"}
@@ -925,7 +931,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
         <div style="margin-top:10px">
           ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
           <div style="font-size:10px;color:#6b7280;line-height:1.6">
-            ${profile.address ? `${profile.address}<br>` : ""}${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
+            ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
           </div>
         </div>
       </div>
@@ -1054,6 +1060,15 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
   const [body, setBody] = useState(defaults.body);
   const [includeSig, setIncludeSig] = useState(true);
   const [sending, setSending] = useState(false);
+  // Nothing guarded this window at all: backdrop, ✕ and Cancel each discarded
+  // a rewritten message without asking. It sits outside the modal system, so it
+  // carries its own check rather than the shared ref.
+  const composeDirty = to !== defaults.to || subject !== defaults.subject || body !== defaults.body || !includeSig;
+  const requestCloseCompose = () => {
+    if (sending) return;
+    if (composeDirty && !window.confirm("Discard this email? Anything you have typed will be lost.")) return;
+    onClose();
+  };
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
   const attachName = `${docType} ${inv.number || "draft"}.pdf`;
 
@@ -1072,11 +1087,11 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
   const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "inherit", color: "#1e293b", background: "#fff" };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", padding: isMobile ? 0 : 16 }} onClick={(e) => { if (e.target === e.currentTarget && !sending) onClose(); }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", padding: isMobile ? 0 : 16 }} onClick={(e) => { if (e.target === e.currentTarget) requestCloseCompose(); }}>
       <div style={{ background: "#fff", width: isMobile ? "100%" : 560, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", borderRadius: isMobile ? "16px 16px 0 0" : 14, boxShadow: "0 20px 60px -15px rgba(16,24,40,0.4)", padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Send {docType} {inv.number}</h3>
-          <button onClick={onClose} disabled={sending} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 8, background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
+          <button onClick={requestCloseCompose} disabled={sending} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 8, background: "none", border: "none", color: "#64748b", cursor: sending ? "default" : "pointer" }}><Icons.X /></button>
         </div>
         <div style={{ marginBottom: 12 }}><label style={lbl}>To</label><input value={to} onChange={(e) => setTo(e.target.value)} style={inp} placeholder="client@example.com" /></div>
         <div style={{ marginBottom: 12 }}><label style={lbl}>Subject</label><input value={subject} onChange={(e) => setSubject(e.target.value)} style={inp} /></div>
@@ -1091,7 +1106,7 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
           <span style={{ fontSize: 15 }}>📎</span> {attachName} <span style={{ color: "#5e7d78" }}>will be attached</span>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button onClick={onClose} disabled={sending} style={{ border: "1px solid #e2e8f0", background: "#fff", color: "#475569", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: sending ? "default" : "pointer" }}>Cancel</button>
+          <button onClick={requestCloseCompose} disabled={sending} style={{ border: "1px solid #e2e8f0", background: "#fff", color: "#475569", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: sending ? "default" : "pointer" }}>Cancel</button>
           <button onClick={send} disabled={sending} style={{ border: "none", background: accent, color: "#fff", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: sending ? "wait" : "pointer", opacity: sending ? 0.6 : 1, display: "inline-flex", alignItems: "center", gap: 6 }}>
             {sending ? "Sending…" : <><Icons.Send /> Send</>}
           </button>
@@ -1116,12 +1131,19 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
 // component would reintroduce the very bug this hoist removes, one level down:
 // its inputs would remount on every keystroke.
 
-function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setModal, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate }) {
-  const [f, setF] = useState(() => ({
+function BusinessSettings({ s, accent, biz, session, profile, saveProfile, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate, formDirtyRef, requestCloseModal }) {
+  const initial = {
     ...profile,
     email_template_invoice: profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE,
     email_template_quote: profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE,
-  }));
+  };
+  const [f, setF] = useState(initial);
+  // The ✕ here discarded the whole profile — ABN, bank name, BSB, account
+  // number, both email templates and the signature — with no confirmation,
+  // while the backdrop nagged even when nothing had been touched. Same fix as
+  // the contact form: say what actually changed and let both exits use it.
+  const initialSnapshot = useRef(JSON.stringify(initial));
+  useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f, formDirtyRef]);
   const [logoPreview, setLogoPreview] = useState(null);
   const fileRef = useRef(null);
   const [reminderRunning, setReminderRunning] = useState(false);
@@ -1197,7 +1219,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
-        <button onClick={() => setModal(null)} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
+        <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
       </div>
       <div style={{ marginBottom: 16 }}>
         <label style={s.label}>Logo</label>
@@ -1352,14 +1374,20 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, setMo
 // half-typed contact vanished. Thirty lines, no effects, no refs — it never
 // mutated App state itself, it was only ever a bystander to someone else's render.
 
-function ContactForm({ existing, s, accent, setModal, setEditItem, addContact, updateContact, deleteContact }) {
-  const [f, setF] = useState(existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" });
+function ContactForm({ existing, s, accent, addContact, updateContact, deleteContact, formDirtyRef, requestCloseModal }) {
+  const init = existing || { name: "", email: "", phone: "", type: "client", company: "", abn: "", address: "", notes: "" };
+  const [f, setF] = useState(init);
   const [saving, setSaving] = useState(false);
+  // This form used to be guarded the wrong way round: clicking beside it always
+  // asked, even untouched, while the ✕ threw the typing away without a word.
+  // Reporting what has actually changed lets both exits behave the same.
+  const initialSnapshot = useRef(JSON.stringify(init));
+  useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f, formDirtyRef]);
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit" : "New"} Contact</h3>
-        <button onClick={() => { setModal(null); setEditItem(null); }} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
+        <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
       </div>
       <div style={s.grid2}>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Name</label><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
@@ -1413,7 +1441,14 @@ export default function BookkeeperApp() {
   // and could be re-saved — the next time that document was opened. Keyed on
   // `modal` alone, so a mid-edit remount (which leaves `modal` untouched) is
   // unaffected and still restores.
+  // formDirtyRef is one ref shared by every form, and only some of them reset
+  // it. A form that saved (the parent closes the modal, not requestCloseModal)
+  // or that was swapped out from under the user left it reading true, so the
+  // NEXT window opened already believing it had unsaved work and nagged on the
+  // way out. Clearing it here means each form starts clean and reports for
+  // itself. Safe against a mid-edit remount, which leaves `modal` untouched.
   useEffect(() => {
+    formDirtyRef.current = false;
     if (modal !== "project") projectDraftRef.current = null;
     if (modal !== "invoice") invoiceDraftRef.current = null;
   }, [modal]);
@@ -1773,7 +1808,7 @@ export default function BookkeeperApp() {
 
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised" };
+    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised", payment_plan: inv.payment_plan || null, sent_at: inv.sent_at || null, paid_date: inv.paid_date || null };
     const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice", false, DUP_NUMBER(inv.number));
     if (!ok) return;
     if (inserted) {
@@ -4404,17 +4439,17 @@ Are you sure you want it ${verb}?`);
   // declared inside App) or need s.modalOverlay/s.modalContent threaded through
   // for no gain (if declared at module scope).
   const modalBlock = modal && (
-    <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(modal !== "project" && modal !== "invoice"); }}>
+    <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) requestCloseModal(); }}>
       <div className="bk-modal" style={isMobile
         ? { ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }
         : s.modalContent}>
         {/* key: now that this form no longer remounts, opening a different
             contact must still start from that contact's values rather than
             reusing the previous one's state. */}
-        {modal === "contact" && <ContactForm key={editItem?.id ?? "new"} existing={editItem} s={s} accent={accent} setModal={setModal} setEditItem={setEditItem} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} />}
+        {modal === "contact" && <ContactForm key={editItem?.id ?? "new"} existing={editItem} s={s} accent={accent} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
         {modal === "invoice" && <InvoiceForm existing={editItem} />}
         {modal === "project" && <ProjectForm existing={editItem} />}
-        {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} setModal={setModal} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} />}
+        {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
       </div>
     </div>
   );
