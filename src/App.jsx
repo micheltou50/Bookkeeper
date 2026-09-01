@@ -320,6 +320,15 @@ function quoteFollowUp(q) {
   return { outFor, basis, expiredDays, expired: expiredDays !== null };
 }
 
+// "00" -> "01". Kept as text and re-padded so a leading zero survives; anything
+// that is not a plain number (someone typing "A") is left exactly as it is
+// rather than being mangled into NaN.
+function nextRevision(rev) {
+  const cur = String(rev ?? "00").trim();
+  if (!/^\d+$/.test(cur)) return cur;
+  return String(Number(cur) + 1).padStart(cur.length, "0");
+}
+
 function docGaps(doc) {
   const hasScope = (doc?.items || []).some((i) => String(i?.description || "").trim());
   const hasValue = Number(doc?.total || 0) > 0;
@@ -532,18 +541,22 @@ function fyChoices(rows, selected) {
   if (selected && selected !== ALL_FY) years.add(selected);
   return [...years].sort((a, b) => Number(b) - Number(a));
 }
-const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid until the "Valid Until" date shown on the first page. Pricing may be subject to change after that date.
-2. Acceptance: Work commences upon written acceptance of this quote.
+const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid until the "Valid Until" date shown on the first page. Pricing may change after that date.
+2. Acceptance: This quote may be accepted by signing and returning it, or in writing by email. Work commences on acceptance.
 3. Fees: Fees are as quoted above.
-4. Payment: Fees are invoiced on agreed milestones or on completion and are due within 7 days of each invoice. Final drawings and lodgement of documents are released upon full payment of all invoices.
-5. Scope: This quote covers only the scope of works listed above.
-6. Variations: Any change to the scope of works may incur additional fees, which will be quoted separately and agreed in writing before proceeding.
-7. Exclusions: Unless expressly stated, the following are excluded — council/certifier and statutory lodgement fees; third-party consultant costs (e.g. structural engineer, surveyor, BASIX, geotechnical, certifier); printing and physical models.
-8. Approvals: We prepare and lodge documentation to a professional standard but cannot guarantee approval by council, a certifier or any authority; their decisions and processing times are outside our control.
-9. Client information & access: The client is responsible for providing accurate information (e.g. survey, existing plans) and reasonable site access. We are not liable for delays or errors arising from incomplete or inaccurate information provided to us.
-10. Timeframes: Any timeframes are estimates only and are subject to authority processing times and the client's timely provision of information and approvals.
-11. Copyright: All drawings and documents remain our intellectual property. On full payment, the client is granted a licence to use them for this project only and may not reuse them on another site or project without our consent.
-12. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss.`;
+4. Payment: Invoices follow the payment schedule in this quotation, or on completion if none is shown, and are due within 7 days of each invoice. Final drawings and lodgement of documents are released on full payment of all invoices.
+5. Overdue Payments / Suspension: If an invoice is overdue, we may give written notice, then suspend work and withhold documents until all invoices are paid.
+6. Scope: This quote covers only the scope of works listed above.
+7. Variations: Any change to the scope of works may incur additional fees, which we will quote and agree in writing before proceeding.
+8. Exclusions: Unless expressly stated, we exclude council, certifier and statutory lodgement fees; third-party consultant costs (e.g. engineer, surveyor, BASIX, geotechnical); printing and physical models.
+9. Approvals: We prepare and lodge documents to a professional standard but cannot guarantee approval by a council, certifier or authority; decisions and processing times are outside our control.
+10. Client Information & Access: The client must provide accurate information (e.g. survey, existing plans) and reasonable site access. We are not liable for delays or errors from inaccurate or missing information.
+11. Timeframes: These are estimates only and depend on authority processing times and the client's timely input and approvals.
+12. Copyright: All drawings and documents remain our intellectual property. On payment of all amounts due, the client may use them for this project only, and not on another site or project without our consent.
+13. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss.
+14. Termination: Either party may end this agreement by notice in writing. The client remains liable for work completed and approved expenses incurred to that date.
+15. Governing Law: This agreement is governed by the laws of New South Wales, Australia.
+16. Entire Agreement: This quotation and these terms form the agreement for the services. Amendments and variations should be agreed in writing.`;
 // Notes / payment-terms default (free text). Quote T&Cs now live in the separate
 // `terms` field (printed on its own page), so a quote's notes start empty.
 function getDefaultTerms(type) { return type === "quote" ? "" : "Payment is due within 7 days from the invoice date. Please use the invoice number as the payment reference."; }
@@ -557,7 +570,10 @@ const acceptanceBlock = (inv) => `<div style="margin-top:30px">
   <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
     Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmt(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
   </div>
-  <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
+  <div style="font-size:10px;color:#334155;line-height:1.6;margin-bottom:14px;padding:9px 11px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">
+    By accepting this quotation, the client confirms that they have read and agree to the Scope of Works, fees, payment schedule and Terms &amp; Conditions contained in this quotation.
+  </div>
+  <div style="font-size:10px;color:#64748b;margin-bottom:18px">This quote may be accepted either by signing and returning this page, or by written acceptance by email.</div>
   <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
     <tr><td style="width:50%;padding:16px 18px 0 0;vertical-align:bottom">Name / Company<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="width:50%;padding:16px 0 0 0;vertical-align:bottom">ABN<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
@@ -898,7 +914,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
     : [];
   const paymentPlanHTML = planRows.length ? `
     <div style="margin-top:18px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
-      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Plan</div>
+      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Schedule</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px;color:#1e293b">
         ${planRows.map((r, i) => `<tr>
           <td style="padding:8px 12px;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.label}</td>
@@ -923,7 +939,21 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
     </div>`;
 
-  return `<div style="width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column">
+  // The document is built as an explicit list of pages so the footer can say
+  // "Page 1 of 2". Quotes carry a second page (terms + acceptance); a plain
+  // invoice with no terms is a single page and then the label is left off
+  // rather than printing a pointless "Page 1 of 1".
+  const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
+  const totalPages = hasTermsPage ? 2 : 1;
+  const PAGE_STYLE = "width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column";
+  const pageFooter = (n) => `<div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
+      <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
+      <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
+      ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
+      ${totalPages > 1 ? `<div style="font-size:8.5px;color:#cbd5e1;margin-top:4px;letter-spacing:0.04em">Page ${n} of ${totalPages}</div>` : ""}
+    </div>`;
+
+  return `<div style="${PAGE_STYLE}">
 
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
       <div>
@@ -959,6 +989,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
         <table style="font-size:11px;margin-left:auto;border-collapse:collapse">
           <tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Quote Date" : "Invoice Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.date ? fmtDate(inv.date) : ""}</td></tr>
           ${inv.due_date ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Valid Until" : "Due Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.due_date)}</td></tr>` : ""}
+          ${isQuote ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Revision</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.revision || "00"}</td></tr>` : ""}
           ${inv.job ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Job / Ref</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.job}</td></tr>` : ""}
         </table>
       </div>
@@ -980,18 +1011,13 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
 
     ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
 
-    ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
+    ${pageFooter(1)}
+  </div>${hasTermsPage ? `<div style="${PAGE_STYLE};page-break-before:always;break-before:page">
       ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
-      <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
+      <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>` : ""}
       ${isQuote ? acceptanceBlock(inv) : ""}
-    </div>` : ""}
-
-    <div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
-      <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
-      <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
-      ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
-    </div>
-  </div>`;
+    ${pageFooter(2)}
+  </div>` : ""}`;
 }
 
 // Full-screen, in-app viewer for an invoice/quote. Renders the same HTML the PDF is
@@ -1808,7 +1834,7 @@ export default function BookkeeperApp() {
 
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised", payment_plan: inv.payment_plan || null, sent_at: inv.sent_at || null, paid_date: inv.paid_date || null };
+    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised", revision: inv.revision || null, payment_plan: inv.payment_plan || null, sent_at: inv.sent_at || null, paid_date: inv.paid_date || null };
     const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice", false, DUP_NUMBER(inv.number));
     if (!ok) return;
     if (inserted) {
@@ -1836,7 +1862,7 @@ export default function BookkeeperApp() {
     // one — which is why only 3 of 12 quotes carry a send timestamp. It is
     // guarded below: the form spreads the whole row on save, so a stale copy
     // must never be able to blank the value the server wrote.
-    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at", "payment_plan"];
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at", "payment_plan", "revision"];
     const dbUpdates = {};
     for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
     // Only ever set, never cleared. updateInvoice receives the whole form row,
@@ -2478,6 +2504,7 @@ Are you sure you want it ${verb}?`);
       notes: doc.notes,
       terms: doc.terms,
       payment_plan: doc.payment_plan || null,
+      revision: doc.type === "quote" ? nextRevision(doc.revision) : null,
     });
     setEditItem(null);
     setModal("invoice");
@@ -2719,7 +2746,7 @@ Are you sure you want it ${verb}?`);
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { payment_plan: seed.payment_plan ?? null, number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
+      : { payment_plan: seed.payment_plan ?? null, revision: seed.revision ?? (seedType === "quote" ? "00" : null), number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
     // seed — so a restored draft can never land in the wrong form.
@@ -2947,7 +2974,12 @@ Are you sure you want it ${verb}?`);
         )}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
-          <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
+          <div style={{ marginBottom: 12, display: "grid", gridTemplateColumns: f.type === "quote" ? "1fr 92px" : "1fr", gap: 10 }}>
+            <div><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
+            {f.type === "quote" && (
+              <div><label style={s.label}>Revision</label><input value={f.revision ?? "00"} onChange={(e) => setF({ ...f, revision: e.target.value })} placeholder="00" style={{ ...s.input, textAlign: "center" }} /></div>
+            )}
+          </div>
         </div>
         {f.type === "quote" && !existing && quoteTemplates.length > 0 && (
           <div style={{ background: `${accent}10`, border: `1px solid ${accent}40`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
@@ -3136,17 +3168,23 @@ Are you sure you want it ${verb}?`);
                 <datalist id="bk-stage-suggestions">{STAGE_SUGGESTIONS.map((x) => <option key={x} value={x} />)}</datalist>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {planAmounts(f.payment_plan, total).map((st, idx) => (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 74px 92px 28px", gap: 6, alignItems: "center" }}>
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 72px 104px 28px", gap: 6, alignItems: "center" }}>
                       <input list="bk-stage-suggestions" value={st.label || ""} placeholder="When this stage is due"
                         onChange={(e) => { const p = [...f.payment_plan]; p[idx] = { ...p[idx], label: e.target.value }; setF({ ...f, payment_plan: p }); }}
                         style={{ ...s.input, fontSize: 13 }} />
                       <div style={{ position: "relative" }}>
-                        <input type="number" step="0.01" value={st.percent ?? ""} placeholder="0"
+                        <input type="number" step="0.01" value={st.percent === "" || st.percent == null ? "" : Math.round(st.percent * 100) / 100} placeholder="0"
                           onChange={(e) => { const p = [...f.payment_plan]; p[idx] = { ...p[idx], percent: e.target.value === "" ? "" : Number(e.target.value) }; setF({ ...f, payment_plan: p }); }}
                           style={{ ...s.input, fontSize: 13, textAlign: "right", paddingRight: 22 }} />
                         <span style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "#94a3b8", pointerEvents: "none" }}>%</span>
                       </div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(st.amount)}</div>
+                      <div style={{ position: "relative" }}>
+                        <input type="number" step="0.01" value={Number(st.amount ?? 0).toFixed(2)} disabled={!total}
+                          title={total ? "Type a dollar figure and the percentage follows" : "Set the quote total first"}
+                          onChange={(e) => { if (!total) return; const amt = Number(e.target.value); const p = [...f.payment_plan]; p[idx] = { ...p[idx], percent: (amt / total) * 100 }; setF({ ...f, payment_plan: p }); }}
+                          style={{ ...s.input, fontSize: 13, textAlign: "right", fontWeight: 600, paddingLeft: 18, opacity: total ? 1 : 0.5 }} />
+                        <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "#94a3b8", pointerEvents: "none" }}>$</span>
+                      </div>
                       <button type="button" title="Remove stage" onClick={() => { const p = f.payment_plan.filter((_, i) => i !== idx); setF({ ...f, payment_plan: p.length ? p : null }); }}
                         style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13 }}>✕</button>
                     </div>

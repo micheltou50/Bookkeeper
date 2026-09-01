@@ -88,7 +88,10 @@ const acceptanceBlock = (inv) => `<div style="margin-top:30px">
   <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
     Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmtAUD(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
   </div>
-  <div style="font-size:10px;color:#64748b;margin-bottom:18px">To accept this quote, please complete your invoicing details, sign and date below, and return a copy to us.</div>
+  <div style="font-size:10px;color:#334155;line-height:1.6;margin-bottom:14px;padding:9px 11px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">
+    By accepting this quotation, the client confirms that they have read and agree to the Scope of Works, fees, payment schedule and Terms &amp; Conditions contained in this quotation.
+  </div>
+  <div style="font-size:10px;color:#64748b;margin-bottom:18px">This quote may be accepted either by signing and returning this page, or by written acceptance by email.</div>
   <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
     <tr><td style="width:50%;padding:16px 18px 0 0;vertical-align:bottom">Name / Company<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="width:50%;padding:16px 0 0 0;vertical-align:bottom">ABN<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
@@ -180,7 +183,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
     : [];
   const paymentPlanHTML = planRows.length ? `
     <div style="margin-top:18px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
-      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Plan</div>
+      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Schedule</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px;color:#1e293b">
         ${planRows.map((r, i) => `<tr>
           <td style="padding:8px 12px;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.label}</td>
@@ -214,6 +217,13 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       <div style="font-size:9px;color:#94a3b8;margin-top:6px">${SURCHARGE_PCT > 0 ? `A ${SURCHARGE_PCT}% card surcharge applies at checkout. ` : ""}Or pay by bank transfer using the details above.</div>
     </div>` : "";
 
+  // Explicit page list so the footer can say "Page 1 of 2". A plain invoice with
+  // no terms is one page, and then the label is omitted rather than printing
+  // "Page 1 of 1".
+  const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
+  const totalPages = hasTermsPage ? 2 : 1;
+  const pageNum = (n) => (totalPages > 1 ? `<div class="pagenum">Page ${n} of ${totalPages}</div>` : "");
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -222,7 +232,9 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   @page { size: A4; margin: 0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #fff; color: #1e293b; -webkit-print-color-adjust: exact; }
-  .page { width: 210mm; min-height: 297mm; padding: 40px 44px 84px; }
+  .page { width: 210mm; min-height: 297mm; padding: 40px 44px 84px; display: flex; flex-direction: column; }
+  /* Sits at the bottom of each page's own content, just clear of the fixed footer. */
+  .pagenum { margin-top: auto; padding-top: 14px; text-align: center; font-size: 8.5px; color: #cbd5e1; letter-spacing: 0.04em; }
   /* Fixed footer repeats at the bottom of every printed A4 page (incl. the T&Cs page). */
   .doc-footer { position: fixed; left: 44px; right: 44px; bottom: 20px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 12px; background: #fff; }
 </style>
@@ -266,6 +278,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
       <table style="font-size:11px;margin-left:auto;border-collapse:collapse">
         <tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Quote Date" : "Invoice Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.date)}</td></tr>
         ${inv.due_date ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Valid Until" : "Due Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.due_date)}</td></tr>` : ""}
+        ${isQuote ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Revision</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.revision || "00"}</td></tr>` : ""}
         ${inv.job ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Job / Ref</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.job}</td></tr>` : ""}
       </table>
     </div>
@@ -292,21 +305,24 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   <!-- Notes -->
   ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
 
-  <!-- Terms & Conditions + acceptance (own page for quotes) -->
-  ${(inv.terms && inv.terms.trim()) || isQuote ? `<div style="page-break-before:always;break-before:page;padding-top:8px">
-    ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
-    <div style="font-size:10.5px;color:#475569;line-height:1.75;white-space:pre-wrap">${inv.terms}</div>` : ""}
-    ${isQuote ? acceptanceBlock(inv) : ""}
-  </div>` : ""}
-
-  <!-- Footer -->
-  <div class="doc-footer">
-    <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
-    <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
-    ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
-  </div>
-
+  ${pageNum(1)}
 </div>
+
+<!-- Terms & Conditions + acceptance (own page for quotes) -->
+${hasTermsPage ? `<div class="page" style="break-before:page">
+    ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
+    <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>` : ""}
+    ${isQuote ? acceptanceBlock(inv) : ""}
+  ${pageNum(2)}
+</div>` : ""}
+
+<!-- Footer: fixed, so it repeats at the bottom of every printed page -->
+<div class="doc-footer">
+  <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
+  <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
+  ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
+</div>
+
 </body>
 </html>`;
 }
