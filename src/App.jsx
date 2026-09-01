@@ -2724,7 +2724,16 @@ Are you sure you want it ${verb}?`);
     // after the await never lands. This runs before React flushes the re-render.
     const stashDraft = (nextF) => { invoiceDraftRef.current = { ...liveDraft, f: nextF }; };
     const initialSnapshot = useRef(JSON.stringify(init));
-    useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f]);
+    // "Unsaved" has to mean everything the user has typed. The quick-add contact
+    // and quick-add project panels keep their own state, so a half-filled one
+    // left the form looking untouched and a click on the backdrop discarded it
+    // without asking. Same fault as the project modal had.
+    useEffect(() => {
+      const formChanged = JSON.stringify(f) !== initialSnapshot.current;
+      const quickContact = !!(qa.name || qa.company || qa.email || qa.phone || qa.abn || qa.address);
+      const quickProject = !!(pa.name || pa.address || pa.contract_value);
+      formDirtyRef.current = formChanged || quickContact || quickProject;
+    }, [f, qa, pa]);
     const updateItem = (idx, field, val) => { const items = [...f.items]; items[idx] = { ...items[idx], [field]: val }; setF({ ...f, items }); };
     // Indentation is carried by a single leading space, because that is exactly
     // what bulletizeScope tests for when it decides between a bullet and a
@@ -2744,6 +2753,15 @@ Are you sure you want it ${verb}?`);
       const notes = caveats.length ? [f.notes, ...caveats.map((c) => c.text)].filter((x) => String(x || "").trim()).join("\n") : f.notes;
       setF({ ...f, items: items.length ? items : f.items, notes });
       setLibOpen(false);
+    };
+    // Reorder without dragging: buttons work the same on a phone as on a
+    // desktop, where HTML5 drag events do not fire on touch at all.
+    const moveScopeLine = (idx, dir) => {
+      const to = idx + dir;
+      if (to < 0 || to >= f.items.length) return;
+      const items = [...f.items];
+      [items[idx], items[to]] = [items[to], items[idx]];
+      setF({ ...f, items });
     };
     const toggleScopeIndent = (idx) => {
       const d = f.items[idx]?.description || "";
@@ -2996,7 +3014,7 @@ Are you sure you want it ${verb}?`);
                 {f.items.map((item, idx) => {
                   const sub = /^\s/.test(item.description || "");
                   return (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 28px 28px", gap: 4, alignItems: "center" }}>
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 26px 26px 28px 28px", gap: 3, alignItems: "center" }}>
                       <button type="button" onClick={() => toggleScopeIndent(idx)} title={sub ? "Make a heading" : "Make a sub-item"}
                         style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, border: "1px solid #e2e8f0", background: sub ? "#f1f5f9" : "#ffffff", color: "#64748b", cursor: "pointer", fontSize: 13 }}>{sub ? "◦" : "•"}</button>
                       <input value={(item.description || "").replace(/^\s+/, "")}
@@ -3004,6 +3022,10 @@ Are you sure you want it ${verb}?`);
                         onPaste={(e) => pasteScopeLines(e, idx, sub)}
                         placeholder={idx === 0 ? "Production of the following documentation:" : "Site Plan"}
                         style={{ ...s.input, fontSize: 13, paddingLeft: sub ? 22 : 12 }} />
+                      <button type="button" title="Move up" disabled={idx === 0} onClick={() => moveScopeLine(idx, -1)}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 28, borderRadius: 6, background: "none", border: "none", color: idx === 0 ? "#e2e8f0" : "#94a3b8", cursor: idx === 0 ? "default" : "pointer", fontSize: 11 }}>▲</button>
+                      <button type="button" title="Move down" disabled={idx === f.items.length - 1} onClick={() => moveScopeLine(idx, 1)}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 28, borderRadius: 6, background: "none", border: "none", color: idx === f.items.length - 1 ? "#e2e8f0" : "#94a3b8", cursor: idx === f.items.length - 1 ? "default" : "pointer", fontSize: 11 }}>▼</button>
                       <button type="button" title="Save this line to the library"
                         onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setSaveLine({ idx, anchor: { x: r.left - 150, y: r.bottom } }); }}
                         style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14 }}>☆</button>
