@@ -2929,6 +2929,26 @@ Are you sure you want it ${verb}?`);
       const saved = await saveInv();
       if (saved?.id) openComposeFor(saved);
     };
+    // Save the record, then reliably put the PDF in OneDrive with a visible
+    // result. This is deliberately NOT the old "Save only" behaviour: that filed
+    // to OneDrive only on first create, or on an item change to a draft, and
+    // always silently — so editing anything else, or saving a sent invoice, left
+    // OneDrive untouched with no feedback. Here we regenerate first (the PDF
+    // endpoint only rebuilds when none is stored, so an edit would otherwise file
+    // a stale copy) and then file non-silently.
+    const saveAndFileOneDrive = async () => {
+      const saved = await saveInv();
+      if (!saved?.id) return; // save failed, or cancelled at the sent-figures guard
+      if (!emailConn) { alert("Invoice saved. Connect Outlook in Settings to file it to OneDrive."); return; }
+      try {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        if (token) await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoice_id: saved.id, auth_token: token }),
+        });
+      } catch { /* best-effort — saveToOneDrive still files the stored PDF */ }
+      await saveToOneDrive("invoice", saved.id, {}); // non-silent → "Saved to OneDrive → …"
+    };
     const canCompose = !!emailConn && !!(f.contact_email || "").trim();
 
     // Contacts attached to the selected project (bk_job_parties) — offered first
@@ -3236,53 +3256,47 @@ Are you sure you want it ${verb}?`);
           <label style={s.label}>Terms &amp; Conditions {f.terms ? "(prints on its own page at the end)" : "(optional)"}</label>
           <textarea value={f.terms || ""} onChange={(e) => { setTermsEdited(true); setF({ ...f, terms: e.target.value }); }} placeholder="Full terms & conditions — printed on a separate page at the end of the PDF. Leave blank for none." style={{ ...s.input, minHeight: 120, resize: "vertical", lineHeight: 1.5 }} />
         </div>
-        {canCompose ? (<>
-          <button disabled={saving} onClick={async () => { setSaving(true); await saveAndCompose(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Send /> {existing ? "Save" : "Create"} &amp; Email…</>}</button>
-          <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Save" : "Create"} only (email later)`}</button>
+        {/* Save actions. With Outlook connected: Save & email (when there's a
+            contact to email) plus Save to OneDrive. Without Outlook there is no
+            OneDrive to file to, so it falls back to a plain save. */}
+        {emailConn ? (<>
+          {canCompose && (
+            <button disabled={saving} onClick={async () => { setSaving(true); await saveAndCompose(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Send /> {existing ? "Save" : "Create"} &amp; Email…</>}</button>
+          )}
+          <button disabled={saving} onClick={async () => { setSaving(true); await saveAndFileOneDrive(); setSaving(false); }} style={{ ...(canCompose ? s.btnOutline : s.btn(accent)), width: "100%", justifyContent: "center", marginTop: canCompose ? 8 : 0, opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Cloud /> Save to OneDrive</>}</button>
         </>) : (
           <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
         )}
         {f.type === "quote" && (
           <button onClick={saveAsTemplate} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, gap: 6 }}>☆ Save as Template</button>
         )}
-        {existing && (<>
-          {/* Emailing goes through "Save & Email…" (the compose window) above.
-              An Outlook-draft handoff still lives in the list ⋯ menu for power users. */}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={() => downloadPDF(existing)} disabled={pdfLoading === existing.id} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: pdfLoading === existing.id ? "#94a3b8" : "#8b5cf6", borderColor: "#8b5cf640", gap: 6, opacity: pdfLoading === existing.id ? 0.5 : 1 }}>
-              <Icons.Download /> {pdfLoading === existing.id ? "Generating…" : "Download PDF"}
-            </button>
-            {f.type !== "quote" && (existing.status === "sent" || existing.status === "overdue") && (
-              <button onClick={() => sendReminderViaResend(existing)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#f59e0b", borderColor: "#f59e0b40", gap: 6 }}>
-                ! Email Reminder
-              </button>
-            )}
-          </div>
-          {f.type === "quote" && (
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              {existing.status !== "accepted" && (
-                <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) { alert(`Quote accepted and added to project "${proj.name}".`); await offerDepositInvoice({ ...existing, ...inv, status: "accepted" }, proj); } }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
-                  <Icons.Check /> Accept Quote
-                </button>
-              )}
-              {existing.status !== "superseded" && (
-                <button onClick={convertToInvoice} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", gap: 6 }}>
-                  <Icons.Invoices /> Convert to Invoice
-                </button>
-              )}
-            </div>
-          )}
+        {/* Quote-only next step. */}
+        {existing && f.type === "quote" && (
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            {existing.status !== "paid" && f.type !== "quote" && (
-              <button onClick={() => { markPaid(existing); setModal(null); setEditItem(null); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#34d399", borderColor: "#34d39940", gap: 6 }}>
-                <Icons.Check /> Mark Paid
+            {existing.status !== "accepted" && (
+              <button onClick={async () => { const inv = { ...f, total }; await updateInvoice(existing.id, inv); const proj = await acceptQuote({ ...existing, ...inv }); setModal(null); setEditItem(null); if (proj) { alert(`Quote accepted and added to project "${proj.name}".`); await offerDepositInvoice({ ...existing, ...inv, status: "accepted" }, proj); } }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#10b981", borderColor: "#10b98140", gap: 6 }}>
+                <Icons.Check /> Accept Quote
               </button>
             )}
-            <button onClick={() => deleteInvoice(existing.id)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#ef4444", borderColor: "#ef444440", gap: 6 }}>
-              <Icons.Trash /> Delete
-            </button>
+            {existing.status !== "superseded" && (
+              <button onClick={convertToInvoice} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", gap: 6 }}>
+                <Icons.Invoices /> Convert to Invoice
+              </button>
+            )}
           </div>
-        </>)}
+        )}
+        {/* Everyday footer: Mark as paid (an unpaid invoice) and Cancel.
+            Download PDF, Delete and Send-reminder all live in the row ⋯ menu. */}
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          {existing && f.type !== "quote" && existing.status !== "paid" && (
+            <button onClick={() => { markPaid(existing); setModal(null); setEditItem(null); }} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#34d399", borderColor: "#34d39940", gap: 6 }}>
+              <Icons.Check /> Mark as paid
+            </button>
+          )}
+          <button onClick={() => requestCloseModal()} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", color: "#64748b", gap: 6 }}>
+            Cancel
+          </button>
+        </div>
       </div>
     );
   };
