@@ -2093,18 +2093,22 @@ export default function BookkeeperApp() {
 
   // --- Deposit invoice on quote acceptance ---
 
-  // Create a draft "stage 1 deposit" invoice for an accepted quote. Quiet insert
+  // Create a draft first-stage invoice for an accepted quote. Quiet insert
   // (no modal side effects). division/number derive from the QUOTE row, not the
   // currently viewed division, so a quote accepted from the "All divisions" view
   // still numbers correctly. converted_from_quote_id links it back to the quote
   // and is the idempotency lock — one deposit per quote, ever.
-  const createDepositInvoice = async (quote, project, pct) => {
+  //
+  // `stage` carries the resolved figures: { amount, description }. The caller
+  // decides them — from the quote's payment plan when it has one, otherwise from
+  // a typed percentage — so this function never has to know which path it was.
+  const createDepositInvoice = async (quote, project, stage) => {
     const division = recordDivision(quote);
     // Number off the live ref, not the render-time closure, so a deposit created
     // moments after another insert can't reuse a number.
     const number = getNextDocumentNumber(invoicesRef.current.filter((i) => recordDivision(i) === division), division, "invoice");
-    const amount = Math.round((Number(quote.total) || 0) * pct) / 100; // pct% of total, exact to the cent
-    const description = `Deposit — ${pct}% of accepted quote ${quote.number}`;
+    const amount = stage.amount;
+    const description = stage.description;
     const row = {
       user_id: session.user.id, business_id: biz, division, number, type: "invoice",
       date: today(), due_date: getDefaultDueDate("invoice", today()),
@@ -2125,22 +2129,44 @@ export default function BookkeeperApp() {
     return inserted;
   };
 
-  // Ask (every time, no default) whether to raise the deposit invoice for a
-  // freshly accepted quote, then open the draft for review. Skips silently if
-  // this quote already has one. depositHandledRef is claimed synchronously up
-  // front so a double-click (whose closure still sees a deposit-free invoices
-  // array) can't slip a second deposit through before the first row exists.
+  // Raise the first-stage invoice for a freshly accepted quote, then open the
+  // draft for review. Skips silently if this quote already has one. depositHandledRef
+  // is claimed synchronously up front so a double-click (whose closure still sees a
+  // deposit-free invoices array) can't slip a second deposit through before the
+  // first row exists.
+  //
+  // When the quote carries a payment plan, stage 1 comes straight from it — its
+  // label, percentage and exact amount (via planAmounts, so the invoice matches
+  // the quote's displayed stage to the cent) — and NO percentage is asked for; it
+  // was already set on the quote. The prompt only appears as a fallback for a
+  // quote that has no plan.
   const offerDepositInvoice = async (quote, project) => {
     if (!project || !quote?.id || !(Number(quote.total) > 0)) return null;
     if (depositHandledRef.current.has(quote.id)) return null;
     if (invoicesRef.current.some((i) => i.converted_from_quote_id === quote.id)) return null;
     depositHandledRef.current.add(quote.id);
     const release = () => depositHandledRef.current.delete(quote.id); // re-allow on skip/cancel/failure
-    const raw = window.prompt(`Quote ${quote.number} accepted (${fmt(quote.total)}).\n\nCreate the deposit invoice now? Enter the deposit percentage (e.g. 30) — or Cancel to skip.`, "");
-    if (raw == null || String(raw).trim() === "") { release(); return null; }
-    const pct = Number(String(raw).replace("%", "").trim());
-    if (!isFinite(pct) || pct <= 0 || pct > 100) { release(); alert("Deposit skipped — the percentage must be a number between 1 and 100."); return null; }
-    const inserted = await createDepositInvoice(quote, project, pct);
+
+    const plan = Array.isArray(quote.payment_plan) ? quote.payment_plan : [];
+    let stage;
+    if (plan.length) {
+      // Stage 1 from the plan — no prompt.
+      const s0 = planAmounts(plan, quote.total)[0];
+      const pct = Number(s0.percent) || 0;
+      const label = (s0.label || "").trim() || "Deposit";
+      const of = plan.length > 1 ? ` (stage 1 of ${plan.length})` : "";
+      if (!(s0.amount > 0)) { release(); return null; } // a $0 first stage — nothing to invoice yet
+      stage = { amount: s0.amount, description: `${label} — ${pct}% of accepted quote ${quote.number}${of}` };
+    } else {
+      // No plan: fall back to asking for the deposit percentage.
+      const raw = window.prompt(`Quote ${quote.number} accepted (${fmt(quote.total)}).\n\nCreate the deposit invoice now? Enter the deposit percentage (e.g. 30) — or Cancel to skip.`, "");
+      if (raw == null || String(raw).trim() === "") { release(); return null; }
+      const pct = Number(String(raw).replace("%", "").trim());
+      if (!isFinite(pct) || pct <= 0 || pct > 100) { release(); alert("Deposit skipped — the percentage must be a number between 1 and 100."); return null; }
+      stage = { amount: Math.round((Number(quote.total) || 0) * pct) / 100, description: `Deposit — ${pct}% of accepted quote ${quote.number}` };
+    }
+
+    const inserted = await createDepositInvoice(quote, project, stage);
     if (inserted) { followDocFY(inserted.date); setInvoiceSeed(null); setEditItem(inserted); setModal("invoice"); }
     else release();
     return inserted;
