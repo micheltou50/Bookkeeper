@@ -323,12 +323,6 @@ function quoteFollowUp(q) {
 // "00" -> "01". Kept as text and re-padded so a leading zero survives; anything
 // that is not a plain number (someone typing "A") is left exactly as it is
 // rather than being mangled into NaN.
-function nextRevision(rev) {
-  const cur = String(rev ?? "00").trim();
-  if (!/^\d+$/.test(cur)) return cur;
-  return String(Number(cur) + 1).padStart(cur.length, "0");
-}
-
 function docGaps(doc) {
   const hasScope = (doc?.items || []).some((i) => String(i?.description || "").trim());
   const hasValue = Number(doc?.total || 0) > 0;
@@ -989,7 +983,6 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
         <table style="font-size:11px;margin-left:auto;border-collapse:collapse">
           <tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Quote Date" : "Invoice Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.date ? fmtDate(inv.date) : ""}</td></tr>
           ${inv.due_date ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Valid Until" : "Due Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.due_date)}</td></tr>` : ""}
-          ${isQuote ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Revision</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.revision || "00"}</td></tr>` : ""}
           ${inv.job ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Job / Ref</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.job}</td></tr>` : ""}
         </table>
       </div>
@@ -1332,7 +1325,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
       {panel("quote_tpl", "Quote Templates", "Reusable quote content — rename or delete", (
         <>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-          Templates are created from the quote editor — open any quote and hit “Save as Template”. New quotes offer them under “Start from template”.
+          Saved quote templates appear here to rename or delete. New quotes offer them under “Start from template”.
         </div>
         {quoteTemplates.length === 0 ? (
           <div style={{ fontSize: 12, color: "#94a3b8", padding: "4px 0 8px" }}>No templates yet.</div>
@@ -2533,7 +2526,6 @@ Are you sure you want it ${verb}?`);
       notes: doc.notes,
       terms: doc.terms,
       payment_plan: doc.payment_plan || null,
-      revision: doc.type === "quote" ? nextRevision(doc.revision) : null,
     });
     setEditItem(null);
     setModal("invoice");
@@ -2775,7 +2767,7 @@ Are you sure you want it ${verb}?`);
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { payment_plan: seed.payment_plan ?? null, revision: seed.revision ?? (seedType === "quote" ? "00" : null), number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
+      : { payment_plan: seed.payment_plan ?? null, number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
     // seed — so a restored draft can never land in the wrong form.
@@ -2966,22 +2958,6 @@ Are you sure you want it ${verb}?`);
       setNotesEdited(true);
       setTermsEdited(true);
     };
-    const saveAsTemplate = async () => {
-      const name = window.prompt("Template name:", f.job || "");
-      if (!name || !name.trim()) return;
-      const row = {
-        user_id: session.user.id,
-        business_id: biz,
-        name: name.trim(),
-        pricing_mode: f.pricing_mode || "itemised",
-        items: f.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })),
-        lump_amount: isLump ? (Number(f.lump_amount) || 0) : null,
-        notes: f.notes || null,
-        terms: f.terms || null,
-      };
-      const { ok, data } = await sbWrite(supabase.from("bk_quote_templates").insert(row).select().single(), "save template");
-      if (ok && data) { setQuoteTemplates((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name))); alert(`Template "${data.name}" saved — it's available under "Start from template" on new quotes.`); }
-    };
 
     // One-click quote → invoice (MYOB's headline action). Persists any quote edits,
     // marks the quote Accepted + linked to a project (keeping contract tracking
@@ -3023,12 +2999,7 @@ Are you sure you want it ${verb}?`);
         )}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
-          <div style={{ marginBottom: 12, display: "grid", gridTemplateColumns: f.type === "quote" ? "1fr 92px" : "1fr", gap: 10 }}>
-            <div><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
-            {f.type === "quote" && (
-              <div><label style={s.label}>Revision</label><input value={f.revision ?? "00"} onChange={(e) => setF({ ...f, revision: e.target.value })} placeholder="00" style={{ ...s.input, textAlign: "center" }} /></div>
-            )}
-          </div>
+          <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
         </div>
         {f.type === "quote" && !existing && quoteTemplates.length > 0 && (
           <div style={{ background: `${accent}10`, border: `1px solid ${accent}40`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
@@ -3037,7 +3008,7 @@ Are you sure you want it ${verb}?`);
               <option value="">Choose a template…</option>
               {quoteTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>Fills the scope, price, notes and T&amp;Cs — everything stays editable. To make a new template, save any quote with “Save as Template”.</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>Fills the scope, price, notes and T&amp;Cs — everything stays editable.</div>
           </div>
         )}
         <div style={s.grid2}>
@@ -3266,9 +3237,6 @@ Are you sure you want it ${verb}?`);
           <button disabled={saving} onClick={async () => { setSaving(true); await saveAndFileOneDrive(); setSaving(false); }} style={{ ...(canCompose ? s.btnOutline : s.btn(accent)), width: "100%", justifyContent: "center", marginTop: canCompose ? 8 : 0, opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Cloud /> Save to OneDrive</>}</button>
         </>) : (
           <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
-        )}
-        {f.type === "quote" && (
-          <button onClick={saveAsTemplate} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, gap: 6 }}>☆ Save as Template</button>
         )}
         {/* Quote-only next step. */}
         {existing && f.type === "quote" && (
