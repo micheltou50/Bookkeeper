@@ -2152,7 +2152,10 @@ export default function BookkeeperApp() {
     if (plan.length) {
       // Stage 1 from the plan — no prompt.
       const s0 = planAmounts(plan, quote.total)[0];
-      const pct = Number(s0.percent) || 0;
+      // Round for display the same way the plan editor does — a percent set via
+      // the dollar field is stored unrounded ((amt/total)*100), so without this
+      // the line would read "33.33333333333333%". The amount is unaffected.
+      const pct = Math.round((Number(s0.percent) || 0) * 100) / 100;
       const label = (s0.label || "").trim() || "Deposit";
       const of = plan.length > 1 ? ` (stage 1 of ${plan.length})` : "";
       if (!(s0.amount > 0)) { release(); return null; } // a $0 first stage — nothing to invoice yet
