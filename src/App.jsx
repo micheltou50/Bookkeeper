@@ -1019,7 +1019,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
 // is what produced the old "Allow pop-ups to view the document" message). Defined at
 // the top level — not nested in BookkeeperApp — so a parent re-render (e.g. the PDF
 // download toggling pdfLoading) doesn't unmount it and reload the iframe.
-function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, fetchLogoBase64 }) {
+function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, onEmail, onSaveOneDrive, fetchLogoBase64 }) {
   const [html, setHtml] = useState(null);
   const frameRef = useRef(null);
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
@@ -1049,15 +1049,23 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
 
   const printDoc = () => { try { const w = frameRef.current?.contentWindow; if (w) { w.focus(); w.print(); } } catch { /* print unsupported (e.g. iOS WebView) — use Download instead */ } };
 
+  const [filingOneDrive, setFilingOneDrive] = useState(false);
+  const doSaveOneDrive = async () => { setFilingOneDrive(true); try { await onSaveOneDrive(inv); } finally { setFilingOneDrive(false); } };
+
   const btn = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9, cursor: "pointer", whiteSpace: "nowrap" };
+  const outlineBtn = { ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" };
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#eef2f5", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
         <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 0, width: 32, height: 32, justifyContent: "center" }}><Icons.X /></button>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
-        {!isMobile && <button onClick={printDoc} style={{ ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
-        <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {pdfLoading === inv.id ? "..." : "Download PDF"}</button>
+        {/* Primary actions — email and file to OneDrive — sit first. On a phone
+            they show as icons to keep the bar from overflowing. */}
+        {onEmail && <button onClick={() => onEmail(inv)} title="Email" style={outlineBtn}><Icons.Send /> {isMobile ? "" : "Email"}</button>}
+        {onSaveOneDrive && <button onClick={doSaveOneDrive} disabled={filingOneDrive} title="Save to OneDrive" style={{ ...outlineBtn, opacity: filingOneDrive ? 0.6 : 1 }}><Icons.Cloud /> {isMobile ? "" : (filingOneDrive ? "Saving…" : "Save to OneDrive")}</button>}
+        {!isMobile && <button onClick={printDoc} style={outlineBtn}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
+        <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} title="Download PDF" style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {isMobile ? "" : (pdfLoading === inv.id ? "..." : "Download PDF")}</button>
       </div>
       {html ? (
         <iframe ref={frameRef} srcDoc={html} title={title} style={{ flex: 1, width: "100%", border: "none" }} />
@@ -2631,6 +2639,25 @@ Are you sure you want it ${verb}?`);
   // already re-files itself.)
   const fileIssuedToOneDrive = (invId) => { if (emailConn) saveToOneDrive("invoice", invId, { silent: true }); };
 
+  // Explicit "put this document in OneDrive now", with a visible result. Unlike
+  // the silent auto-file, it regenerates the PDF first so the filed copy reflects
+  // the latest content (the PDF endpoint only rebuilds when none is stored). Used
+  // by the editor's Save-to-OneDrive, the preview header and the ⋯ menu, so the
+  // action behaves the same everywhere. `inv` here is a document row (quote or
+  // invoice) — the server keys the subfolder off the document's own type.
+  const fileToOneDrive = async (inv) => {
+    if (!inv?.id) return false;
+    if (!emailConn) { alert("Connect Outlook in Settings to file to OneDrive."); return false; }
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (token) await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
+      });
+    } catch { /* best-effort — saveToOneDrive still files the stored PDF */ }
+    return saveToOneDrive("invoice", inv.id, {}); // non-silent → "Saved to OneDrive → …"
+  };
+
   const connectOutlook = async () => {
     const token = (await supabase.auth.getSession()).data.session?.access_token;
     if (!token) return;
@@ -2932,14 +2959,7 @@ Are you sure you want it ${verb}?`);
       const saved = await saveInv();
       if (!saved?.id) return; // save failed, or cancelled at the sent-figures guard
       if (!emailConn) { alert("Invoice saved. Connect Outlook in Settings to file it to OneDrive."); return; }
-      try {
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        if (token) await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ invoice_id: saved.id, auth_token: token }),
-        });
-      } catch { /* best-effort — saveToOneDrive still files the stored PDF */ }
-      await saveToOneDrive("invoice", saved.id, {}); // non-silent → "Saved to OneDrive → …"
+      await fileToOneDrive(saved); // regenerate + file, with a visible result
     };
     const canCompose = !!emailConn && !!(f.contact_email || "").trim();
 
@@ -3834,7 +3854,7 @@ Are you sure you want it ${verb}?`);
       alert("Card payment link copied to clipboard.");
     } });
     items.push({ key: "pdf", label: "Download PDF", icon: <Icons.Download />, run: () => downloadPDF(inv) });
-    items.push({ key: "onedrive", label: "Save to OneDrive", icon: <Icons.Cloud />, run: () => saveToOneDrive("invoice", inv.id) });
+    items.push({ key: "onedrive", label: "Save to OneDrive", icon: <Icons.Cloud />, run: () => fileToOneDrive(inv) });
     items.push({ key: "status", label: "Change status…", icon: <Icons.Filter />, run: () => setStatusPick({ doc: inv, anchor }) });
     items.push({ key: "edit", label: "Edit", icon: <Icons.Edit />, run: () => { setEditItem(inv); setModal("invoice"); } });
     items.push({ key: "duplicate", label: isQuote ? "Duplicate quote" : "Duplicate invoice", icon: <Icons.Plus />, run: () => duplicateDoc(inv) });
@@ -4534,7 +4554,7 @@ Are you sure you want it ${verb}?`);
       {statusPick && <StatusPicker doc={statusPick.doc} anchor={statusPick.anchor} isMobile={isMobile} badgeStyle={s.badge}
         onClose={() => setStatusPick(null)}
         onPick={(next) => { const d = statusPick.doc; setStatusPick(null); changeDocStatus(d, next); }} />}
-      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} fetchLogoBase64={fetchLogoBase64} />}
+      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );
