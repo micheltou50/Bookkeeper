@@ -2896,6 +2896,13 @@ Are you sure you want it ${verb}?`);
     const total = isLump ? (Number(f.lump_amount) || 0) : f.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
     const selectedContact = contacts.find((c) => (c.name || c.company) === f.contact_name);
     const sortedJobs = [...divJobs].sort((a, b) => { const aMatch = selectedContact && a.contact_id === selectedContact.id ? 0 : 1; const bMatch = selectedContact && b.contact_id === selectedContact.id ? 0 : 1; return aMatch - bMatch || new Date(b.last_used_at) - new Date(a.last_used_at); });
+    // Group the project picker: active jobs first (that's what you're usually
+    // invoicing against), everything else — leads, finalised, lost — below.
+    // Order within each group keeps the sort above (this contact's jobs, then
+    // most recently used). null status counts as active (createProject's default).
+    const activeJobs = sortedJobs.filter((j) => (j.status || "active") === "active");
+    const otherJobs = sortedJobs.filter((j) => (j.status || "active") !== "active");
+    const jobOption = (j) => <option key={j.id} value={j.id}>{(j.job_number ? j.job_number + " — " : "") + projectLabel(j)}</option>;
     // An issued invoice is a record. Editing its figures is discouraged — offer a
     // "revised invoice" (a fresh draft copy) instead, which keeps the original.
     const isIssued = !!existing && f.type !== "quote" && ["sent", "overdue", "paid"].includes(existing.status);
@@ -3040,7 +3047,8 @@ Are you sure you want it ${verb}?`);
           <div style={{ display: "flex", gap: 4 }}>
             <select value={f.project_id || ""} onChange={(e) => { const p = jobs.find((j) => j.id === e.target.value); const c = p ? projectClient(p) : null; setF({ ...f, project_id: e.target.value || "", job: p ? projectLabel(p) : (e.target.value ? f.job : ""), ...(c && !f.contact_name ? { contact_name: c.name || c.company || "", contact_email: c.email || "", contact_company: c.company || "", contact_abn: c.abn || "", contact_address: c.address || "", contact_phone: c.phone || "" } : {}) }); }} style={{ ...s.select, flex: 1 }}>
               <option value="">No project</option>
-              {sortedJobs.map((j) => <option key={j.id} value={j.id}>{(j.job_number ? j.job_number + " — " : "") + projectLabel(j)}</option>)}
+              {activeJobs.length > 0 && <optgroup label="Active Projects">{activeJobs.map(jobOption)}</optgroup>}
+              {otherJobs.length > 0 && <optgroup label="Other Projects">{otherJobs.map(jobOption)}</optgroup>}
             </select>
             <button type="button" onClick={() => setProjectAdd((v) => !v)} style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 16, fontWeight: 700, lineHeight: 1 }} title="New project">+</button>
           </div>
