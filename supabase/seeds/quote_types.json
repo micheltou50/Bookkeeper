@@ -8,8 +8,8 @@
       "pricing_mode": "lump_sum",
       "payment_plan": [
         { "label": "Deposit on acceptance", "percent": 25 },
-        { "label": "On approval of the floor plans", "percent": 25 },
-        { "label": "On approval of the remaining drawings", "percent": 25 },
+        { "label": "On issue of the floor plans", "percent": 25 },
+        { "label": "On issue of the remaining drawings", "percent": 25 },
         { "label": "Prior to lodgement of the DA", "percent": 25 }
       ],
       "items": [
@@ -50,8 +50,8 @@
       "pricing_mode": "lump_sum",
       "payment_plan": [
         { "label": "Deposit on acceptance", "percent": 25 },
-        { "label": "On approval of the floor plans", "percent": 25 },
-        { "label": "On approval of the remaining drawings", "percent": 25 },
+        { "label": "On issue of the floor plans", "percent": 25 },
+        { "label": "On issue of the remaining drawings", "percent": 25 },
         { "label": "Prior to lodgement of the DA", "percent": 25 }
       ],
       "items": [
@@ -165,8 +165,8 @@
       "pricing_mode": "lump_sum",
       "payment_plan": [
         { "label": "Deposit on acceptance", "percent": 25 },
-        { "label": "On approval of the floor plans", "percent": 25 },
-        { "label": "On approval of the remaining drawings", "percent": 25 },
+        { "label": "On issue of the floor plans", "percent": 25 },
+        { "label": "On issue of the remaining drawings", "percent": 25 },
         { "label": "Prior to lodgement with the certifier", "percent": 25 }
       ],
       "items": [

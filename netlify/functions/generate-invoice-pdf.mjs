@@ -293,6 +293,7 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
         <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
         <span style="font-size:16px;font-weight:800;color:${accent};font-variant-numeric:tabular-nums">${fmtAUD(subtotal)}</span>
       </div>
+      ${profile.gst_not_registered ? `<div style="text-align:right;font-size:9px;color:#94a3b8;padding-top:2px">GST not applicable</div>` : ""}
     </div>
   </div>
 

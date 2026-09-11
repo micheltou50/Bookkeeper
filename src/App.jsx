@@ -24,7 +24,7 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", gst_not_registered: false };
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
@@ -535,22 +535,31 @@ function fyChoices(rows, selected) {
   if (selected && selected !== ALL_FY) years.add(selected);
   return [...years].sort((a, b) => Number(b) - Number(a));
 }
+// Revised 2026-09-11 (commencement conditions, $220 hourly rate for additional
+// services, payment on issue, consultants engaged by the client, deliverables,
+// disputes, ACL carve-out, GST). Applies to NEW quotes only — a saved quote keeps
+// the terms it was issued with. Clause 16 should be legally reviewed.
+const HOURLY_RATE_TEXT = "$220 per hour";
 const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid until the "Valid Until" date shown on the first page. Pricing may change after that date.
-2. Acceptance: This quote may be accepted by signing and returning it, or in writing by email. Work commences on acceptance.
-3. Fees: Fees are as quoted above.
-4. Payment: Invoices follow the payment schedule in this quotation, or on completion if none is shown, and are due within 7 days of each invoice. Final drawings and lodgement of documents are released on full payment of all invoices.
-5. Overdue Payments / Suspension: If an invoice is overdue, we may give written notice, then suspend work and withhold documents until all invoices are paid.
-6. Scope: This quote covers only the scope of works listed above.
-7. Variations: Any change to the scope of works may incur additional fees, which we will quote and agree in writing before proceeding.
-8. Exclusions: Unless expressly stated, we exclude council, certifier and statutory lodgement fees; third-party consultant costs (e.g. engineer, surveyor, BASIX, geotechnical); printing and physical models.
-9. Approvals: We prepare and lodge documents to a professional standard but cannot guarantee approval by a council, certifier or authority; decisions and processing times are outside our control.
-10. Client Information & Access: The client must provide accurate information (e.g. survey, existing plans) and reasonable site access. We are not liable for delays or errors from inaccurate or missing information.
-11. Timeframes: These are estimates only and depend on authority processing times and the client's timely input and approvals.
-12. Copyright: All drawings and documents remain our intellectual property. On payment of all amounts due, the client may use them for this project only, and not on another site or project without our consent.
-13. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss.
-14. Termination: Either party may end this agreement by notice in writing. The client remains liable for work completed and approved expenses incurred to that date.
-15. Governing Law: This agreement is governed by the laws of New South Wales, Australia.
-16. Entire Agreement: This quotation and these terms form the agreement for the services. Amendments and variations should be agreed in writing.`;
+2. Acceptance: This quote may be accepted by signing and returning it, by written acceptance by email, or by a purchase order that refers to it. Acceptance by email or electronic signature is binding.
+3. Commencement: Work commences when this quote has been accepted, the first-stage payment has been received, and the information we need to start (for example the survey, existing plans, or the DA consent and approved drawings) has been provided.
+4. Fees and GST: Fees are as quoted above. Mworx Group is not registered for GST; no GST is included in or added to our fees. Third-party fees passed on to the client may include GST.
+5. Payment: Invoices are issued at the stages shown in the payment schedule, when the documents for that stage have been issued to the client, or on completion if no schedule is shown. Each invoice is due within 7 days. Final drawings and lodgement of documents are released on full payment of all invoices.
+6. Overdue Payments / Suspension: If an invoice is overdue, we may give written notice, then suspend work and withhold documents until all invoices are paid. Recommencement after a suspension is subject to our availability and may affect the programme.
+7. Scope: This quote covers only the scope of works listed above.
+8. Variations and Additional Services: Any change to the scope of works may incur additional fees, which we will quote and agree in writing before proceeding. Where a separate quote is not practical, additional work is charged at ${HOURLY_RATE_TEXT}. Additional work includes, for example: redesign or changes to drawings already issued; additional meetings, site visits or measure-ups; requests from an authority or certifier outside the original brief; work arising from inaccurate or incomplete information provided to us; and re-mobilisation after a suspension or a delay of more than 14 days caused by the client.
+9. Exclusions and Disbursements: Unless expressly stated, we exclude council, certifier, NSW Planning Portal and other statutory fees; third-party consultant costs (e.g. engineer, surveyor, BASIX, geotechnical, fire safety, access); and printing, courier, paid searches and physical models. Where we pay any of these on the client's behalf, they are passed on at cost.
+10. Consultants: Unless this quote states otherwise, consultants are engaged by, and contract directly with, the client. We coordinate their input but are not responsible for their fees, their work or their timeframes.
+11. Approvals: We prepare and lodge documents to a professional standard but cannot guarantee approval by a council, certifier or authority; decisions and processing times are outside our control.
+12. Client Information, Access and Decisions: The client must provide accurate information (e.g. survey, existing plans), reasonable site access, and timely decisions and approvals. We are not liable for delays or errors arising from inaccurate, missing or late information or decisions.
+13. Timeframes: We will advise an indicative programme on commencement. Timeframes are estimates only and depend on authority processing times and the client's timely input and approvals.
+14. Deliverables: Documents are issued as PDF. Editable files (DWG, Revit or similar) are not included unless listed in the scope of works, and are released only after full payment.
+15. Copyright: All drawings and documents remain our intellectual property. On payment of all amounts due, the client may use them for this project only, and not on another site or project without our consent.
+16. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss. Nothing in these terms excludes a guarantee or right under the Australian Consumer Law that cannot be excluded; to the extent permitted, our liability for breach of such a guarantee is limited to supplying the services again or paying the cost of having them supplied again.
+17. Termination: Either party may end this agreement by notice in writing. The client remains liable for work completed to that date (at the stage percentage reached, or at ${HOURLY_RATE_TEXT} if no stage has been reached) and for approved expenses incurred.
+18. Disputes: If a dispute arises, the parties will first attempt to resolve it by discussion in good faith, then by mediation, before commencing any proceedings.
+19. Governing Law: This agreement is governed by the laws of New South Wales, Australia.
+20. Entire Agreement: This quotation and these terms form the agreement for the services. Amendments and variations should be agreed in writing.`;
 // Notes / payment-terms default (free text). Quote T&Cs now live in the separate
 // `terms` field (printed on its own page), so a quote's notes start empty.
 function getDefaultTerms(type) { return type === "quote" ? "" : "Payment is due within 7 days from the invoice date. Please use the invoice number as the payment reference."; }
@@ -996,6 +1005,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
           <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
           <span style="font-size:16px;font-weight:800;color:${accent}">${fmt(subtotal)}</span>
         </div>
+        ${profile.gst_not_registered ? `<div style="text-align:right;font-size:9px;color:#94a3b8;padding-top:2px">GST not applicable</div>` : ""}
       </div>
     </div>
 
@@ -1261,6 +1271,10 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
         <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
         <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn || ""} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
       </div>
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, color: "#475569", marginBottom: 12, cursor: "pointer", lineHeight: 1.45 }}>
+        <input type="checkbox" checked={!!f.gst_not_registered} onChange={(e) => setF({ ...f, gst_not_registered: e.target.checked })} style={{ marginTop: 2, accentColor: accent }} />
+        <span>Not registered for GST — print “GST not applicable” under the total on quotes and invoices.</span>
+      </label>
       <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address || ""} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
       <div style={s.grid2}>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
@@ -2261,7 +2275,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", gst_not_registered: !!p.gst_not_registered, email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
     if (saved) setProfile(saved);
