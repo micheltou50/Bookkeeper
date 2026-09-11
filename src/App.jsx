@@ -3501,8 +3501,8 @@ Are you sure you want it ${verb}?`);
           </div>
         ) : (
           <>
-            <div style={{ marginBottom: 12 }}><label style={s.label}>Project name</label><input autoFocus value={np.name} onChange={(e) => setNp({ ...np, name: e.target.value })} placeholder="e.g. 5 Midleton Ave Bexley North" style={s.input} /></div>
-            <div style={{ marginBottom: 12 }}><label style={s.label}>Address (optional)</label><input value={np.address} onChange={(e) => setNp({ ...np, address: e.target.value })} style={s.input} /></div>
+            {/* Projects are named by their site address, so one field fills both. */}
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Project address</label><input autoFocus value={np.name} onChange={(e) => setNp({ ...np, name: e.target.value, address: e.target.value })} placeholder="e.g. 5 Midleton Avenue Bexley North NSW" style={s.input} /></div>
             <div style={s.grid2}>
               <div style={{ marginBottom: 12 }}>
                 <label style={s.label}>Application Type</label>
