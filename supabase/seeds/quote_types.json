@@ -1,0 +1,338 @@
+{
+  "_readme": "Ready-written quote types for Mworx Group. One entry per kind of job; the app offers the ones whose application_type matches the project. Scope lines: a leading space marks a sub-item (the same convention as the quote form). Bracketed text is a placeholder to overwrite. Generate SQL with: node scripts/seed-quote-types.mjs",
+  "business_id": "mworx",
+  "templates": [
+    {
+      "name": "DA — Residential (Class 1)",
+      "application_type": "DA",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 25 },
+        { "label": "On issue of the floor plans", "percent": 25 },
+        { "label": "On issue of the remaining drawings", "percent": 25 },
+        { "label": "Prior to lodgement of the DA", "percent": 25 }
+      ],
+      "items": [
+        "Development Application for [proposed works] at [address]",
+        "Services included:",
+        " Initial project briefing",
+        " Design and preparation of the layout plan to suit the brief and Council's controls",
+        " Meetings and modifications required to finalise the layout plan",
+        " Coordination of the required consultants",
+        " Submission of the DA on the NSW Planning Portal",
+        " Drafting amendments and re-submissions to suit Council requests (where required)",
+        "Production of the following documentation:",
+        " Site Plan",
+        " Site Analysis Plan",
+        " Floor Plans (dimensioned)",
+        " Elevations",
+        " Section x1",
+        " Demolition Plan (if required)",
+        " Shadow Diagrams (if required)",
+        " Window Schedule",
+        " Schedule of External Colours and Finishes",
+        " Neighbour Notification Plan",
+        " Waste Management Plan",
+        " Statement of Environmental Effects",
+        " Cost Summary Report"
+      ],
+      "notes": [
+        "Council and NSW Planning Portal fees are payable by the client.",
+        "Consultant reports (survey, BASIX, structural, stormwater, arborist, geotechnical and the like) are excluded. We coordinate them and their fees are payable directly to the consultant.",
+        "A detail survey plan with contours to AHD, in DWG format, is to be provided by the client before design commences.",
+        "Construction Certificate documentation, Section 4.55 modifications and any submission after determination are not included and will be quoted separately.",
+        "The fee includes reasonable responses to routine Council requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "DA — Commercial (Class 2–9)",
+      "application_type": "DA",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 25 },
+        { "label": "On issue of the floor plans", "percent": 25 },
+        { "label": "On issue of the remaining drawings", "percent": 25 },
+        { "label": "Prior to lodgement of the DA", "percent": 25 }
+      ],
+      "items": [
+        "Development Application for [proposed works] at [address]",
+        "Services included:",
+        " Initial project briefing",
+        " Design and preparation of the layout plan to suit the brief and the applicable planning controls",
+        " Meetings and modifications required to finalise the layout plan",
+        " Coordination of the required consultants",
+        " Submission of the DA on the NSW Planning Portal",
+        " Drafting amendments and re-submissions to suit Council requests (where required)",
+        "Production of the following documentation:",
+        " Site Plan",
+        " Floor Plans (dimensioned)",
+        " Elevations",
+        " Section x1",
+        " Building Specifications",
+        " Demolition Plan (if required)",
+        " Shadow Diagrams (if required)",
+        " Driveway / Ramp Grade Details (vehicular crossing design by others)",
+        " Neighbour Notification Plan",
+        " Waste Management Plan",
+        " Plan of Management (if required)",
+        " Statement of Environmental Effects"
+      ],
+      "notes": [
+        "Council and NSW Planning Portal fees are payable by the client.",
+        "Consultant reports (survey, traffic, acoustic, BCA, access, fire safety, structural, stormwater and the like) are excluded. We coordinate them and their fees are payable directly to the consultant.",
+        "A detail survey plan with contours to AHD, in DWG format, is to be provided by the client before design commences.",
+        "No provision has been made for a Section 34 conference, Land and Environment Court proceedings or the lead-up to such events. This will be quoted separately.",
+        "Construction Certificate documentation, Section 4.55 modifications and any submission after determination are not included and will be quoted separately.",
+        "The fee includes reasonable responses to routine Council requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "DA — Change of Use",
+      "application_type": "DA",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 30 },
+        { "label": "On finalisation of the plans", "percent": 40 },
+        { "label": "On submission of the application", "percent": 30 }
+      ],
+      "items": [
+        "Change of use to a [proposed use] at [address]",
+        "Site visit and measure up of the existing premises",
+        "Internal alterations to include the following:",
+        " [alteration]",
+        " [alteration]",
+        "Production of the following documentation:",
+        " Site Plan",
+        " Existing Floor Plan",
+        " Demolition Floor Plan",
+        " Proposed Floor Plan",
+        " Section x1",
+        " Building Specifications",
+        " Neighbour Notification Plan",
+        " Waste Management Plan",
+        " Plan of Management (if required)",
+        " Statement of Environmental Effects",
+        "Coordination of the required consultants",
+        "Submission of the DA on the NSW Planning Portal",
+        "Responses to Council requests for information"
+      ],
+      "notes": [
+        "No additions to the existing building envelope and no external signage are included.",
+        "Any performance solution coordination and implementation will be charged at a rate of $330 per performance solution.",
+        "Council and NSW Planning Portal fees are payable by the client. Consultant reports (BCA, access, fire safety, acoustic, traffic and the like) are excluded; we coordinate them and their fees are payable directly to the consultant.",
+        "The fee includes reasonable responses to routine Council requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "CDC — Change of Use / Fit-out",
+      "application_type": "CDC",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 30 },
+        { "label": "On finalisation of the plans", "percent": 40 },
+        { "label": "On submission of the application", "percent": 30 }
+      ],
+      "items": [
+        "Change of use to a [proposed use] at [address]",
+        "Internal alterations to include the following:",
+        " [alteration]",
+        " [alteration]",
+        "Production of the following documentation:",
+        " Site Plan",
+        " Existing Floor Plan",
+        " Demolition Floor Plan",
+        " Proposed Floor Plan",
+        " Section x1",
+        " Reflected Ceiling Plan showing existing and proposed dry fire measures",
+        " Wet area waterproofing details",
+        " Building Specifications",
+        "Coordination of the required consultants",
+        "Submission of the CDC application on the NSW Planning Portal",
+        "Submission of the PC appointment application on the NSW Planning Portal"
+      ],
+      "notes": [
+        "This fee excludes site visit and measure up of the premises; if required, it will be charged at $750.",
+        "Any performance solution coordination and implementation will be charged at a rate of $330 per performance solution.",
+        "Stairway section/detail is to be provided by others.",
+        "No additions to the existing building envelope and no external signage are included.",
+        "Certifier and NSW Planning Portal fees are payable by the client. Consultant reports (fire safety, access, structural and the like) are excluded; we coordinate them and their fees are payable directly to the consultant.",
+        "Any amendments or re-submissions after the CDC has been issued will be quoted separately."
+      ]
+    },
+    {
+      "name": "CDC — New Work / Alterations & Additions",
+      "application_type": "CDC",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 25 },
+        { "label": "On issue of the floor plans", "percent": 25 },
+        { "label": "On issue of the remaining drawings", "percent": 25 },
+        { "label": "Prior to lodgement with the certifier", "percent": 25 }
+      ],
+      "items": [
+        "Complying Development Certificate for [proposed works] at [address]",
+        "Services included:",
+        " Initial project briefing",
+        " Design and preparation of the layout plan to suit the brief and the Codes SEPP",
+        " Meetings and modifications required to finalise the layout plan",
+        " Coordination of the required consultants (until CDC determination)",
+        " Submission of the CDC application on the NSW Planning Portal",
+        " Drafting amendments and re-submissions to suit the certifier (where required)",
+        "Production of the following documentation:",
+        " Site Plan",
+        " Floor Plans (dimensioned)",
+        " Elevations",
+        " Sections",
+        " Wall Setout Plans",
+        " Reflected Ceiling Plans",
+        " Wet Area Details",
+        " Window and Door Schedule",
+        " Construction Details in plan and section (up to two)",
+        " Building Specifications",
+        " Demolition Plan (if required)",
+        " Driveway / Ramp Grade Details (vehicular crossing design by others)"
+      ],
+      "notes": [
+        "No basements, swimming pools or freestanding structures are included.",
+        "A detail survey plan with contours to AHD, in DWG format, is to be provided by the client before design commences.",
+        "Certifier and NSW Planning Portal fees are payable by the client. Consultant reports (survey, BASIX / Section J, structural, stormwater, fire safety, access and the like) are excluded; we coordinate them and their fees are payable directly to the consultant.",
+        "Any performance solution coordination and implementation will be charged at a rate of $330 per performance solution.",
+        "Any amendments or re-submissions after the CDC has been issued will be quoted separately.",
+        "The fee includes reasonable responses to routine certifier requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "CC — Construction Certificate",
+      "application_type": "CC",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 30 },
+        { "label": "On commencement of the CC documentation", "percent": 35 },
+        { "label": "Prior to submission to the certifier", "percent": 35 }
+      ],
+      "items": [
+        "Construction Certificate documentation and coordination for [DA number] at [address]",
+        "Meeting to discuss the consent and outline the process to obtain the CC",
+        "Drafting the changes required to meet the conditions of consent for CC issue",
+        "Production of the following documentation:",
+        " Site Plan",
+        " Floor Plans (dimensioned)",
+        " RLs to the floor areas",
+        " Elevations",
+        " Sections",
+        " Schedule of external materials and finishes",
+        " Wall Schedule",
+        " Window Schedule",
+        " Door Schedule",
+        " Wet area waterproofing details",
+        " Typical stair details",
+        " Building Specifications",
+        "Coordination of the required consultants",
+        "Submission of the CC to the certifier",
+        "Drafting amendments and re-submissions to suit the certifier (where required)"
+      ],
+      "notes": [
+        "Any performance solution coordination and implementation will be charged at a rate of $330 per performance solution.",
+        "Any modification to the approved plans must be approved by the certifier. If a Section 4.55 modification is required, it will be quoted separately.",
+        "The client is to provide the DA consent, the approved plans in DWG and PDF format, and all consultant plans and reports that accompanied the DA.",
+        "Certifier fees are payable by the client. Consultant reports (structural, hydraulic, BASIX / Section J, fire safety, access and the like) are excluded; we coordinate them and their fees are payable directly to the consultant.",
+        "The fee includes reasonable responses to routine certifier requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "BIC — Unauthorised Works",
+      "application_type": "BIC",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 30 },
+        { "label": "On finalisation of the as built plans", "percent": 40 },
+        { "label": "Prior to BIC submission", "percent": 30 }
+      ],
+      "items": [
+        "Building Information Certificate for the [structure / use] at [address]",
+        "Site visit and measure up",
+        "Production of the following documentation:",
+        " Site Plan",
+        " As built plans identifying existing authorised and unauthorised works",
+        " Elevations",
+        " Section x1",
+        " Statement of works to accompany the application",
+        "Coordination of the required consultants (structural certification, fire safety and the like)",
+        "Lodge the Building Information Certificate (BIC) on the NSW Planning Portal"
+      ],
+      "notes": [
+        "Council fees are payable by the client. Consultant certification is excluded and payable directly to the consultant.",
+        "Where Council requires works to be removed, modified or added before the BIC can issue, the DA and/or CC documentation for those works will be quoted separately.",
+        "The fee includes reasonable responses to routine Council requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "S4.55 — Modification of Consent",
+      "application_type": "S4.55",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 50 },
+        { "label": "Prior to lodgement of the modification", "percent": 50 }
+      ],
+      "items": [
+        "Section 4.55 modification to [DA number] at [address]",
+        "Proposed modifications to include the following:",
+        " [modification]",
+        " [modification]",
+        "Production of the following documentation:",
+        " Amended Site Plan (changes clouded)",
+        " Amended Floor Plans (changes clouded)",
+        " Amended Elevations (changes clouded)",
+        " Amended Section (changes clouded)",
+        " Statement of modification (addendum to the Statement of Environmental Effects)",
+        " Neighbour Notification Plan (if required)",
+        "Coordination of the required consultants",
+        "Submission of the modification application on the NSW Planning Portal",
+        "Responses to Council requests for information"
+      ],
+      "notes": [
+        "Council and NSW Planning Portal fees are payable by the client. Updates to consultant reports are excluded and payable directly to the consultant.",
+        "This fee assumes the approved drawings are available in CAD. Redrawing approved plans from PDF will be quoted separately.",
+        "The fee includes reasonable responses to routine Council requests relating to the documentation prepared by Mworx Group. Substantial amendments, additional documentation, redesign, additional site visits or work arising from matters not reasonably identifiable at the time of this quote will be treated as a variation."
+      ]
+    },
+    {
+      "name": "Drafting Only — Fixed Fee",
+      "application_type": "Drafting Only",
+      "pricing_mode": "lump_sum",
+      "payment_plan": [
+        { "label": "Deposit on acceptance", "percent": 50 },
+        { "label": "On completion", "percent": 50 }
+      ],
+      "items": [
+        "Drafting of [description] at [address]",
+        "Redrawing the plans based on the plans provided by the client (no measure up)",
+        "Production of the following documentation:",
+        " Existing Floor Plan",
+        " Proposed Floor Plan",
+        " Elevations",
+        " Section x1"
+      ],
+      "notes": [
+        "No allowance for a measure up was made. Client to provide existing floor plans. If a site visit and measure up is required, it will be charged at $750.",
+        "This fee includes the production of the plans provided by the client. Any further amendments will be quoted and charged separately.",
+        "No lodgement, consultant coordination or compliance assessment is included."
+      ]
+    },
+    {
+      "name": "Hourly — Miscellaneous Work",
+      "application_type": null,
+      "pricing_mode": "itemised",
+      "payment_plan": null,
+      "items": [
+        { "description": "Fixed fee for the first 10 hours of [description]", "note": "Payable before work commences", "qty": 1, "rate": "" },
+        { "description": "Hourly rate for every hour thereafter", "note": "Per hour, invoiced fortnightly", "qty": 1, "rate": "" }
+      ],
+      "notes": [
+        "Hours are invoiced fortnightly with the total hours worked for that period. A detailed breakdown of a fortnight's time is available on request within 7 days of that invoice.",
+        "Work commences on payment of the fixed fee. Payment terms are 7 days from the invoice date.",
+        "Council, certifier and NSW Planning Portal fees are payable by the client. Consultant reports are excluded and payable directly to the consultant."
+      ]
+    }
+  ]
+}

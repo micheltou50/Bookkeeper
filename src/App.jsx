@@ -24,7 +24,7 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "" };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", gst_not_registered: false };
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
@@ -535,22 +535,31 @@ function fyChoices(rows, selected) {
   if (selected && selected !== ALL_FY) years.add(selected);
   return [...years].sort((a, b) => Number(b) - Number(a));
 }
+// Revised 2026-09-11 (commencement conditions, $220 hourly rate for additional
+// services, payment on issue, consultants engaged by the client, deliverables,
+// disputes, ACL carve-out, GST). Applies to NEW quotes only — a saved quote keeps
+// the terms it was issued with. Clause 16 should be legally reviewed.
+const HOURLY_RATE_TEXT = "$220 per hour";
 const DEFAULT_QUOTE_TERMS = `1. Validity: This quote is valid until the "Valid Until" date shown on the first page. Pricing may change after that date.
-2. Acceptance: This quote may be accepted by signing and returning it, or in writing by email. Work commences on acceptance.
-3. Fees: Fees are as quoted above.
-4. Payment: Invoices follow the payment schedule in this quotation, or on completion if none is shown, and are due within 7 days of each invoice. Final drawings and lodgement of documents are released on full payment of all invoices.
-5. Overdue Payments / Suspension: If an invoice is overdue, we may give written notice, then suspend work and withhold documents until all invoices are paid.
-6. Scope: This quote covers only the scope of works listed above.
-7. Variations: Any change to the scope of works may incur additional fees, which we will quote and agree in writing before proceeding.
-8. Exclusions: Unless expressly stated, we exclude council, certifier and statutory lodgement fees; third-party consultant costs (e.g. engineer, surveyor, BASIX, geotechnical); printing and physical models.
-9. Approvals: We prepare and lodge documents to a professional standard but cannot guarantee approval by a council, certifier or authority; decisions and processing times are outside our control.
-10. Client Information & Access: The client must provide accurate information (e.g. survey, existing plans) and reasonable site access. We are not liable for delays or errors from inaccurate or missing information.
-11. Timeframes: These are estimates only and depend on authority processing times and the client's timely input and approvals.
-12. Copyright: All drawings and documents remain our intellectual property. On payment of all amounts due, the client may use them for this project only, and not on another site or project without our consent.
-13. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss.
-14. Termination: Either party may end this agreement by notice in writing. The client remains liable for work completed and approved expenses incurred to that date.
-15. Governing Law: This agreement is governed by the laws of New South Wales, Australia.
-16. Entire Agreement: This quotation and these terms form the agreement for the services. Amendments and variations should be agreed in writing.`;
+2. Acceptance: This quote may be accepted by signing and returning it, by written acceptance by email, or by a purchase order that refers to it. Acceptance by email or electronic signature is binding.
+3. Commencement: Work commences when this quote has been accepted, the first-stage payment has been received, and the information we need to start (for example the survey, existing plans, or the DA consent and approved drawings) has been provided.
+4. Fees and GST: Fees are as quoted above. Mworx Group is not registered for GST; no GST is included in or added to our fees. Third-party fees passed on to the client may include GST.
+5. Payment: Invoices are issued at the stages shown in the payment schedule, when the documents for that stage have been issued to the client, or on completion if no schedule is shown. Each invoice is due within 7 days. Final drawings and lodgement of documents are released on full payment of all invoices.
+6. Overdue Payments / Suspension: If an invoice is overdue, we may give written notice, then suspend work and withhold documents until all invoices are paid. Recommencement after a suspension is subject to our availability and may affect the programme.
+7. Scope: This quote covers only the scope of works listed above.
+8. Variations and Additional Services: Any change to the scope of works may incur additional fees, which we will quote and agree in writing before proceeding. Where a separate quote is not practical, additional work is charged at ${HOURLY_RATE_TEXT}. Additional work includes, for example: redesign or changes to drawings already issued; additional meetings, site visits or measure-ups; requests from an authority or certifier outside the original brief; work arising from inaccurate or incomplete information provided to us; and re-mobilisation after a suspension or a delay of more than 14 days caused by the client.
+9. Exclusions and Disbursements: Unless expressly stated, we exclude council, certifier, NSW Planning Portal and other statutory fees; third-party consultant costs (e.g. engineer, surveyor, BASIX, geotechnical, fire safety, access); and printing, courier, paid searches and physical models. Where we pay any of these on the client's behalf, they are passed on at cost.
+10. Consultants: Unless this quote states otherwise, consultants are engaged by, and contract directly with, the client. We coordinate their input but are not responsible for their fees, their work or their timeframes.
+11. Approvals: We prepare and lodge documents to a professional standard but cannot guarantee approval by a council, certifier or authority; decisions and processing times are outside our control.
+12. Client Information, Access and Decisions: The client must provide accurate information (e.g. survey, existing plans), reasonable site access, and timely decisions and approvals. We are not liable for delays or errors arising from inaccurate, missing or late information or decisions.
+13. Timeframes: We will advise an indicative programme on commencement. Timeframes are estimates only and depend on authority processing times and the client's timely input and approvals.
+14. Deliverables: Documents are issued as PDF. Editable files (DWG, Revit or similar) are not included unless listed in the scope of works, and are released only after full payment.
+15. Copyright: All drawings and documents remain our intellectual property. On payment of all amounts due, the client may use them for this project only, and not on another site or project without our consent.
+16. Liability: Services are provided with reasonable skill and care. To the extent permitted by law, our liability is limited to the fees paid for the services and we are not liable for indirect or consequential loss. Nothing in these terms excludes a guarantee or right under the Australian Consumer Law that cannot be excluded; to the extent permitted, our liability for breach of such a guarantee is limited to supplying the services again or paying the cost of having them supplied again.
+17. Termination: Either party may end this agreement by notice in writing. The client remains liable for work completed to that date (at the stage percentage reached, or at ${HOURLY_RATE_TEXT} if no stage has been reached) and for approved expenses incurred.
+18. Disputes: If a dispute arises, the parties will first attempt to resolve it by discussion in good faith, then by mediation, before commencing any proceedings.
+19. Governing Law: This agreement is governed by the laws of New South Wales, Australia.
+20. Entire Agreement: This quotation and these terms form the agreement for the services. Amendments and variations should be agreed in writing.`;
 // Notes / payment-terms default (free text). Quote T&Cs now live in the separate
 // `terms` field (printed on its own page), so a quote's notes start empty.
 function getDefaultTerms(type) { return type === "quote" ? "" : "Payment is due within 7 days from the invoice date. Please use the invoice number as the payment reference."; }
@@ -996,6 +1005,7 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
           <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
           <span style="font-size:16px;font-weight:800;color:${accent}">${fmt(subtotal)}</span>
         </div>
+        ${profile.gst_not_registered ? `<div style="text-align:right;font-size:9px;color:#94a3b8;padding-top:2px">GST not applicable</div>` : ""}
       </div>
     </div>
 
@@ -1158,7 +1168,7 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
 // component would reintroduce the very bug this hoist removes, one level down:
 // its inputs would remount on every keystroke.
 
-function BusinessSettings({ s, accent, biz, session, profile, saveProfile, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate, formDirtyRef, requestCloseModal }) {
+function BusinessSettings({ s, accent, biz, session, profile, saveProfile, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate, updateQuoteTemplate, appTypeChoices, formDirtyRef, requestCloseModal }) {
   const initial = {
     ...profile,
     email_template_invoice: profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE,
@@ -1261,6 +1271,10 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
         <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
         <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn || ""} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
       </div>
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, color: "#475569", marginBottom: 12, cursor: "pointer", lineHeight: 1.45 }}>
+        <input type="checkbox" checked={!!f.gst_not_registered} onChange={(e) => setF({ ...f, gst_not_registered: e.target.checked })} style={{ marginTop: 2, accentColor: accent }} />
+        <span>Not registered for GST — print “GST not applicable” under the total on quotes and invoices.</span>
+      </label>
       <div style={{ marginBottom: 12 }}><label style={s.label}>Address</label><input value={f.address || ""} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 George St, Sydney NSW 2000" style={s.input} /></div>
       <div style={s.grid2}>
         <div style={{ marginBottom: 12 }}><label style={s.label}>Email</label><input type="email" value={f.email || ""} onChange={(e) => setF({ ...f, email: e.target.value })} style={s.input} /></div>
@@ -1330,21 +1344,30 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
         </div>
         </>
       ))}
-      {panel("quote_tpl", "Quote Templates", "Reusable quote content — rename or delete", (
+      {panel("quote_tpl", "Quote Types", "Ready-written scopes, one per kind of job", (
         <>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-          Saved quote templates appear here to rename or delete. New quotes offer them under “Start from template”.
+          A quote type is the scope, payment plan and notes a new quote starts from. New Quote applies the one matching the project's application type. To change what a type says, open any quote, edit it, then “Save as quote type” under the same name.
         </div>
         {quoteTemplates.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#94a3b8", padding: "4px 0 8px" }}>No templates yet.</div>
-        ) : quoteTemplates.map((t) => (
-          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
-            <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
-            <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>{t.pricing_mode === "lump_sum" ? `Lump sum${t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}` : "Itemised"}</span>
-            <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Edit /></button>
-            <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Trash /></button>
-          </div>
-        ))}
+          <div style={{ fontSize: 12, color: "#94a3b8", padding: "4px 0 8px" }}>No quote types yet — write a quote and use “Save as quote type”.</div>
+        ) : [...quoteTemplates].sort((a, b) => String(a.application_type || "~").localeCompare(String(b.application_type || "~")) || a.name.localeCompare(b.name)).map((t) => {
+          const plan = Array.isArray(t.payment_plan) && t.payment_plan.length ? t.payment_plan.map((st) => Math.round(Number(st.percent) || 0)).join(" / ") : "no plan";
+          const lines = Array.isArray(t.items) ? t.items.length : 0;
+          return (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, marginBottom: 5 }}>
+              <select value={t.application_type || ""} title="Which projects this type is offered for" onChange={(e) => updateQuoteTemplate(t, { application_type: e.target.value || null })}
+                style={{ ...s.select, width: "auto", padding: "4px 6px", fontSize: 11, fontWeight: 700, color: t.application_type ? accent : "#94a3b8", flexShrink: 0 }}>
+                <option value="">Any</option>
+                {(appTypeChoices || []).map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
+              <span style={{ fontWeight: 600, fontSize: 12, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.name}>{t.name}</span>
+              <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0, whiteSpace: "nowrap" }}>{lines} {lines === 1 ? "line" : "lines"} · {plan}{t.lump_amount ? ` · ${fmt(Number(t.lump_amount))}` : ""}</span>
+              <button onClick={() => renameQuoteTemplate(t)} title="Rename" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Edit /></button>
+              <button onClick={() => deleteQuoteTemplate(t)} title="Delete" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7 }}><Icons.Trash /></button>
+            </div>
+          );
+        })}
         </>
       ))}
       {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
@@ -1462,6 +1485,7 @@ export default function BookkeeperApp() {
   // being edited so a draft can never bleed into a different one.
   const projectDraftRef = useRef(null);
   const invoiceDraftRef = useRef(null);
+  const quoteStartDraftRef = useRef(null);
   // A draft belongs only to the modal that owns it. Jumping straight from one
   // modal to another (a project's "+ New Quote", say) never passes through
   // requestCloseModal, so without this an abandoned draft would be resurrected —
@@ -2037,14 +2061,76 @@ export default function BookkeeperApp() {
     return ok;
   };
 
-  // --- Quote templates (bk_quote_templates) ---
+  // --- Quote types (bk_quote_templates) ---
+  // A quote type is the ready-written part of a quote for one kind of job — its
+  // scope lines, payment plan, notes and T&Cs — keyed to the project's
+  // application type so New Quote can open already filled in. The price is left
+  // out unless the user opts in: it differs job to job.
 
-  const renameQuoteTemplate = async (t) => {
-    const name = window.prompt("Template name:", t.name);
-    if (!name || !name.trim() || name.trim() === t.name) return;
-    const { ok, data } = await sbWrite(supabase.from("bk_quote_templates").update({ name: name.trim(), updated_at: new Date().toISOString() }).eq("id", t.id).select().single(), "rename template");
-    if (ok && data) setQuoteTemplates((prev) => prev.map((x) => (x.id === t.id ? data : x)).sort((a, b) => a.name.localeCompare(b.name)));
+  const byName = (arr) => [...arr].sort((a, b) => a.name.localeCompare(b.name));
+  const updateQuoteTemplate = async (t, patch) => {
+    const { ok, data } = await sbWrite(supabase.from("bk_quote_templates").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", t.id).select().single(), "update quote type");
+    if (ok && data) setQuoteTemplates((prev) => byName(prev.map((x) => (x.id === t.id ? data : x))));
+    return ok ? data : null;
   };
+  const renameQuoteTemplate = async (t) => {
+    const name = window.prompt("Quote type name:", t.name);
+    if (!name || !name.trim() || name.trim() === t.name) return;
+    await updateQuoteTemplate(t, { name: name.trim() });
+  };
+  // Same name + same application type replaces, so re-saving an improved quote
+  // as its type updates the type instead of piling up near-duplicates.
+  const saveQuoteType = async (tpl) => {
+    const name = (tpl.name || "").trim();
+    if (!name) return null;
+    const appType = (tpl.application_type || "").trim() || null;
+    const body = { name, application_type: appType, pricing_mode: tpl.pricing_mode || "lump_sum", items: tpl.items || [], lump_amount: tpl.lump_amount ?? null, notes: tpl.notes ?? null, terms: tpl.terms ?? null, payment_plan: tpl.payment_plan || null };
+    const dup = quoteTemplates.find((x) => x.name.toLowerCase() === name.toLowerCase() && (x.application_type || null) === appType);
+    if (dup) {
+      if (!window.confirm(`A quote type "${name}"${appType ? ` for ${appType}` : ""} already exists.\n\nReplace it with this quote's scope, payment plan and notes?`)) return null;
+      return updateQuoteTemplate(dup, body);
+    }
+    const { ok, data } = await sbInsert("bk_quote_templates", { user_id: session.user.id, business_id: biz, ...body }, "save quote type");
+    if (ok && data) setQuoteTemplates((prev) => byName([...prev, data]));
+    return ok ? data : null;
+  };
+  // Every application type the business knows: the built-ins, whatever projects
+  // already use, and whatever quote types were saved against.
+  const appTypeChoices = [...new Set([...APPLICATION_TYPES, ...jobs.map((j) => j.application_type), ...quoteTemplates.map((t) => t.application_type)].filter(Boolean))];
+  const templatesForType = (appType) => (appType ? quoteTemplates.filter((t) => t.application_type === appType) : []);
+  // What a quote type contributes to a new quote's seed. Fields it doesn't carry
+  // are left out (not nulled) so the form's own defaults still apply.
+  const seedFromTemplate = (t) => {
+    if (!t) return {};
+    const out = { template_name: t.name, pricing_mode: t.pricing_mode || "lump_sum", payment_plan: Array.isArray(t.payment_plan) && t.payment_plan.length ? t.payment_plan.map((st) => ({ ...st })) : null };
+    if (Array.isArray(t.items) && t.items.length) out.items = t.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" }));
+    if (t.lump_amount != null) out.lump_amount = String(t.lump_amount);
+    if (t.notes != null) out.notes = t.notes;
+    if (t.terms != null) out.terms = t.terms;
+    return out;
+  };
+  // Open the quote form for a project. Exactly one quote type for the project's
+  // application type is applied on the way in; with several (or none) the form
+  // offers the picker instead. The client defaults to the project's client
+  // unless a contact was named (the project drawer's "+ Quote" beside a contact).
+  const startQuote = (project, contactName) => {
+    const client = !contactName && project ? projectClient(project) : null;
+    const matches = project ? templatesForType(project.application_type) : [];
+    const tpl = matches.length === 1 ? matches[0] : null;
+    quoteStartDraftRef.current = null;
+    setInvoiceSeed({
+      type: "quote",
+      project_id: project?.id || "",
+      projectName: project ? projectLabel(project) : "",
+      contact_name: contactName || (client ? (client.name || client.company || "") : ""),
+      ...(client ? { contact_email: client.email || "", contact_company: client.company || "", contact_abn: client.abn || "", contact_address: client.address || "", contact_phone: client.phone || "" } : {}),
+      ...seedFromTemplate(tpl),
+    });
+    setEditItem(null);
+    setModal("invoice");
+  };
+  // "New Quote" from anywhere without a project in hand: the project-first step.
+  const openQuoteStart = () => { quoteStartDraftRef.current = null; setEditItem(null); setInvoiceSeed(null); setModal("quoteStart"); };
 
   const deleteQuoteTemplate = async (t) => {
     if (!window.confirm(`Delete template "${t.name}"? Quotes already created from it are not affected.`)) return;
@@ -2189,7 +2275,7 @@ export default function BookkeeperApp() {
   };
 
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
+    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", gst_not_registered: !!p.gst_not_registered, email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
     if (saved) setProfile(saved);
@@ -2794,7 +2880,7 @@ Are you sure you want it ${verb}?`);
     const seedContact = seed.contact_name ? contacts.find((c) => (c.name || c.company) === seed.contact_name) : null;
     const init = existing
       ? { ...existing, items: splitScopeRows(existing.items, existing.pricing_mode), pricing_mode: existing.pricing_mode || "itemised", lump_amount: existing.pricing_mode === "lump_sum" ? String(existing.total ?? "") : "", terms: existing.terms ?? "" }
-      : { payment_plan: seed.payment_plan ?? null, number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
+      : { payment_plan: seed.payment_plan ?? null, _template_name: seed.template_name || null, number: getNextDocumentNumber(divInvoices, insertDivision, seedType), type: seedType, date: today(), due_date: getDefaultDueDate(seedType, today()), contact_name: seed.contact_name || "", contact_email: seed.contact_email ?? (seedContact?.email || ""), contact_company: seed.contact_company ?? (seedContact?.company || ""), contact_abn: seed.contact_abn ?? (seedContact?.abn || ""), contact_address: seed.contact_address ?? (seedContact?.address || ""), contact_phone: seed.contact_phone ?? (seedContact?.phone || ""), job: seed.projectName || "", project_id: seed.project_id || "", pricing_mode: seed.pricing_mode || (seedType === "quote" ? "lump_sum" : "itemised"), lump_amount: seed.lump_amount || "", items: (seed.items && seed.items.length) ? seed.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }], notes: seed.notes != null ? seed.notes : getDefaultTerms(seedType), terms: seed.terms != null ? seed.terms : getDefaultDocTerms(seedType), status: "draft" };
     // Draft survival across a remount (see invoiceDraftRef). The key ties the
     // draft to this exact document — a saved invoice by id, a new one by its
     // seed — so a restored draft can never land in the wrong form.
@@ -2851,6 +2937,9 @@ Are you sure you want it ${verb}?`);
     const setScopeLine = (idx, text, sub) => updateItem(idx, "description", (sub ? " " : "") + text.replace(/^\s+/, ""));
     const [libOpen, setLibOpen] = useState(false);
     const [saveLine, setSaveLine] = useState(null); // { idx, anchor } for the star
+    // "Save as quote type" panel: { name, application_type, includePrice } | null
+    const [typeSave, setTypeSave] = useState(null);
+    const projAppType = (jobs.find((j) => j.id === f.project_id) || {}).application_type || "";
     // Caveats go to the notes, never into the scope list: the renderer bullets
     // every scope line, which is why the $330 and $750 caveats were printing as
     // bold deliverables beside "Site Plan" on the quotes that were actually sent.
@@ -2976,14 +3065,37 @@ Are you sure you want it ${verb}?`);
     const partyContacts = projParties.map((p) => { const c = contacts.find((x) => x.id === p.contact_id); return c ? { ...c, _role: p.role } : null; }).filter(Boolean);
     const otherContacts = contacts.filter((c) => (c.type === "client" || c.type === "consultant") && !partyContacts.some((pc) => pc.id === c.id));
 
-    // Quote templates: applying one fills the editable content; saving captures it.
+    // Quote types: applying one replaces the editable content (scope, price
+    // mode, plan, notes, T&Cs). Asks first if there is already scope typed in.
     const applyTemplate = (id) => {
       const t = quoteTemplates.find((x) => x.id === id);
       if (!t) return;
+      if (f.items.some((it) => String(it.description || "").trim()) && !window.confirm(`Replace the current scope, payment plan and notes with "${t.name}"?`)) return;
       const tItems = Array.isArray(t.items) && t.items.length ? t.items.map((it) => ({ description: it.description || "", note: it.note || "", qty: it.qty ?? 1, rate: it.rate ?? "" })) : [{ description: "", note: "", qty: 1, rate: "" }];
-      setF({ ...f, pricing_mode: t.pricing_mode || "itemised", items: tItems, lump_amount: t.lump_amount != null ? String(t.lump_amount) : "", notes: t.notes != null ? t.notes : f.notes, terms: t.terms != null ? t.terms : f.terms });
+      const plan = Array.isArray(t.payment_plan) && t.payment_plan.length ? t.payment_plan.map((st) => ({ ...st })) : null;
+      setF({ ...f, _template_name: t.name, pricing_mode: t.pricing_mode || "lump_sum", items: tItems, lump_amount: t.lump_amount != null ? String(t.lump_amount) : "", payment_plan: plan, notes: t.notes != null ? t.notes : f.notes, terms: t.terms != null ? t.terms : f.terms });
       setNotesEdited(true);
       setTermsEdited(true);
+    };
+    // Save this quote's reusable content as a quote type (see saveQuoteType).
+    const saveAsType = async () => {
+      if (!typeSave || !typeSave.name.trim()) return;
+      const includePrice = !!typeSave.includePrice;
+      const payload = {
+        name: typeSave.name,
+        application_type: typeSave.application_type,
+        pricing_mode: f.pricing_mode || "lump_sum",
+        items: f.items.filter((it) => String(it.description || "").trim()).map((it) => ({ description: it.description, note: it.note || "", qty: it.qty ?? 1, rate: includePrice ? it.rate : "" })),
+        lump_amount: includePrice && isLump ? (Number(f.lump_amount) || null) : null,
+        notes: (f.notes || "").trim() || null,
+        terms: (f.terms || "").trim() || null,
+        payment_plan: (f.payment_plan || []).length ? f.payment_plan : null,
+      };
+      // saveQuoteType updates App state, which remounts this form: keep the
+      // typed values (same rule as the quick-add panels).
+      stashDraft({ ...f, _template_name: typeSave.name.trim() });
+      const saved = await saveQuoteType(payload);
+      if (saved) { setTypeSave(null); alert(`Saved quote type "${saved.name}"${saved.application_type ? ` for ${saved.application_type} projects` : ""}.`); }
     };
 
     // One-click quote → invoice (MYOB's headline action). Persists any quote edits,
@@ -3028,16 +3140,23 @@ Are you sure you want it ${verb}?`);
           <div style={{ marginBottom: 12 }}><label style={s.label}>Type</label><select value={f.type} onChange={(e) => updateType(e.target.value)} style={s.select}><option value="invoice">Invoice</option><option value="quote">Quote</option></select></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Number</label><input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value, _numberEdited: true })} style={s.input} /></div>
         </div>
-        {f.type === "quote" && !existing && quoteTemplates.length > 0 && (
-          <div style={{ background: `${accent}10`, border: `1px solid ${accent}40`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
-            <label style={{ ...s.label, color: accent }}>Start from template</label>
-            <select value="" onChange={(e) => { if (e.target.value) applyTemplate(e.target.value); }} style={s.select}>
-              <option value="">Choose a template…</option>
-              {quoteTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>Fills the scope, price, notes and T&amp;Cs — everything stays editable.</div>
-          </div>
-        )}
+        {f.type === "quote" && !existing && quoteTemplates.length > 0 && (() => {
+          // Types for this project's application type first; the rest below.
+          const forType = projAppType ? quoteTemplates.filter((t) => t.application_type === projAppType) : [];
+          const others = quoteTemplates.filter((t) => !forType.includes(t));
+          const opt = (t) => <option key={t.id} value={t.id}>{t.name}</option>;
+          return (
+            <div style={{ background: `${accent}10`, border: `1px solid ${accent}40`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+              <label style={{ ...s.label, color: accent }}>{f._template_name ? `Started from “${f._template_name}”` : "Start from quote type"}</label>
+              <select value="" onChange={(e) => { if (e.target.value) applyTemplate(e.target.value); }} style={s.select}>
+                <option value="">{f._template_name ? "Switch to another quote type…" : "Choose a quote type…"}</option>
+                {forType.length > 0 && <optgroup label={`For ${projAppType} projects`}>{forType.map(opt)}</optgroup>}
+                {others.length > 0 && (forType.length > 0 ? <optgroup label="Other quote types">{others.map(opt)}</optgroup> : others.map(opt))}
+              </select>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>Writes the scope, payment plan, notes and T&amp;Cs for you — everything stays editable.</div>
+            </div>
+          );
+        })()}
         <div style={s.grid2}>
           <div style={{ marginBottom: 12 }}><label style={s.label}>Date</label><input type="date" value={f.date} onChange={(e) => updateDate(e.target.value)} style={s.input} /></div>
           <div style={{ marginBottom: 12 }}><label style={s.label}>{f.type === "quote" ? "Valid Until" : "Due Date"}{invOverdue > 0 && <span style={{ color: "#ef4444", fontWeight: 600, textTransform: "none", marginLeft: 6 }}>· {invOverdue} {invOverdue === 1 ? "day" : "days"} overdue</span>}</label><input type="date" value={f.due_date || ""} onChange={(e) => { setDueDateEdited(true); setF({ ...f, due_date: e.target.value }); }} style={s.input} /></div>
@@ -3121,7 +3240,37 @@ Are you sure you want it ${verb}?`);
               <button key={val} type="button" onClick={() => setF({ ...f, pricing_mode: val })} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", background: f.pricing_mode === val ? accent + "20" : "transparent", color: f.pricing_mode === val ? accent : "#64748b", borderColor: f.pricing_mode === val ? accent : "#e2e8f0" }}>{lbl}</button>
             ))}
           </div>
-          <label style={s.label}>{isLump ? "Scope of Works" : "Line Items"}</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label style={{ ...s.label, flex: 1 }}>{isLump ? "Scope of Works" : "Line Items"}</label>
+            {f.type === "quote" && (
+              <button type="button" title="Keep this quote's scope, payment plan and notes as the starting point for future quotes of this kind"
+                onClick={() => setTypeSave(typeSave ? null : { name: f._template_name || "", application_type: projAppType || "", includePrice: false })}
+                style={{ background: "none", border: "none", color: accent, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "0 4px 4px", whiteSpace: "nowrap" }}>☆ Save as quote type</button>
+            )}
+          </div>
+          {typeSave && (
+            <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, marginBottom: 10, border: `1px solid ${accent}30` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: accent, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Save as quote type</div>
+              <div style={s.grid2}>
+                <div style={{ marginBottom: 8 }}><input autoFocus value={typeSave.name} onChange={(e) => setTypeSave({ ...typeSave, name: e.target.value })} placeholder="Name, e.g. CDC — Change of Use" style={{ ...s.input, fontSize: 12 }} /></div>
+                <div style={{ marginBottom: 8 }}>
+                  <select value={typeSave.application_type} onChange={(e) => setTypeSave({ ...typeSave, application_type: e.target.value })} style={{ ...s.select, fontSize: 12 }}>
+                    <option value="">For any application type</option>
+                    {appTypeChoices.map((t) => <option key={t} value={t}>For {t} projects</option>)}
+                  </select>
+                </div>
+              </div>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, color: "#64748b", marginBottom: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!typeSave.includePrice} onChange={(e) => setTypeSave({ ...typeSave, includePrice: e.target.checked })} style={{ accentColor: accent }} />
+                Include the {isLump ? "lump sum" : "rates"} as a starting price
+              </label>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8, lineHeight: 1.5 }}>Keeps the scope, payment plan, notes and T&amp;Cs. New quotes for a matching project open with them written in. Same name and type replaces the existing one.</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button type="button" disabled={!typeSave.name.trim()} onClick={saveAsType} style={{ ...s.btn(accent), fontSize: 12, opacity: typeSave.name.trim() ? 1 : 0.4 }}>Save type</button>
+                <button type="button" onClick={() => setTypeSave(null)} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
+              </div>
+            </div>
+          )}
           {isLump ? (
             <>
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>One deliverable per line. Use the bullet to make a line a sub-item. Paste a whole scope and it splits into lines. The price is the single lump sum below.</div>
@@ -3297,6 +3446,112 @@ Are you sure you want it ${verb}?`);
     );
   };
 
+  // Project-first start for a quote. Every quote here belongs to a project, and
+  // the project's application type decides which ready-written scope the form
+  // opens with — so ask for the project first, then hand over to startQuote.
+  // "New project" collects the minimum (name, address, type, client); the full
+  // project form can add the rest later.
+  const QuoteStart = () => {
+    const d = quoteStartDraftRef.current;
+    const [mode, setMode] = useState(() => d?.mode || (jobs.length ? "existing" : "new"));
+    const [projectId, setProjectId] = useState(() => d?.projectId || "");
+    const [np, setNp] = useState(() => d?.np || { name: "", address: "", application_type: "", contact_name: "" });
+    const [customType, setCustomType] = useState(() => d?.customType ?? false);
+    const [busy, setBusy] = useState(false);
+    // Same remount-survival pattern as the other forms (see invoiceDraftRef).
+    useEffect(() => { quoteStartDraftRef.current = { mode, projectId, np, customType }; });
+    useEffect(() => { formDirtyRef.current = mode === "new" && !!(np.name || np.address || np.application_type || np.contact_name); }, [mode, np]);
+    const project = mode === "existing" ? jobs.find((j) => j.id === projectId) : null;
+    const appType = mode === "existing" ? (project?.application_type || "") : (np.application_type || "");
+    const matches = templatesForType(appType);
+    const client = project ? projectClient(project) : null;
+    const byRecent = [...jobs].sort((a, b) => new Date(b.last_used_at || 0) - new Date(a.last_used_at || 0));
+    const activeJobs = byRecent.filter((j) => (j.status || "active") === "active");
+    const otherJobs = byRecent.filter((j) => (j.status || "active") !== "active");
+    const jobOption = (j) => <option key={j.id} value={j.id}>{(j.job_number ? j.job_number + " — " : "") + projectLabel(j)}</option>;
+    const clientContacts = contacts.filter((c) => c.type === "client" || c.type === "consultant");
+    const canGo = mode === "existing" ? !!project : !!np.name.trim();
+    const go = async () => {
+      if (!canGo || busy) return;
+      if (mode === "existing") { formDirtyRef.current = false; startQuote(project); return; }
+      setBusy(true);
+      const c = contacts.find((x) => (x.name || x.company) === np.contact_name);
+      const created = await createProject({ name: np.name, address: np.address, application_type: np.application_type, contact_name: np.contact_name, parties: c ? [{ contact_id: c.id, role: c.type === "consultant" ? "consultant" : "client" }] : [] });
+      setBusy(false);
+      if (created) { formDirtyRef.current = false; startQuote(created, np.contact_name); }
+    };
+    const segBtn = (val, lbl) => (
+      <button key={val} type="button" onClick={() => setMode(val)} style={{ ...s.btnOutline, flex: 1, justifyContent: "center", background: mode === val ? accent + "20" : "transparent", color: mode === val ? accent : "#64748b", borderColor: mode === val ? accent : "#e2e8f0" }}>{lbl}</button>
+    );
+    const hint = !appType
+      ? { tone: "#64748b", bg: "#f8fafc", bd: "#e2e8f0", text: "Set an application type and the quote opens with that type's ready-written scope." }
+      : matches.length === 1
+        ? { tone: accent, bg: `${accent}10`, bd: `${accent}40`, text: `${appType} project — the quote starts from “${matches[0].name}”. Scope, payment plan and notes come written in; everything stays editable.` }
+        : matches.length > 1
+          ? { tone: accent, bg: `${accent}10`, bd: `${accent}40`, text: `${matches.length} quote types for ${appType} projects — you pick one at the top of the form.` }
+          : { tone: "#92400e", bg: "#fffbeb", bd: "#fde68a", text: `No quote type saved for ${appType} yet. The form opens blank — once it's written, “Save as quote type” keeps it for next time.` };
+    return (
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>New Quote</h3>
+          <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
+        </div>
+        <label style={s.label}>Which project is this quote for?</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>{segBtn("existing", "Existing project")}{segBtn("new", "New project")}</div>
+        {mode === "existing" ? (
+          <div style={{ marginBottom: 12 }}>
+            <label style={s.label}>Project</label>
+            <select autoFocus value={projectId} onChange={(e) => setProjectId(e.target.value)} style={s.select}>
+              <option value="">Choose a project…</option>
+              {activeJobs.length > 0 && <optgroup label="Active Projects">{activeJobs.map(jobOption)}</optgroup>}
+              {otherJobs.length > 0 && <optgroup label="Other Projects">{otherJobs.map(jobOption)}</optgroup>}
+            </select>
+            {project && (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, lineHeight: 1.5 }}>
+                {project.application_type ? project.application_type : "No application type set"}
+                {client ? ` · addressed to ${client.name || client.company}` : " · no client attached yet — pick one in the quote"}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Projects are named by their site address, so one field fills both. */}
+            <div style={{ marginBottom: 12 }}><label style={s.label}>Project address</label><input autoFocus value={np.name} onChange={(e) => setNp({ ...np, name: e.target.value, address: e.target.value })} placeholder="e.g. 5 Midleton Avenue Bexley North NSW" style={s.input} /></div>
+            <div style={s.grid2}>
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>Application Type</label>
+                {customType ? (
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <input autoFocus value={np.application_type} onChange={(e) => setNp({ ...np, application_type: e.target.value })} placeholder="e.g. OC" style={{ ...s.input, flex: 1 }} />
+                    <button type="button" onClick={() => setCustomType(false)} title="Done" style={{ background: accent, border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", padding: "0 10px", fontSize: 13, fontWeight: 700 }}>✓</button>
+                  </div>
+                ) : (
+                  <select value={np.application_type} onChange={(e) => { if (e.target.value === "__custom") { setCustomType(true); setNp({ ...np, application_type: "" }); } else setNp({ ...np, application_type: e.target.value }); }} style={s.select}>
+                    <option value="">None</option>
+                    {appTypeChoices.map((t) => <option key={t} value={t}>{t}</option>)}
+                    <option value="__custom">+ Add new type…</option>
+                  </select>
+                )}
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={s.label}>Client</label>
+                <select value={np.contact_name} onChange={(e) => setNp({ ...np, contact_name: e.target.value })} style={s.select}>
+                  <option value="">Choose later</option>
+                  {clientContacts.map((c) => <option key={c.id} value={c.name || c.company}>{c.name || c.company}</option>)}
+                </select>
+              </div>
+            </div>
+          </>
+        )}
+        <div style={{ background: hint.bg, border: `1px solid ${hint.bd}`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: hint.tone, lineHeight: 1.5, marginBottom: 14 }}>{hint.text}</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => requestCloseModal()} style={{ ...s.btnOutline, justifyContent: "center", color: "#64748b" }}>Cancel</button>
+          <button disabled={!canGo || busy} onClick={go} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", opacity: !canGo || busy ? 0.5 : 1 }}>{busy ? "Creating project…" : "Continue to quote"}</button>
+        </div>
+      </div>
+    );
+  };
+
   const ProjectForm = ({ existing }) => {
     const init = existing
       ? { name: existing.name || "", address: existing.address || "", notes: existing.notes || "", status: existing.status || "active", application_type: existing.application_type || "", job_number: existing.job_number || "" }
@@ -3423,7 +3678,11 @@ Are you sure you want it ${verb}?`);
           .map((d) => [d.contact_name, { key: d.contact_name, name: d.contact_name }])).values()]
       : [];
 
-    const newDoc = (type, contactName) => { setInvoiceSeed({ type, project_id: existing.id, projectName: projectLabel(existing), contact_name: contactName || "" }); setEditItem(null); setModal("invoice"); };
+    // Quotes go through startQuote so the project's quote type is applied.
+    const newDoc = (type, contactName) => {
+      if (type === "quote") { startQuote(existing, contactName || ""); return; }
+      setInvoiceSeed({ type, project_id: existing.id, projectName: projectLabel(existing), contact_name: contactName || "" }); setEditItem(null); setModal("invoice");
+    };
 
     const Stat = ({ label, value, color }) => (
       <div style={{ flex: 1, minWidth: 80 }}>
@@ -3806,7 +4065,7 @@ Are you sure you want it ${verb}?`);
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginTop: 12 }}>
           <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={{ ...s.btn("#3b82f6"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Invoice</button>
-          <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Quote</button>
+          <button onClick={() => { openQuoteStart(); }} style={{ ...s.btn(accent), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Quote</button>
           <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={{ ...s.btn("#6366f1"), justifyContent: "center", padding: "14px" }}><Icons.Plus /> New Project</button>
         </div>
       </div>
@@ -4212,7 +4471,7 @@ Are you sure you want it ${verb}?`);
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
         {page !== "dashboard" && (
-          <button onClick={() => { if (page === "quotes") { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+          <button onClick={() => { if (page === "quotes") { openQuoteStart(); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Plus />
           </button>
         )}
@@ -4312,7 +4571,7 @@ Are you sure you want it ${verb}?`);
         </MobileSection>
         <div style={{ display: "flex", gap: 8, padding: "20px 16px 0" }}>
           <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={{ ...s.btn("#3b82f6"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Invoice</button>
-          <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Quote</button>
+          <button onClick={() => { openQuoteStart(); }} style={{ ...s.btn(accent), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Quote</button>
           <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={{ ...s.btn("#6366f1"), flex: 1, justifyContent: "center", padding: "12px", borderRadius: 12, fontSize: 13 }}><Icons.Plus /> Project</button>
         </div>
       </div>
@@ -4525,8 +4784,9 @@ Are you sure you want it ${verb}?`);
             reusing the previous one's state. */}
         {modal === "contact" && <ContactForm key={editItem?.id ?? "new"} existing={editItem} s={s} accent={accent} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
         {modal === "invoice" && <InvoiceForm existing={editItem} />}
+        {modal === "quoteStart" && <QuoteStart />}
         {modal === "project" && <ProjectForm existing={editItem} />}
-        {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
+        {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} updateQuoteTemplate={updateQuoteTemplate} appTypeChoices={appTypeChoices} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
       </div>
     </div>
   );
@@ -4546,7 +4806,7 @@ Are you sure you want it ${verb}?`);
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               {fySelectEl()}
-              {page === "quotes" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "quote" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
+              {page === "quotes" && <button onClick={() => { openQuoteStart(); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
