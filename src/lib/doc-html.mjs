@@ -11,7 +11,9 @@
 // Plain ES module, no DOM, no React — it has to run in a Lambda too.
 
 export const PAGE_BREAK = "---";
-export const isPageBreak = (s) => String(s ?? "").trim() === PAGE_BREAK;
+// A line that is only dashes (any kind — people type "—" for "---"), or the
+// words "page break" with or without brackets, is a page break.
+export const isPageBreak = (s) => /^\s*(?:[-–—]{2,}|\[?\s*page\s*break\s*\]?)\s*$/i.test(String(s ?? ""));
 
 export const DIVISION_META = {
   mworx: { tagline: "Design · Consultancy · Project Management", accent: "#0d9488" },
@@ -204,14 +206,20 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
   </div>`);
 
   // ── Scope / line items ───────────────────────────────────────────────────
+  // Plain-text editing in place. Wrapping stays on (long lines wrap, leading
+  // spaces are kept), and the button drops a page-break line at the cursor.
   const editBox = (name, value, rows, hint) => `<div style="margin:6px 0 14px">
-      <textarea data-edit="${name}" spellcheck="false" style="width:100%;min-height:${rows * 18}px;font:11px/1.5 'Helvetica Neue',Helvetica,Arial,sans-serif;color:#1e293b;border:1.5px dashed ${accent};border-radius:6px;padding:10px 12px;background:#fbfffe;resize:vertical;white-space:pre;overflow-wrap:normal;overflow-x:auto">${value}</textarea>
-      <div style="font-size:9px;color:#94a3b8;margin-top:4px">${hint}</div>
+      <textarea data-edit="${name}" spellcheck="false" style="width:100%;min-height:${rows * 18}px;font:11px/1.5 'Helvetica Neue',Helvetica,Arial,sans-serif;color:#1e293b;border:1.5px dashed ${accent};border-radius:6px;padding:10px 12px;background:#fbfffe;resize:vertical;white-space:pre-wrap;overflow-wrap:break-word">${value}</textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:4px">
+        <div style="font-size:9px;color:#94a3b8">${hint}</div>
+        <button type="button" data-insert-break="${name}" style="flex-shrink:0;font:600 9px/1 'Helvetica Neue',Helvetica,Arial,sans-serif;color:#475569;background:#fff;border:1px solid #cbd5e1;border-radius:5px;padding:5px 8px;cursor:pointer">⤓ Page break at cursor</button>
+      </div>
     </div>`;
+  const BREAK_HINT = "Type PAGE BREAK on its own line (or ---) to start a new page there.";
 
   if (editing && isLump) {
     push(`<div class="section-head" style="${TH("border-bottom:2px solid #1e293b;background:#f8fafc")}">Scope of Works</div>
-      ${editBox("scope", itemsToScopeText(rawItems), 8, "One line per item. Start a line with a space to make it a sub-item. A line of --- is a page break.")}`);
+      ${editBox("scope", itemsToScopeText(rawItems), 8, `One line per item; start a line with a space for a sub-item. ${BREAK_HINT}`)}`);
   } else {
     const groups = groupItems(items);
     groups.forEach((g, gi) => {
@@ -308,7 +316,9 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
   const notesHead = isQuote ? `<div class="section-head" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:6px">Exclusions</div>` : "";
   let breakBeforeAcceptance = false;
   if (editing) {
-    push(`<div style="margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">${notesHead}${editBox("notes", inv.notes || "", 5, `${isQuote ? "Exclusions and caveats. " : "Notes and payment terms. "}A line of --- is a page break${isQuote ? "; put one at the end to start the acceptance form on a new page" : ""}.`)}</div>`);
+    push(`<div style="margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">${notesHead}${editBox("notes", inv.notes || "", 5, `${isQuote ? "Exclusions and caveats. " : "Notes and payment terms. "}${BREAK_HINT}${isQuote ? " One at the very end puts the acceptance form on a new page." : ""}`)}</div>`);
+    // While editing, the acceptance form sits where the SAVED notes put it.
+    breakBeforeAcceptance = splitAtBreaks(inv.notes || "").trailingBreak;
   } else if (inv.notes && inv.notes.trim()) {
     const { segments, trailingBreak } = splitAtBreaks(inv.notes);
     segments.forEach((seg, si) => {
@@ -323,7 +333,7 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
   // ── Terms — always last, always on a fresh page ──────────────────────────
   const termsHead = `<div class="section-head" style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>`;
   if (editing) {
-    push(`${termsHead}${editBox("terms", inv.terms || "", 12, "Printed last, on its own page. A line of --- is a page break.")}`, true);
+    push(`${termsHead}${editBox("terms", inv.terms || "", 12, `Printed last, on its own page. ${BREAK_HINT}`)}`, true);
   } else if (inv.terms && inv.terms.trim()) {
     const { segments } = splitAtBreaks(inv.terms);
     segments.forEach((seg, si) => {
@@ -347,11 +357,11 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
     return { body, css, footer, sheets: 1 };
   }
 
-  // screen / edit: A4 sheets. A sheet starts at every asserted break; in edit
-  // mode the text is being changed so pagination is moot — one long sheet.
+  // screen / edit: A4 sheets. A sheet starts at every asserted break. In edit
+  // mode a sheet may grow past A4 (the text is being changed) and says so.
   const sheets = [];
   for (const p of parts) {
-    if (!sheets.length || (p.breakBefore && !editing)) sheets.push([]);
+    if (!sheets.length || p.breakBefore) sheets.push([]);
     sheets[sheets.length - 1].push(p.html);
   }
   const n = sheets.length;
@@ -368,10 +378,20 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
   .bk-sheet-edit .bk-sheet-body { height: auto; overflow: visible; }
   .bk-sheet-foot { position: absolute; left: ${PAGE_MARGIN.side}mm; right: ${PAGE_MARGIN.side}mm; bottom: 8mm; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 6px; }
   .bk-overflow { position: absolute; left: ${PAGE_MARGIN.side}mm; right: ${PAGE_MARGIN.side}mm; bottom: ${PAGE_MARGIN.bottom - 2}mm; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font: 600 10px/1.4 Helvetica, Arial, sans-serif; padding: 6px 10px; border-radius: 6px; text-align: center; }
+  .bk-sheet-edit .bk-overflow { position: static; margin-top: 12px; }
+  .bk-sheet-edit .bk-sheet-foot { position: static; margin-top: 18px; }
   @media (max-width: 840px) { .bk-wrap { zoom: 0.5; } }
   @media print { html, body { background: #fff; } .bk-wrap { padding: 0; } .bk-sheet { box-shadow: none; margin: 0; page-break-after: always; } .bk-overflow { display: none; } }`;
+  const overflowMsg = (mm) => `This page overflows by about ${mm} mm. The PDF will spill it onto the next page — put PAGE BREAK on its own line where you want the break.`;
   const script = editing
-    ? `<script>document.querySelectorAll('textarea[data-edit]').forEach(function(t){function r(){t.style.height='auto';t.style.height=(t.scrollHeight+6)+'px';}t.addEventListener('input',r);r();});</script>`
-    : `<script>(function(){var mm=96/25.4;document.querySelectorAll('.bk-sheet').forEach(function(s){var b=s.querySelector('.bk-sheet-body');var over=b.scrollHeight-b.clientHeight;if(over>1){var w=document.createElement('div');w.className='bk-overflow';w.textContent='This page overflows by about '+Math.ceil(over/mm)+' mm. The PDF will spill it onto the next page — add a page break (a line of ---) where you want the break.';s.appendChild(w);}});})();</script>`;
+    ? `<script>(function(){
+        var mm=96/25.4, a4=(297-${PAGE_MARGIN.top}-${PAGE_MARGIN.bottom})*mm;
+        function fit(t){t.style.height='auto';t.style.height=(t.scrollHeight+6)+'px';}
+        function check(){document.querySelectorAll('.bk-sheet').forEach(function(s){var b=s.querySelector('.bk-sheet-body');var old=s.querySelector('.bk-overflow');if(old)old.remove();var over=b.scrollHeight-a4;if(over>1){var w=document.createElement('div');w.className='bk-overflow';w.textContent=${JSON.stringify(overflowMsg("__MM__"))}.replace('__MM__',Math.ceil(over/mm));b.appendChild(w);}});}
+        document.querySelectorAll('textarea[data-edit]').forEach(function(t){t.addEventListener('input',function(){fit(t);check();});fit(t);});
+        document.querySelectorAll('[data-insert-break]').forEach(function(btn){btn.addEventListener('click',function(){var t=document.querySelector('textarea[data-edit="'+btn.getAttribute('data-insert-break')+'"]');if(!t)return;var s=t.selectionStart,e=t.selectionEnd,v=t.value,before=v.slice(0,s),after=v.slice(e);var ins=(before&&!/\\n$/.test(before)?'\\n':'')+'PAGE BREAK'+(after&&!/^\\n/.test(after)?'\\n':'');t.value=before+ins+after;t.selectionStart=t.selectionEnd=before.length+ins.length;fit(t);check();t.focus();});});
+        check();
+      })();</script>`
+    : `<script>(function(){var mm=96/25.4;document.querySelectorAll('.bk-sheet').forEach(function(s){var b=s.querySelector('.bk-sheet-body');var over=b.scrollHeight-b.clientHeight;if(over>1){var w=document.createElement('div');w.className='bk-overflow';w.textContent=${JSON.stringify(overflowMsg("__MM__"))}.replace('__MM__',Math.ceil(over/mm));s.appendChild(w);}});})();</script>`;
   return { body: `<div class="bk-wrap">${sheetHTML}</div>${script}`, css, footer, sheets: n };
 }
