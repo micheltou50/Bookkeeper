@@ -312,7 +312,6 @@ const handler = async (req) => {
 
   let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
   let docSubfolder = null; // "Quotes" | "Invoices" — Admin subfolder for kind "invoice"
-  let docIsSent = false;   // sent docs file into the project folder; drafts stay central
 
   if (kind === "invoice") {
     let { data: inv } = await supabase.from("bk_invoices").select("*").eq("id", id).single();
@@ -335,10 +334,6 @@ const handler = async (req) => {
     fileName = sanitize(`${docType} ${inv.number || id}`) + ".pdf";
     fallbackName = "Unfiled Invoices";
     docSubfolder = inv.type === "quote" ? "Quotes" : "Invoices";
-    // "Sent" = anything past draft (sent/overdue/paid for invoices; sent/accepted
-    // for quotes). Drafts live in the central pending area; sent docs move into
-    // the project folder.
-    docIsSent = !!inv.status && inv.status !== "draft";
     const { data: jobsList } = await supabase.from("bk_jobs").select("id,job_number,name,address").eq("business_id", businessId);
     let job = inv.project_id ? (jobsList || []).find((j) => j.id === inv.project_id) : null;
     if (!job && inv.job) job = (jobsList || []).find((j) => j.address === inv.job || j.name === inv.job);
@@ -393,10 +388,14 @@ const handler = async (req) => {
       return { ok: true, webUrl: folder.webUrl, savedTo: folder.name };
     }
 
-    // kind === "invoice"/"quote": two-stage filing.
-    //   Draft (or sent-with-no-project) → central pending "<centralBase>/Admin/<Quotes|Invoices>".
-    //   Sent + has a project           → "<project>/Admin/<Quotes|Invoices>", pending copy removed.
-    // The central pending Admin sits at the PARENT of the projects base, e.g.
+    // kind === "invoice"/"quote": a document files into its PROJECT folder —
+    // "<project>/01 - Admin/<Quotes|Invoices>" — from the first save, draft or
+    // not (the user wants every quote in its project folder, 2026-09-14; the
+    // earlier draft-stays-central stage was dropped). Only a document with no
+    // matched project goes to the central "<centralBase>/Admin/<Quotes|Invoices>".
+    // Any central copy left from before the change is removed when the document
+    // files into its project.
+    // The central Admin sits at the PARENT of the projects base, e.g.
     // projectsBase "Mworx Group/Projects" → central "Mworx Group/Admin/..." (a
     // sibling of Projects, reusing any existing Admin). Falls back to projectsBase
     // itself when it has no parent segment.
@@ -412,11 +411,11 @@ const handler = async (req) => {
     if (centralBaseItem.status === 401) return { auth: true };
     if (centralBaseItem.status || !centralBaseItem.id) return { error: `OneDrive folder error (${centralBaseItem.status || "unknown"})` };
 
-    const isMove = docIsSent && jobNumber && docSubfolder; // sent + project → project folder
+    const isMove = !!(jobNumber && docSubfolder); // has a project → project folder
 
-    // Resolve the central "<centralBase>/Admin/<sub>" folder. For a MOVE it's only
-    // used to clean up the pending copy (best-effort — a hiccup here must NOT block
-    // the project upload). For a draft / sent-no-project it IS the upload target.
+    // Resolve the central "<centralBase>/Admin/<sub>" folder. For a project filing
+    // it's only used to clean up an old central copy (best-effort — a hiccup here
+    // must NOT block the project upload). With no project it IS the upload target.
     let central = null;
     if (docSubfolder) {
       const c = await ensureAdminSubfolder(tok, centralBaseItem.id, docSubfolder, "Admin");
@@ -438,8 +437,8 @@ const handler = async (req) => {
       const folder = await resolveFolder(tok, projectsBase, jobNumber, jobLabel, fallbackName);
       if (folder.status === 401) return { auth: true };
       // The project folder is still being copied, so there is nowhere to put the
-      // file yet. Report it rather than uploading somewhere improvised — the
-      // document stays in the central pending folder and moves on the next send.
+      // file yet. Report it rather than uploading somewhere improvised — the next
+      // Save to OneDrive files it once the folder exists.
       if (folder.pending) return { error: "The project folder is still being created in OneDrive. Try again in a moment." };
       if (folder.status || !folder.id) return { error: `OneDrive folder error (${folder.status || "unknown"})` };
       const sub = await ensureAdminSubfolder(tok, folder.id, docSubfolder);
@@ -452,12 +451,12 @@ const handler = async (req) => {
         return { error: `OneDrive upload failed (${up.status})`, detail: e };
       }
       const item = await up.json();
-      if (central?.id) await deleteChildByName(tok, central.id, fileName); // current-name pending copy
-      await cleanupPrev();                                                  // renamed pending copy
-      return { ok: true, webUrl: item.webUrl, savedTo: `${folder.name}/Admin/${docSubfolder}/${fileName}` };
+      if (central?.id) await deleteChildByName(tok, central.id, fileName); // old central copy, same name
+      await cleanupPrev();                                                  // old central copy, previous name
+      return { ok: true, webUrl: item.webUrl, savedTo: `${folder.name}/${ADMIN_FOLDER_NAME}/${docSubfolder}/${fileName}` };
     }
 
-    // Draft, or sent with no matched project → central pending area.
+    // No matched project → central area.
     const destId = central ? central.id : centralBaseItem.id;
     const savedPrefix = central ? `${centralBase}/Admin/${docSubfolder}` : centralBase;
     const up = await uploadToFolder(tok, destId, fileName, fileBuffer, contentType);

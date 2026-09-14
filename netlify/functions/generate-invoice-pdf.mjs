@@ -83,7 +83,7 @@ function bulletizeScope(text, always = false) {
 
 // Printed acceptance form for quotes: the client fills in their invoicing details
 // and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
-const acceptanceBlock = (inv) => `<div style="margin-top:30px">
+const acceptanceBlock = (inv) => `<div class="keep" style="margin-top:30px">
   <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
   <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
     Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmtAUD(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
@@ -221,22 +221,34 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   // no terms is one page, and then the label is omitted rather than printing
   // "Page 1 of 1".
   const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
-  const totalPages = hasTermsPage ? 2 : 1;
-  const pageNum = (n) => (totalPages > 1 ? `<div class="pagenum">Page ${n} of ${totalPages}</div>` : "");
+  // Printed by Chromium in the bottom page margin on EVERY page, with the real
+  // page count — the template only knows content, never how many pages it fills.
+  // Styles must be inline: header/footer templates get no page CSS.
+  const footer = `<div style="width:100%;margin:0 12mm;font-family:Helvetica,Arial,sans-serif;text-align:center;border-top:1px solid #e2e8f0;padding-top:6px">
+    <div style="font-size:8px;color:#64748b">Thank you for your business.</div>
+    <div style="font-size:7.5px;color:#94a3b8;margin-top:1px">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
+    ${tagline ? `<div style="font-size:7px;color:#94a3b8;margin-top:1px">${tagline}</div>` : ""}
+    <div style="font-size:7px;color:#cbd5e1;letter-spacing:0.04em;margin-top:4px">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>
+  </div>`;
 
-  return `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-  @page { size: A4; margin: 0; }
+  /* The page margins are where Chromium draws the footer (business line +
+     "Page n of N") — see footerTemplate in the handler. Content simply flows;
+     nothing here assumes how many pages it takes. The old fixed-height .page
+     boxes with a pinned page number produced blank pages and wrong numbers as
+     soon as a long scope overflowed page one. */
+  @page { size: A4; margin: 12mm 12mm 24mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #fff; color: #1e293b; -webkit-print-color-adjust: exact; }
-  .page { width: 210mm; min-height: 297mm; padding: 40px 44px 84px; display: flex; flex-direction: column; }
-  /* Sits at the bottom of each page's own content, just clear of the fixed footer. */
-  .pagenum { margin-top: auto; padding-top: 14px; text-align: center; font-size: 8.5px; color: #cbd5e1; letter-spacing: 0.04em; }
-  /* Fixed footer repeats at the bottom of every printed A4 page (incl. the T&Cs page). */
-  .doc-footer { position: fixed; left: 44px; right: 44px; bottom: 20px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 12px; background: #fff; }
+  .page { width: 100%; }
+  /* Blocks that read badly when split across a page edge. */
+  .keep { break-inside: avoid; page-break-inside: avoid; }
+  table { break-inside: auto; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
 </style>
 </head>
 <body>
@@ -304,8 +316,6 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 
   <!-- Notes -->
   ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
-
-  ${pageNum(1)}
 </div>
 
 <!-- Terms & Conditions + acceptance (own page for quotes) -->
@@ -313,18 +323,11 @@ ${hasTermsPage ? `<div class="page" style="break-before:page">
     ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
     <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>` : ""}
     ${isQuote ? acceptanceBlock(inv) : ""}
-  ${pageNum(2)}
 </div>` : ""}
-
-<!-- Footer: fixed, so it repeats at the bottom of every printed page -->
-<div class="doc-footer">
-  <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
-  <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
-  ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
-</div>
 
 </body>
 </html>`;
+  return { html, footer };
 }
 
 const handler = async (req) => {
@@ -393,7 +396,7 @@ const handler = async (req) => {
   const logoDataUrl = await fetchLogoBase64(profile?.logo_url);
 
   // Build HTML
-  const html = buildInvoiceHTML(inv, items || [], profile || {}, logoDataUrl);
+  const { html, footer } = buildInvoiceHTML(inv, items || [], profile || {}, logoDataUrl);
 
   // Launch Puppeteer
   let browser = null;
@@ -411,6 +414,11 @@ const handler = async (req) => {
       format: "A4",
       printBackground: true,
       preferCSSPageSize: true,
+      // Footer (business line + "Page n of N") drawn in the @page bottom margin
+      // on every page. An empty header keeps Chromium's default (URL + date) off.
+      displayHeaderFooter: true,
+      headerTemplate: "<span></span>",
+      footerTemplate: footer,
     });
 
     // Upload to Supabase Storage

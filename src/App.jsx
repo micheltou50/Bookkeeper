@@ -942,18 +942,15 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
     </div>`;
 
-  // The document is built as an explicit list of pages so the footer can say
-  // "Page 1 of 2". Quotes carry a second page (terms + acceptance); a plain
-  // invoice with no terms is a single page and then the label is left off
-  // rather than printing a pointless "Page 1 of 1".
+  // On-screen preview: the terms page is shown as a second sheet, but no page
+  // numbers — only the real PDF (Chromium's footer) knows how many pages the
+  // content actually fills.
   const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
-  const totalPages = hasTermsPage ? 2 : 1;
   const PAGE_STYLE = "width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column";
-  const pageFooter = (n) => `<div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
+  const pageFooter = () => `<div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
       <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
       <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
       ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
-      ${totalPages > 1 ? `<div style="font-size:8.5px;color:#cbd5e1;margin-top:4px;letter-spacing:0.04em">Page ${n} of ${totalPages}</div>` : ""}
     </div>`;
 
   return `<div style="${PAGE_STYLE}">
