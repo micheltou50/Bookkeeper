@@ -315,8 +315,8 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 
   <!-- Notes -->
   ${inv.notes ? `<div style="margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">
-    ${isQuote ? `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:6px">Exclusions</div>` : ""}
-    <div style="font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${inv.notes}</div>
+    ${isQuote ? `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:6px;break-after:avoid;page-break-after:avoid">Exclusions</div>` : ""}
+    <div style="font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap;orphans:3;widows:3">${inv.notes}</div>
   </div>` : ""}
 </div>
 
