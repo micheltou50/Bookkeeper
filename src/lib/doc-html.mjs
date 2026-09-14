@@ -13,7 +13,7 @@
 export const PAGE_BREAK = "---";
 // A line that is only dashes (any kind — people type "—" for "---"), or the
 // words "page break" with or without brackets, is a page break.
-export const isPageBreak = (s) => /^\s*(?:[-–—]{2,}|\[?\s*page\s*break\s*\]?)\s*$/i.test(String(s ?? ""));
+export const isPageBreak = (s) => /^\s*(?:[-–—]{2,}|[–—]|\[?\s*page\s*break\s*\]?)\s*$/i.test(String(s ?? ""));
 
 export const DIVISION_META = {
   mworx: { tagline: "Design · Consultancy · Project Management", accent: "#0d9488" },
