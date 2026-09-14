@@ -2886,6 +2886,16 @@ Are you sure you want it ${verb}?`);
       await fileToOneDrive(saved); // regenerate + file, with a visible result
     };
     const canCompose = !!emailConn && !!(f.contact_email || "").trim();
+    // Save as it stands (a new document becomes a draft) and open the A4
+    // preview, where page breaks and text can be finished off.
+    const saveAndPreview = async () => {
+      const saved = await saveInv();
+      if (!saved?.id) return;
+      formDirtyRef.current = false;
+      invoiceDraftRef.current = null;
+      setModal(null); setEditItem(null); setInvoiceSeed(null);
+      setViewDoc(saved);
+    };
 
     // Contacts attached to the selected project (bk_job_parties) — offered first
     // in the "Addressed to" dropdown, consultants included.
@@ -3258,6 +3268,9 @@ Are you sure you want it ${verb}?`);
         </>) : (
           <button disabled={saving} onClick={async () => { setSaving(true); await saveInv(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1 }}>{saving ? "Saving…" : `${existing ? "Update" : "Create"} ${f.type === "quote" ? "Quote" : "Invoice"}`}</button>
         )}
+        {/* Save + open the A4 preview: page breaks, layout and text can be
+            finished there and land back in this document. */}
+        <button disabled={saving} onClick={async () => { setSaving(true); await saveAndPreview(); setSaving(false); }} style={{ ...s.btnOutline, width: "100%", justifyContent: "center", marginTop: 8, opacity: saving ? 0.5 : 1, gap: 6, display: "inline-flex", alignItems: "center" }}><Icons.Eye /> {saving ? "Saving…" : "Save & preview"}</button>
         {/* Quote-only next step. */}
         {existing && f.type === "quote" && (
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
