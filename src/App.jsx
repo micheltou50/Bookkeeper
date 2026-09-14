@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
+import { buildDocHTML, isPageBreak, PAGE_BREAK, scopeTextToItems, itemsToScopeText } from "./lib/doc-html.mjs";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://bkeeper.netlify.app" : "";
 
@@ -566,29 +567,6 @@ function getDefaultTerms(type) { return type === "quote" ? "" : "Payment is due 
 // Default for the standalone Terms & Conditions field.
 function getDefaultDocTerms(type) { return type === "quote" ? DEFAULT_QUOTE_TERMS : ""; }
 
-// Printed acceptance form for quotes: the client fills in their invoicing details
-// and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
-const acceptanceBlock = (inv) => `<div style="margin-top:30px">
-  <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
-  <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
-    Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmt(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
-  </div>
-  <div style="font-size:10px;color:#334155;line-height:1.6;margin-bottom:14px;padding:9px 11px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">
-    By accepting this quotation, the client confirms that they have read and agree to the Scope of Works, fees, payment schedule and Terms &amp; Conditions contained in this quotation.
-  </div>
-  <div style="font-size:10px;color:#64748b;margin-bottom:18px">This quote may be accepted either by signing and returning this page, or by written acceptance by email.</div>
-  <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
-  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
-    <tr><td style="width:50%;padding:16px 18px 0 0;vertical-align:bottom">Name / Company<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="width:50%;padding:16px 0 0 0;vertical-align:bottom">ABN<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
-    <tr><td colspan="2" style="padding:16px 0 0 0;vertical-align:bottom">Billing address<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
-    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Email<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="padding:16px 0 0 0;vertical-align:bottom">Phone<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
-    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Purchase order&nbsp;# (if any)<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
-  </table>
-  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569;margin-top:6px">
-    <tr><td style="width:60%;padding:28px 18px 0 0;vertical-align:bottom">Signature<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td><td style="width:40%;padding:28px 0 0 0;vertical-align:bottom">Date<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td></tr>
-    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Print name<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
-  </table>
-</div>`;
 
 // Per-project money breakdown. "Remaining" = contract − paid (only paid invoices
 // reduce it); we also surface invoiced/outstanding/leftToInvoice for context.
@@ -844,191 +822,19 @@ function ChangePasswordForm({ s, accent }) {
   );
 }
 
-// A single-line description renders as plain bold text. A multi-line one becomes a
-// bulleted scope list: non-indented lines get a "•", lines that start with
-// whitespace become "◦" sub-items. Any bullet char the user typed is stripped so
-// we never double up. Used by both PDF builders.
-function bulletizeScope(text, always = false) {
-  const raw = String(text || "");
-  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length <= 1 && !always) return `<div style="font-weight:600;white-space:pre-wrap">${raw}</div>`;
-  return lines.map((l) => {
-    const sub = /^\s/.test(l);
-    const t = l.trim().replace(/^[-*•◦·]\s*/, "");
-    return `<div style="display:flex;gap:7px;margin-left:${sub ? 16 : 0}px;margin-top:3px;line-height:1.4"><span style="color:#64748b;flex-shrink:0">${sub ? "◦" : "•"}</span><span style="font-weight:${sub ? 400 : 600}">${t}</span></div>`;
-  }).join("");
-}
-
-function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
-  const isQuote = inv.type === "quote";
-  const docType = isQuote ? "QUOTE" : "INVOICE";
-  const bName = profile.name || "Company";
-  const tagline = divisionInfo(recordDivision(inv)).tagline;
-  const accountName = profile.account_name || profile.name || bName;
-
-  const logoHTML = logoDataUrl
-    ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`
-    : `<div style="font-size:24px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${bName}</div>`;
-
-  const isLump = inv.pricing_mode === "lump_sum";
-
-  const lumpScope = (inv.items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
-  const lumpNotes = (inv.items || []).map((i) => i.note || "").filter((n) => n.trim()).join("\n");
-
-  const itemsTable = isLump
-    ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-        <thead><tr style="background:#f8fafc">
-          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
-        </tr></thead>
-        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}${lumpNotes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb;font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${lumpNotes}</div>` : ""}</td></tr></tbody>
-      </table>`
-    : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-        <thead><tr style="background:#f8fafc">
-          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
-          <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
-          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
-          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
-        </tr></thead>
-        <tbody>${(inv.items || []).map((item) => {
-          const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
-          return `<tr>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
-              ${bulletizeScope(item.description)}
-              ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;white-space:pre-wrap">${item.note}</div>` : ""}
-            </td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top">${fmt(item.rate || 0)}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top">${fmt(amount)}</td>
-          </tr>`;
-        }).join("")}</tbody>
-      </table>`;
-
-  const subtotal = isLump ? (Number(inv.total) || 0) : (inv.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
-
-  const planRows = isQuote && Array.isArray(inv.payment_plan) && inv.payment_plan.length
-    ? (() => {
-        const t = Number(inv.total) || 0;
-        const rows = inv.payment_plan.map((st) => ({ label: st.label || "", amount: Math.round(((t * (Number(st.percent) || 0)) / 100) * 100) / 100, percent: Number(st.percent) || 0 }));
-        const summed = rows.reduce((s, r) => s + r.amount, 0);
-        const pct = inv.payment_plan.reduce((s, st) => s + (Number(st.percent) || 0), 0);
-        if (rows.length && Math.abs(pct - 100) < 0.005) rows[rows.length - 1].amount = Math.round((rows[rows.length - 1].amount + (t - summed)) * 100) / 100;
-        return rows;
-      })()
-    : [];
-  const paymentPlanHTML = planRows.length ? `
-    <div style="margin-top:18px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
-      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Schedule</div>
-      <table style="width:100%;border-collapse:collapse;font-size:11px;color:#1e293b">
-        ${planRows.map((r, i) => `<tr>
-          <td style="padding:8px 12px;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.label}</td>
-          <td style="padding:8px 12px;text-align:right;color:#64748b;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.percent}%</td>
-          <td style="padding:8px 12px;text-align:right;font-weight:600;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${fmt(r.amount)}</td>
-        </tr>`).join("")}
-      </table>
-    </div>` : "";
-
-  const paymentSection = !isQuote ? `
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
-      <table style="font-size:11px;color:#374151;line-height:1.8">
-        ${profile.bank_name ? `<tr><td style="padding-right:20px;color:#6b7280">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
-        <tr><td style="padding-right:20px;color:#6b7280">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
-        ${profile.bsb ? `<tr><td style="padding-right:20px;color:#6b7280">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
-        ${profile.account_number ? `<tr><td style="padding-right:20px;color:#6b7280">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
-        <tr><td style="padding-right:20px;color:#6b7280">Reference</td><td style="font-weight:600">${inv.number || ""}</td></tr>
-      </table>
-    </div>` : `
-    <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:14px 20px;margin-top:24px">
-      <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
-    </div>`;
-
-  // On-screen preview: quotes show the acceptance form as a second sheet and the
-  // terms as the last; no page numbers — only the real PDF (Chromium's footer)
-  // knows how many pages the content actually fills.
-  const PAGE_STYLE = "width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column";
-  const pageFooter = () => `<div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
-      <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
-      <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
-      ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
-    </div>`;
-
-  return `<div style="${PAGE_STYLE}">
-
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
-      <div>
-        ${logoHTML}
-        <div style="margin-top:10px">
-          ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
-          <div style="font-size:10px;color:#6b7280;line-height:1.6">
-            ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
-          </div>
-        </div>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:32px;font-weight:700;color:#1e293b;letter-spacing:0.04em;text-transform:uppercase">${docType}</div>
-        <div style="font-size:14px;font-weight:700;color:#374151;margin-top:4px">${inv.number || ""}</div>
-      </div>
-    </div>
-
-    <div style="height:2px;background:${accent};margin-bottom:24px"></div>
-
-    <div style="display:flex;justify-content:space-between;margin-bottom:28px">
-      <div style="flex:1">
-        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:6px">${isQuote ? "Quote For" : "Bill To"}</div>
-        <div style="font-size:12px;color:#1e293b;line-height:1.7">
-          <strong>${inv.contact_name || ""}</strong>
-          ${inv.contact_company ? `<br>${inv.contact_company}` : ""}
-          ${inv.contact_abn ? `<br><span style="font-size:10px;color:#6b7280">ABN ${inv.contact_abn}</span>` : ""}
-          ${inv.contact_address ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_address}</span>` : ""}
-          ${inv.contact_email ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_email}</span>` : ""}
-          ${inv.contact_phone ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_phone}</span>` : ""}
-        </div>
-      </div>
-      <div style="text-align:right;min-width:180px">
-        <table style="font-size:11px;margin-left:auto;border-collapse:collapse">
-          <tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Quote Date" : "Invoice Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.date ? fmtDate(inv.date) : ""}</td></tr>
-          ${inv.due_date ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Valid Until" : "Due Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.due_date)}</td></tr>` : ""}
-          ${inv.job ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Job / Ref</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.job}</td></tr>` : ""}
-        </table>
-      </div>
-    </div>
-
-    ${itemsTable}
-
-    <div style="display:flex;justify-content:flex-end">
-      <div style="width:240px">
-        <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:4px;border-top:2px solid #1e293b">
-          <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
-          <span style="font-size:16px;font-weight:800;color:${accent}">${fmt(subtotal)}</span>
-        </div>
-        ${profile.gst_not_registered ? `<div style="text-align:right;font-size:9px;color:#94a3b8;padding-top:2px">GST not applicable</div>` : ""}
-      </div>
-    </div>
-
-    ${paymentPlanHTML}
-    ${paymentSection}
-
-    ${inv.notes ? `<div style="margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb">
-      ${isQuote ? `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:6px">Exclusions</div>` : ""}
-      <div style="font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${inv.notes}</div>
-    </div>` : ""}
-
-    ${pageFooter(1)}
-  </div>${isQuote ? `<div style="${PAGE_STYLE};page-break-before:always;break-before:page">${acceptanceBlock(inv)}${pageFooter()}</div>` : ""}${inv.terms && inv.terms.trim() ? `<div style="${PAGE_STYLE};page-break-before:always;break-before:page">
-      <div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
-      <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>
-    ${pageFooter()}
-  </div>` : ""}`;
-}
-
 // Full-screen, in-app viewer for an invoice/quote. Renders the same HTML the PDF is
 // built from inside an isolated <iframe srcDoc>, so there is no window.open()/new tab
 // and the mobile/Safari/in-app pop-up blocker can never get in the way (that blocker
 // is what produced the old "Allow pop-ups to view the document" message). Defined at
 // the top level — not nested in BookkeeperApp — so a parent re-render (e.g. the PDF
 // download toggling pdfLoading) doesn't unmount it and reload the iframe.
-function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, onEmail, onSaveOneDrive, fetchLogoBase64 }) {
+function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, onEmail, onSaveOneDrive, onSaveEdits, fetchLogoBase64 }) {
   const [html, setHtml] = useState(null);
+  // Edit mode: the same sheets, but the scope, exclusions and terms become
+  // textareas in place. Save writes back into the document itself (see
+  // saveDocEdits in the app), then the preview re-renders from the saved row.
+  const [editing, setEditing] = useState(false);
+  const [savingEdits, setSavingEdits] = useState(false);
   const frameRef = useRef(null);
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
   const title = `${docType} ${inv.number || ""}`.trim();
@@ -1037,28 +843,48 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
     let alive = true;
     (async () => {
       const logoDataUrl = await fetchLogoBase64();
-      const content = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
-      const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>
-        html,body{margin:0;background:#eef2f5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-        .bk-sheet{max-width:820px;margin:16px auto;background:#fff;box-shadow:0 2px 14px rgba(16,24,40,.14)}
-        .bk-sheet>div{width:100%!important;box-sizing:border-box}
-        @media print{body{background:#fff}.bk-sheet{box-shadow:none;margin:0;max-width:none}}
-      </style></head><body><div class="bk-sheet">${content}</div></body></html>`;
+      // Same layout as the PDF (src/lib/doc-html.mjs): A4 sheets, split where
+      // the document's own page breaks say, with an overflow warning on any
+      // sheet holding more than A4 fits.
+      const { body, css } = buildDocHTML(inv, inv.items || [], profile, { logoDataUrl, mode: editing ? "edit" : "screen" });
+      const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${css}</style></head><body>${body}</body></html>`;
       if (alive) setHtml(full);
     })();
     return () => { alive = false; };
-  }, [inv, profile, accent, fetchLogoBase64]);
+  }, [inv, profile, editing, fetchLogoBase64]);
 
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape" && !editing) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, editing]);
 
   const printDoc = () => { try { const w = frameRef.current?.contentWindow; if (w) { w.focus(); w.print(); } } catch { /* print unsupported (e.g. iOS WebView) — use Download instead */ } };
 
   const [filingOneDrive, setFilingOneDrive] = useState(false);
   const doSaveOneDrive = async () => { setFilingOneDrive(true); try { await onSaveOneDrive(inv); } finally { setFilingOneDrive(false); } };
+
+  // The textareas live inside the srcDoc iframe (same origin), so read them
+  // straight out of its document.
+  const readEdits = () => {
+    const doc = frameRef.current?.contentDocument;
+    if (!doc) return null;
+    const val = (n) => { const el = doc.querySelector(`textarea[data-edit="${n}"]`); return el ? el.value : undefined; };
+    return { scopeText: val("scope"), notes: val("notes"), terms: val("terms") };
+  };
+  const editsChanged = () => {
+    const e = readEdits();
+    if (!e) return false;
+    return (e.scopeText != null && e.scopeText !== itemsToScopeText(inv.items)) || (e.notes != null && e.notes !== (inv.notes || "")) || (e.terms != null && e.terms !== (inv.terms || ""));
+  };
+  const saveEdits = async () => {
+    const edits = readEdits();
+    if (!edits) return;
+    setSavingEdits(true);
+    try { const ok = await onSaveEdits(inv, edits); if (ok) setEditing(false); }
+    finally { setSavingEdits(false); }
+  };
+  const cancelEdits = () => { if (editsChanged() && !window.confirm("Discard the changes made in the preview?")) return; setEditing(false); };
 
   const btn = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9, cursor: "pointer", whiteSpace: "nowrap" };
   const outlineBtn = { ...btn, background: "#fff", border: "1px solid #e2e8f0", color: "#334155" };
@@ -1066,14 +892,20 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "#eef2f5", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "calc(10px + env(safe-area-inset-top)) 12px 10px", background: "#fff", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
-        <button onClick={onClose} title="Close" style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 0, width: 32, height: 32, justifyContent: "center" }}><Icons.X /></button>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
-        {/* Primary actions — email and file to OneDrive — sit first. On a phone
-            they show as icons to keep the bar from overflowing. */}
-        {onEmail && <button onClick={() => onEmail(inv)} title="Email" style={outlineBtn}><Icons.Send /> {isMobile ? "" : "Email"}</button>}
-        {onSaveOneDrive && <button onClick={doSaveOneDrive} disabled={filingOneDrive} title="Save to OneDrive" style={{ ...outlineBtn, opacity: filingOneDrive ? 0.6 : 1 }}><Icons.Cloud /> {isMobile ? "" : (filingOneDrive ? "Saving…" : "Save to OneDrive")}</button>}
-        {!isMobile && <button onClick={printDoc} style={outlineBtn}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
-        <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} title="Download PDF" style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {isMobile ? "" : (pdfLoading === inv.id ? "..." : "Download PDF")}</button>
+        <button onClick={editing ? cancelEdits : onClose} title={editing ? "Cancel editing" : "Close"} style={{ ...btn, background: "none", border: "none", color: "#64748b", padding: 0, width: 32, height: 32, justifyContent: "center" }}><Icons.X /></button>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}{editing && <span style={{ fontSize: 11, fontWeight: 600, color: accent, marginLeft: 8 }}>Editing</span>}</div>
+        {editing ? (<>
+          <button onClick={cancelEdits} disabled={savingEdits} style={outlineBtn}>Cancel</button>
+          <button onClick={saveEdits} disabled={savingEdits} style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: savingEdits ? 0.6 : 1 }}><Icons.Check /> {savingEdits ? "Saving…" : "Save changes"}</button>
+        </>) : (<>
+          {onSaveEdits && <button onClick={() => setEditing(true)} title="Edit the text and page breaks here" style={outlineBtn}><Icons.Edit /> {isMobile ? "" : "Edit"}</button>}
+          {/* Primary actions — email and file to OneDrive — sit first. On a phone
+              they show as icons to keep the bar from overflowing. */}
+          {onEmail && <button onClick={() => onEmail(inv)} title="Email" style={outlineBtn}><Icons.Send /> {isMobile ? "" : "Email"}</button>}
+          {onSaveOneDrive && <button onClick={doSaveOneDrive} disabled={filingOneDrive} title="Save to OneDrive" style={{ ...outlineBtn, opacity: filingOneDrive ? 0.6 : 1 }}><Icons.Cloud /> {isMobile ? "" : (filingOneDrive ? "Saving…" : "Save to OneDrive")}</button>}
+          {!isMobile && <button onClick={printDoc} style={outlineBtn}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
+          <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} title="Download PDF" style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {isMobile ? "" : (pdfLoading === inv.id ? "..." : "Download PDF")}</button>
+        </>)}
       </div>
       {html ? (
         <iframe ref={frameRef} srcDoc={html} title={title} style={{ flex: 1, width: "100%", border: "none" }} />
@@ -1783,15 +1615,6 @@ export default function BookkeeperApp() {
   };
 
 
-
-
-
-
-
-
-
-
-
   const addContact = async (c, keepModal) => {
     const row = { user_id: session.user.id, business_id: biz, name: c.name, email: c.email, phone: c.phone, type: c.type, company: c.company, abn: c.abn, address: c.address, notes: c.notes };
     const { ok, data: inserted } = await sbWrite(supabase.from("bk_contacts").insert(row).select().single(), "save contact");
@@ -2325,13 +2148,8 @@ export default function BookkeeperApp() {
       // Print to a true A4 page via the browser (like Microsoft Word): content flows
       // and paginates onto A4, and the footer is pinned to the bottom of every page.
       const logoDataUrl = await fetchLogoBase64();
-      const content = buildInvoiceHTML(inv, profile, accent, logoDataUrl);
-      const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${inv.number || "Document"}</title><style>
-        @page { size: A4; margin: 14mm 13mm 16mm; }
-        html, body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        body > div { width: 100% !important; min-height: 0 !important; padding: 0 !important; display: block !important; box-sizing: border-box; }
-        body > div > div:last-child { position: fixed !important; bottom: 6mm; left: 13mm; right: 13mm; margin: 0 !important; }
-      </style></head><body>${content}</body></html>`;
+      const { body: docBody, css } = buildDocHTML(inv, inv.items || [], profile, { logoDataUrl, mode: "pdf" });
+      const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${inv.number || "Document"}</title><style>${css}</style></head><body>${docBody}</body></html>`;
       const iframe = document.createElement("iframe");
       Object.assign(iframe.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
       document.body.appendChild(iframe);
@@ -2354,6 +2172,22 @@ export default function BookkeeperApp() {
   // view the document" message came from. Rendering it in-app removes the pop-up
   // entirely, so View can never be blocked.
   const viewInvoice = (inv) => setViewDoc(inv);
+  // Edits made in the document preview write back into the quote/invoice
+  // itself — the same fields the form edits — and the preview re-renders from
+  // the saved row. Scope text comes back as lines (see scopeTextToItems); only
+  // lump-sum documents expose it, since itemised rows carry qty and rate.
+  const saveDocEdits = async (inv, { scopeText, notes, terms }) => {
+    if (inv.type !== "quote" && inv.status && inv.status !== "draft"
+      && !window.confirm(`Invoice ${inv.number} has already been issued. Save these text changes to it anyway?`)) return false;
+    const updates = { ...inv };
+    if (scopeText != null && inv.pricing_mode === "lump_sum") updates.items = scopeTextToItems(scopeText);
+    if (notes != null) updates.notes = notes;
+    if (terms != null) updates.terms = terms;
+    const ok = await updateInvoice(inv.id, updates);
+    if (!ok) return false;
+    setViewDoc({ ...inv, ...updates });
+    return true;
+  };
 
   // Plain-text default signature, used by the mailto fallback and as the base for
   // the compose window's signature preview.
@@ -2867,10 +2701,6 @@ Are you sure you want it ${verb}?`);
   );
 
 
-
-
-
-
   const InvoiceForm = ({ existing }) => {
     const defaultType = "invoice";
     const seed = invoiceSeed || {};
@@ -3275,6 +3105,20 @@ Are you sure you want it ${verb}?`);
               <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto", padding: "2px 2px 6px" }}>
                 {f.items.map((item, idx) => {
                   const sub = /^\s/.test(item.description || "");
+                  // A page-break line: the PDF and the preview start a new page here.
+                  if (isPageBreak(item.description)) return (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 26px 26px 28px 28px", gap: 3, alignItems: "center" }}>
+                      <span title="Page break" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, color: "#94a3b8", fontSize: 13 }}>⤓</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, height: 28, fontSize: 10, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase" }}><span style={{ flex: 1, borderTop: "2px dashed #cbd5e1" }} />Page break<span style={{ flex: 1, borderTop: "2px dashed #cbd5e1" }} /></div>
+                      <button type="button" title="Move up" disabled={idx === 0} onClick={() => moveScopeLine(idx, -1)}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 28, borderRadius: 6, background: "none", border: "none", color: idx === 0 ? "#e2e8f0" : "#94a3b8", cursor: idx === 0 ? "default" : "pointer", fontSize: 11 }}>▲</button>
+                      <button type="button" title="Move down" disabled={idx === f.items.length - 1} onClick={() => moveScopeLine(idx, 1)}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 28, borderRadius: 6, background: "none", border: "none", color: idx === f.items.length - 1 ? "#e2e8f0" : "#94a3b8", cursor: idx === f.items.length - 1 ? "default" : "pointer", fontSize: 11 }}>▼</button>
+                      <span />
+                      <button type="button" onClick={() => removeItem(idx)} title="Remove page break"
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 7, background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 13 }}>✕</button>
+                    </div>
+                  );
                   return (
                     <div key={idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 26px 26px 28px 28px", gap: 3, alignItems: "center" }}>
                       <button type="button" onClick={() => toggleScopeIndent(idx)} title={sub ? "Make a heading" : "Make a sub-item"}
@@ -3300,6 +3144,7 @@ Are you sure you want it ${verb}?`);
               <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                 <button type="button" onClick={addItem} style={{ ...s.btnOutline }}>+ Add line</button>
                 <button type="button" onClick={() => setLibOpen(true)} style={{ ...s.btnOutline, color: "#3b82f6", borderColor: "#3b82f640" }}>+ Add from library</button>
+                <button type="button" onClick={() => setF({ ...f, items: [...f.items, { description: PAGE_BREAK, note: "", qty: 1, rate: "" }] })} title="The PDF starts a new page here — move it up to where the break belongs" style={{ ...s.btnOutline, color: "#64748b" }}>⤓ Page break</button>
               </div>
               {libOpen && <ScopeLibrary lines={scopeLines} isMobile={isMobile} s={s} onClose={() => setLibOpen(false)} onAdd={addFromLibrary} />}
               {saveLine && (
@@ -3899,7 +3744,6 @@ Are you sure you want it ${verb}?`);
       </div>
     );
   };
-
 
 
   // Operational dashboard: what is owed, what is late, and what needs a decision.
@@ -4681,7 +4525,6 @@ Are you sure you want it ${verb}?`);
   };
 
 
-
   const MobileLayout = () => (
     <div style={{ display: "flex", flexDirection: "column", height: "100dvh", background: "#f7f9f8", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <MobileHeader />
@@ -4820,7 +4663,7 @@ Are you sure you want it ${verb}?`);
       {statusPick && <StatusPicker doc={statusPick.doc} anchor={statusPick.anchor} isMobile={isMobile} badgeStyle={s.badge}
         onClose={() => setStatusPick(null)}
         onPick={(next) => { const d = statusPick.doc; setStatusPick(null); changeDocStatus(d, next); }} />}
-      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
+      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onSaveEdits={saveDocEdits} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );
