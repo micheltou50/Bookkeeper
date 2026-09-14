@@ -220,7 +220,6 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
   // Explicit page list so the footer can say "Page 1 of 2". A plain invoice with
   // no terms is one page, and then the label is omitted rather than printing
   // "Page 1 of 1".
-  const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
   // Printed by Chromium in the bottom page margin on EVERY page, with the real
   // page count — the template only knows content, never how many pages it fills.
   // Styles must be inline: header/footer templates get no page CSS.
@@ -322,10 +321,11 @@ function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
 </div>
 
 <!-- Terms & Conditions + acceptance (own page for quotes) -->
-${hasTermsPage ? `<div class="page" style="break-before:page">
-    ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
-    <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>` : ""}
-    ${isQuote ? acceptanceBlock(inv) : ""}
+<!-- Quotes: the acceptance form on its own page, then the terms last -->
+${isQuote ? `<div class="page" style="break-before:page">${acceptanceBlock(inv)}</div>` : ""}
+${inv.terms && inv.terms.trim() ? `<div class="page" style="break-before:page">
+    <div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
+    <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>
 </div>` : ""}
 
 </body>

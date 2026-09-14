@@ -942,10 +942,9 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
       <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
     </div>`;
 
-  // On-screen preview: the terms page is shown as a second sheet, but no page
-  // numbers — only the real PDF (Chromium's footer) knows how many pages the
-  // content actually fills.
-  const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
+  // On-screen preview: quotes show the acceptance form as a second sheet and the
+  // terms as the last; no page numbers — only the real PDF (Chromium's footer)
+  // knows how many pages the content actually fills.
   const PAGE_STYLE = "width:595px;min-height:842px;background:#fff;padding:40px 44px;font-family:Helvetica Neue,Arial,sans-serif;box-sizing:border-box;display:flex;flex-direction:column";
   const pageFooter = () => `<div style="margin-top:auto;padding-top:24px;text-align:center;border-top:1px solid #e2e8f0">
       <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
@@ -1015,11 +1014,10 @@ function buildInvoiceHTML(inv, profile, accent, logoDataUrl) {
     </div>` : ""}
 
     ${pageFooter(1)}
-  </div>${hasTermsPage ? `<div style="${PAGE_STYLE};page-break-before:always;break-before:page">
-      ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
-      <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>` : ""}
-      ${isQuote ? acceptanceBlock(inv) : ""}
-    ${pageFooter(2)}
+  </div>${isQuote ? `<div style="${PAGE_STYLE};page-break-before:always;break-before:page">${acceptanceBlock(inv)}${pageFooter()}</div>` : ""}${inv.terms && inv.terms.trim() ? `<div style="${PAGE_STYLE};page-break-before:always;break-before:page">
+      <div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
+      <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>
+    ${pageFooter()}
   </div>` : ""}`;
 }
 
