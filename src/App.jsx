@@ -828,8 +828,13 @@ function ChangePasswordForm({ s, accent }) {
 // is what produced the old "Allow pop-ups to view the document" message). Defined at
 // the top level — not nested in BookkeeperApp — so a parent re-render (e.g. the PDF
 // download toggling pdfLoading) doesn't unmount it and reload the iframe.
-function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, onEmail, onSaveOneDrive, onSaveEdits, fetchLogoBase64 }) {
+function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDownload, onEmail, onSaveOneDrive, onSaveEdits, onRenderPdf, fetchLogoBase64 }) {
   const [html, setHtml] = useState(null);
+  // View mode shows the real PDF (see renderPdfUrl in the app): pagination,
+  // breaks and page numbers are exactly the final document. The HTML sheets
+  // show while it renders, and stay if it can't be rendered (localhost).
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [pdfState, setPdfState] = useState("idle"); // idle | rendering | ready | failed
   // Edit mode: the same sheets, but the scope, exclusions and terms become
   // textareas in place. Save writes back into the document itself (see
   // saveDocEdits in the app), then the preview re-renders from the saved row.
@@ -852,6 +857,25 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
     })();
     return () => { alive = false; };
   }, [inv, profile, editing, fetchLogoBase64]);
+
+  useEffect(() => {
+    if (editing || !onRenderPdf) { setPdfState("idle"); return; }
+    let alive = true;
+    let objUrl = null;
+    setPdfState("rendering");
+    setPdfUrl(null);
+    (async () => {
+      try {
+        objUrl = await onRenderPdf(inv);
+        if (alive) { setPdfUrl(objUrl); setPdfState("ready"); }
+        else URL.revokeObjectURL(objUrl);
+      } catch (err) {
+        console.warn("PDF preview unavailable, showing HTML sheets:", err?.message);
+        if (alive) setPdfState("failed");
+      }
+    })();
+    return () => { alive = false; if (objUrl) URL.revokeObjectURL(objUrl); };
+  }, [inv, editing, onRenderPdf]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape" && !editing) onClose(); };
@@ -903,15 +927,22 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
               they show as icons to keep the bar from overflowing. */}
           {onEmail && <button onClick={() => onEmail(inv)} title="Email" style={outlineBtn}><Icons.Send /> {isMobile ? "" : "Email"}</button>}
           {onSaveOneDrive && <button onClick={doSaveOneDrive} disabled={filingOneDrive} title="Save to OneDrive" style={{ ...outlineBtn, opacity: filingOneDrive ? 0.6 : 1 }}><Icons.Cloud /> {isMobile ? "" : (filingOneDrive ? "Saving…" : "Save to OneDrive")}</button>}
-          {!isMobile && <button onClick={printDoc} style={outlineBtn}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
+          {!isMobile && pdfState !== "ready" && <button onClick={printDoc} style={outlineBtn}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"/></svg> Print</button>}
           <button onClick={() => onDownload(inv)} disabled={pdfLoading === inv.id} title="Download PDF" style={{ ...btn, background: accent, border: "none", color: "#fff", opacity: pdfLoading === inv.id ? 0.6 : 1 }}><Icons.Download /> {isMobile ? "" : (pdfLoading === inv.id ? "..." : "Download PDF")}</button>
         </>)}
       </div>
-      {html ? (
-        <iframe ref={frameRef} srcDoc={html} title={title} style={{ flex: 1, width: "100%", border: "none" }} />
-      ) : (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 14 }}>Loading {docType.toLowerCase()}…</div>
-      )}
+      {!editing && pdfState === "ready" && pdfUrl ? (
+        <iframe src={`${pdfUrl}#view=FitH`} title={title} style={{ flex: 1, width: "100%", border: "none" }} />
+      ) : (<>
+        {!editing && pdfState === "rendering" && (
+          <div style={{ padding: "7px 12px", background: "#fffbeb", borderBottom: "1px solid #fde68a", color: "#92400e", fontSize: 12, fontWeight: 600, textAlign: "center", flexShrink: 0 }}>Rendering the final PDF… the sheets below are a draft layout until it appears.</div>
+        )}
+        {html ? (
+          <iframe ref={frameRef} srcDoc={html} title={title} style={{ flex: 1, width: "100%", border: "none" }} />
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 14 }}>Loading {docType.toLowerCase()}…</div>
+        )}
+      </>)}
     </div>
   );
 }
@@ -2122,6 +2153,25 @@ export default function BookkeeperApp() {
 
   const [pdfLoading, setPdfLoading] = useState(null);
   const [viewDoc, setViewDoc] = useState(null);
+
+  // The document preview shows the REAL PDF — the same bytes that get emailed
+  // and filed — so what's on screen is exactly the final document. Returns an
+  // object URL for the viewer's iframe (the caller revokes it). Stable identity
+  // (useCallback) so the viewer doesn't regenerate on every app re-render. On
+  // localhost the function doesn't exist and this throws; the viewer then keeps
+  // its HTML sheets.
+  const renderPdfUrl = useCallback(async (inv) => {
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    const resp = await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ invoice_id: inv.id, auth_token: token }),
+    });
+    const result = await resp.json().catch(() => ({}));
+    if (!resp.ok || !result.signed_url) throw new Error(result.error || "PDF generation failed");
+    const blob = await (await fetch(result.signed_url)).blob();
+    return URL.createObjectURL(blob);
+  }, []);
 
   const downloadPDF = async (inv) => {
     const pdfName = safeFileName([inv.number || "draft", inv.contact_name || "Client", inv.job, inv.date].filter(Boolean), "pdf");
@@ -4676,7 +4726,7 @@ Are you sure you want it ${verb}?`);
       {statusPick && <StatusPicker doc={statusPick.doc} anchor={statusPick.anchor} isMobile={isMobile} badgeStyle={s.badge}
         onClose={() => setStatusPick(null)}
         onPick={(next) => { const d = statusPick.doc; setStatusPick(null); changeDocStatus(d, next); }} />}
-      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onSaveEdits={saveDocEdits} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
+      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onSaveEdits={saveDocEdits} onRenderPdf={renderPdfUrl} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );
