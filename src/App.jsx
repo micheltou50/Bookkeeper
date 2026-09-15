@@ -1711,7 +1711,7 @@ export default function BookkeeperApp() {
 
   const addInvoice = async (inv) => {
     const items = inv.items || [];
-    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised", revision: inv.revision || null, payment_plan: inv.payment_plan || null, sent_at: inv.sent_at || null, paid_date: inv.paid_date || null };
+    const row = { user_id: session.user.id, business_id: biz, number: normNumber(inv.number), type: inv.type, division: insertDivision, date: inv.date || null, due_date: inv.due_date || null, contact_id: contactIdFor(inv.contact_name, inv.contact_email), contact_name: inv.contact_name, contact_email: inv.contact_email, contact_company: inv.contact_company, contact_abn: inv.contact_abn, contact_address: inv.contact_address, contact_phone: inv.contact_phone, job: inv.job, project_id: inv.project_id || null, notes: inv.notes, terms: inv.terms || null, status: inv.status, total: inv.total, pricing_mode: inv.pricing_mode || "itemised", revision: inv.revision || null, payment_plan: inv.payment_plan || null, sent_at: inv.sent_at || null, paid_date: inv.paid_date || null, converted_from_quote_id: inv.converted_from_quote_id || null, quote_stage: inv.quote_stage || null };
     const { ok, data: inserted } = await sbInsert("bk_invoices", row, "save invoice", false, DUP_NUMBER(inv.number));
     if (!ok) return;
     if (inserted) {
@@ -1739,7 +1739,7 @@ export default function BookkeeperApp() {
     // one — which is why only 3 of 12 quotes carry a send timestamp. It is
     // guarded below: the form spreads the whole row on save, so a stale copy
     // must never be able to blank the value the server wrote.
-    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at", "payment_plan", "revision"];
+    const ALLOWED_INVOICE_COLS = ["number", "type", "date", "due_date", "contact_name", "contact_email", "contact_company", "contact_abn", "contact_address", "contact_phone", "job", "project_id", "notes", "terms", "status", "total", "paid_date", "pricing_mode", "sent_at", "payment_plan", "revision", "converted_from_quote_id", "quote_stage"];
     const dbUpdates = {};
     for (const k of ALLOWED_INVOICE_COLS) if (k in updates) dbUpdates[k] = updates[k];
     // Only ever set, never cleared. updateInvoice receives the whole form row,
@@ -2056,7 +2056,7 @@ export default function BookkeeperApp() {
       contact_abn: quote.contact_abn, contact_address: quote.contact_address, contact_phone: quote.contact_phone,
       job: projectLabel(project), project_id: project.id,
       notes: getDefaultTerms("invoice"), terms: null, status: "draft",
-      total: amount, pricing_mode: "lump_sum", converted_from_quote_id: quote.id,
+      total: amount, pricing_mode: "lump_sum", converted_from_quote_id: quote.id, quote_stage: 1,
     };
     const { ok, data: inserted } = await sbInsert("bk_invoices", row, "create deposit invoice", false, DUP_NUMBER(number));
     if (!ok || !inserted) return null;
@@ -2936,6 +2936,44 @@ Are you sure you want it ${verb}?`);
       await fileToOneDrive(saved); // regenerate + file, with a visible result
     };
     const canCompose = !!emailConn && !!(f.contact_email || "").trim();
+
+    // Stages of the project's accepted quote(s) not yet invoiced. An invoice
+    // records which stage it bills (converted_from_quote_id + quote_stage; the
+    // deposit-on-accept invoice is stage 1, and older linked rows count as
+    // stage 1), so a stage disappears from the list once it has an invoice.
+    const stageOptions = (() => {
+      if (f.type !== "invoice" || existing || !f.project_id) return [];
+      const out = [];
+      for (const q of divInvoices) {
+        if (q.type !== "quote" || q.status !== "accepted" || q.project_id !== f.project_id) continue;
+        const plan = Array.isArray(q.payment_plan) ? q.payment_plan : [];
+        if (!plan.length) continue;
+        const amounts = planAmounts(plan, q.total);
+        plan.forEach((st, i) => {
+          const billed = divInvoices.some((inv) => inv.type === "invoice" && inv.converted_from_quote_id === q.id && (inv.quote_stage || 1) === i + 1);
+          if (billed) return;
+          const a = amounts[i] || {};
+          out.push({ key: `${q.id}:${i + 1}`, quote: q, index: i + 1, count: plan.length, label: (st.label || "").trim() || `Stage ${i + 1}`, percent: Math.round((Number(a.percent ?? st.percent) || 0) * 100) / 100, amount: Number(a.amount) || 0 });
+        });
+      }
+      return out;
+    })();
+    const multiQuote = stageOptions.some((o) => o.quote.id !== stageOptions[0]?.quote.id);
+    const applyStage = (key) => {
+      const st = stageOptions.find((x) => x.key === key);
+      if (!st) return;
+      const q = st.quote;
+      const description = `${st.label} — ${st.percent}% of accepted quote ${q.number}${st.count > 1 ? ` (stage ${st.index} of ${st.count})` : ""}`;
+      setF({
+        ...f,
+        pricing_mode: "lump_sum",
+        items: [{ description, note: "", qty: 1, rate: "" }],
+        lump_amount: String(st.amount),
+        converted_from_quote_id: q.id,
+        quote_stage: st.index,
+        ...(!f.contact_name && q.contact_name ? { contact_name: q.contact_name, contact_email: q.contact_email || "", contact_company: q.contact_company || "", contact_abn: q.contact_abn || "", contact_address: q.contact_address || "", contact_phone: q.contact_phone || "" } : {}),
+      });
+    };
     // Save as it stands (a new document becomes a draft) and open the A4
     // preview, where page breaks and text can be finished off.
     const saveAndPreview = async () => {
@@ -3119,6 +3157,16 @@ Are you sure you want it ${verb}?`);
               <button disabled={!pa.name.trim()} onClick={async () => { const created = await createProject({ name: pa.name, contact_name: f.contact_name, address: pa.address }); if (created) { const nextF = { ...f, project_id: created.id, job: projectLabel(created) }; stashDraft(nextF); setF(nextF); } setPa({ name: "", contract_value: "", address: "" }); setProjectAdd(false); }} style={{ ...s.btn(accent), fontSize: 12, opacity: !pa.name.trim() ? 0.4 : 1 }}>Add & Select</button>
               <button onClick={() => { setProjectAdd(false); setPa({ name: "", contract_value: "", address: "" }); }} style={{ ...s.btnOutline, fontSize: 12 }}>Cancel</button>
             </div>
+          </div>
+        )}
+        {stageOptions.length > 0 && (
+          <div style={{ background: `${accent}10`, border: `1px solid ${accent}40`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+            <label style={{ ...s.label, color: accent }}>{f.quote_stage ? `Invoicing stage ${f.quote_stage}` : "Invoice a stage of the accepted quote"}</label>
+            <select value={f.converted_from_quote_id && f.quote_stage ? `${f.converted_from_quote_id}:${f.quote_stage}` : ""} onChange={(e) => { if (e.target.value) applyStage(e.target.value); }} style={s.select}>
+              <option value="">Choose a stage…</option>
+              {stageOptions.map((st) => <option key={st.key} value={st.key}>{`Stage ${st.index} of ${st.count} — ${st.label} — ${st.percent}% · ${fmt(st.amount)}${multiQuote ? ` (${st.quote.number})` : ""}`}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5 }}>Stages already invoiced are not listed. Picking one writes the line and the amount; everything stays editable.</div>
           </div>
         )}
         <div style={{ marginTop: 8, marginBottom: 8 }}>
