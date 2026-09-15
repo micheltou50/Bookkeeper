@@ -372,14 +372,13 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
   const css = `${PAGE_CSS}
   html, body { background: #eef2f5; }
   .bk-wrap { padding: 16px 0 40px; }
-  .bk-sheet { position: relative; width: 210mm; height: 297mm; margin: 0 auto 18px; background: #fff; box-shadow: 0 2px 14px rgba(16,24,40,.14); padding: ${PAGE_MARGIN.top}mm ${PAGE_MARGIN.side}mm ${PAGE_MARGIN.bottom}mm; overflow: hidden; }
-  .bk-sheet-edit { height: auto; min-height: 297mm; overflow: visible; }
-  .bk-sheet-body { height: 100%; overflow: hidden; }
-  .bk-sheet-edit .bk-sheet-body { height: auto; overflow: visible; }
-  .bk-sheet-foot { position: absolute; left: ${PAGE_MARGIN.side}mm; right: ${PAGE_MARGIN.side}mm; bottom: 8mm; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 6px; }
-  .bk-overflow { position: absolute; left: ${PAGE_MARGIN.side}mm; right: ${PAGE_MARGIN.side}mm; bottom: ${PAGE_MARGIN.bottom - 2}mm; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font: 600 10px/1.4 Helvetica, Arial, sans-serif; padding: 6px 10px; border-radius: 6px; text-align: center; }
-  .bk-sheet-edit .bk-overflow { position: static; margin-top: 12px; }
-  .bk-sheet-edit .bk-sheet-foot { position: static; margin-top: 18px; }
+  /* A sheet is A4 unless its content needs more, in which case it grows and
+     carries a red note — nothing is ever clipped out of sight. The footer sits
+     where the PDF draws it. */
+  .bk-sheet { position: relative; display: flex; flex-direction: column; width: 210mm; min-height: 297mm; margin: 0 auto 18px; background: #fff; box-shadow: 0 2px 14px rgba(16,24,40,.14); padding: ${PAGE_MARGIN.top}mm ${PAGE_MARGIN.side}mm 8mm; }
+  .bk-sheet-body { flex: 1 0 auto; }
+  .bk-sheet-foot { margin-top: auto; padding-top: 6px; border-top: 1px solid #e2e8f0; text-align: center; }
+  .bk-overflow { margin-top: 12px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font: 600 10px/1.4 Helvetica, Arial, sans-serif; padding: 6px 10px; border-radius: 6px; text-align: center; }
   @media (max-width: 840px) { .bk-wrap { zoom: 0.5; } }
   @media print { html, body { background: #fff; } .bk-wrap { padding: 0; } .bk-sheet { box-shadow: none; margin: 0; page-break-after: always; } .bk-overflow { display: none; } }`;
   const overflowMsg = (mm) => `This page overflows by about ${mm} mm. The PDF will spill it onto the next page — put PAGE BREAK on its own line where you want the break.`;
@@ -392,6 +391,6 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
         document.querySelectorAll('[data-insert-break]').forEach(function(btn){btn.addEventListener('click',function(){var t=document.querySelector('textarea[data-edit="'+btn.getAttribute('data-insert-break')+'"]');if(!t)return;var s=t.selectionStart,e=t.selectionEnd,v=t.value,before=v.slice(0,s),after=v.slice(e);var ins=(before&&!/\\n$/.test(before)?'\\n':'')+'PAGE BREAK'+(after&&!/^\\n/.test(after)?'\\n':'');t.value=before+ins+after;t.selectionStart=t.selectionEnd=before.length+ins.length;fit(t);check();t.focus();});});
         check();
       })();</script>`
-    : `<script>(function(){var mm=96/25.4;document.querySelectorAll('.bk-sheet').forEach(function(s){var b=s.querySelector('.bk-sheet-body');var over=b.scrollHeight-b.clientHeight;if(over>1){var w=document.createElement('div');w.className='bk-overflow';w.textContent=${JSON.stringify(overflowMsg("__MM__"))}.replace('__MM__',Math.ceil(over/mm));s.appendChild(w);}});})();</script>`;
+    : `<script>(function(){var mm=96/25.4, a4=(297-${PAGE_MARGIN.top}-${PAGE_MARGIN.bottom})*mm;document.querySelectorAll('.bk-sheet').forEach(function(s){var b=s.querySelector('.bk-sheet-body');var over=b.scrollHeight-a4;if(over>1){var w=document.createElement('div');w.className='bk-overflow';w.textContent=${JSON.stringify(overflowMsg("__MM__"))}.replace('__MM__',Math.ceil(over/mm));b.appendChild(w);}});})();</script>`;
   return { body: `<div class="bk-wrap">${sheetHTML}</div>${script}`, css, footer, sheets: n };
 }
