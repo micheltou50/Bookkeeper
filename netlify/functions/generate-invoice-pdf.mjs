@@ -2,6 +2,9 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { createClient } from "@supabase/supabase-js";
 import { wrapCors } from './lib/cors.mjs';
+// The document layout is shared with the in-app preview, so what you see on
+// screen is what Chromium prints here — page breaks, footer and all.
+import { buildDocHTML } from "../../src/lib/doc-html.mjs";
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
@@ -12,29 +15,6 @@ const supabase = createClient(
 const PAY_ENABLED = !!process.env.STRIPE_SECRET_KEY;
 const PAY_BASE = process.env.URL || "https://bkeeper.netlify.app";
 const SURCHARGE_PCT = Number(process.env.STRIPE_SURCHARGE_PCT ?? "1.7") || 0;
-
-function fmtAUD(n) {
-  return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
-}
-
-function fmtDate(d) {
-  if (!d) return "";
-  return new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-// Escape user-controlled strings before they go into the invoice HTML so a
-// stray "<", "&", or quote in a name/address/notes can't break the layout.
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-// Return a shallow copy with the named string fields HTML-escaped. Fields used
-// for logic (inv.type, profile.business_id) are intentionally left untouched.
-function escFields(obj, keys) {
-  const out = { ...(obj || {}) };
-  for (const k of keys) if (typeof out[k] === "string") out[k] = esc(out[k]);
-  return out;
-}
 
 async function fetchLogoBase64(logoUrl) {
   if (!logoUrl) return null;
@@ -64,267 +44,6 @@ async function fetchLogoBase64(logoUrl) {
     console.error("Logo resolution error:", err.message);
     return null;
   }
-}
-
-// A single-line description renders as plain bold text. A multi-line one becomes a
-// bulleted scope list: non-indented lines get a "•", whitespace-led lines become
-// "◦" sub-items. Any leading bullet char the user typed is stripped. The text is
-// already HTML-escaped by escFields before this runs.
-function bulletizeScope(text, always = false) {
-  const raw = String(text || "");
-  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length <= 1 && !always) return `<div style="font-weight:600;white-space:pre-wrap">${raw}</div>`;
-  return lines.map((l) => {
-    const sub = /^\s/.test(l);
-    const t = l.trim().replace(/^[-*•◦·]\s*/, "");
-    return `<div style="display:flex;gap:7px;margin-left:${sub ? 16 : 0}px;margin-top:3px;line-height:1.4"><span style="color:#64748b;flex-shrink:0">${sub ? "◦" : "•"}</span><span style="font-weight:${sub ? 400 : 600}">${t}</span></div>`;
-  }).join("");
-}
-
-// Printed acceptance form for quotes: the client fills in their invoicing details
-// and signs to accept. Static HTML (blank ruled lines for handwriting / signing).
-const acceptanceBlock = (inv) => `<div style="margin-top:30px">
-  <div style="font-size:15px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Acceptance of Quote</div>
-  <div style="font-size:11px;color:#334155;font-weight:600;margin-bottom:10px;padding:8px 11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px">
-    Quote ${inv.number || ""}${inv.date ? ` &middot; ${fmtDate(inv.date)}` : ""} &middot; Total ${fmtAUD(inv.total || 0)}${inv.job ? `<div style="font-weight:400;color:#64748b;margin-top:3px">${inv.job}</div>` : ""}
-  </div>
-  <div style="font-size:10px;color:#334155;line-height:1.6;margin-bottom:14px;padding:9px 11px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">
-    By accepting this quotation, the client confirms that they have read and agree to the Scope of Works, fees, payment schedule and Terms &amp; Conditions contained in this quotation.
-  </div>
-  <div style="font-size:10px;color:#64748b;margin-bottom:18px">This quote may be accepted either by signing and returning this page, or by written acceptance by email.</div>
-  <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin-bottom:4px">Your Invoicing Details</div>
-  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569">
-    <tr><td style="width:50%;padding:16px 18px 0 0;vertical-align:bottom">Name / Company<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="width:50%;padding:16px 0 0 0;vertical-align:bottom">ABN<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
-    <tr><td colspan="2" style="padding:16px 0 0 0;vertical-align:bottom">Billing address<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
-    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Email<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td style="padding:16px 0 0 0;vertical-align:bottom">Phone<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td></tr>
-    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Purchase order&nbsp;# (if any)<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
-  </table>
-  <table style="width:100%;border-collapse:collapse;font-size:10px;color:#475569;margin-top:6px">
-    <tr><td style="width:60%;padding:28px 18px 0 0;vertical-align:bottom">Signature<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td><td style="width:40%;padding:28px 0 0 0;vertical-align:bottom">Date<div style="border-bottom:1.5px solid #1e293b;height:34px"></div></td></tr>
-    <tr><td style="padding:16px 18px 0 0;vertical-align:bottom">Print name<div style="border-bottom:1px solid #94a3b8;height:24px"></div></td><td></td></tr>
-  </table>
-</div>`;
-
-const DIVISION_META = {
-  mworx: { tagline: "Design · Consultancy · Project Management", accent: "#0d9488" },
-  mt_management: { tagline: "Short-Term Rental Property Management", accent: "#2563eb" },
-  mtmgmt: { tagline: "Short-Term Rental Property Management", accent: "#2563eb" },
-};
-
-function normalizeDivision(div) {
-  if (!div || div === "mworx") return "mworx";
-  if (div === "mtmgmt" || div === "mt_management") return "mt_management";
-  return "mworx";
-}
-
-function buildInvoiceHTML(inv, items, profile, logoDataUrl) {
-  // Escape user-controlled text once, up front. Logic fields (inv.type,
-  // profile.business_id) are not in these lists, so comparisons still work.
-  inv = escFields(inv, ["number", "contact_name", "contact_company", "contact_abn", "contact_address", "contact_email", "contact_phone", "job", "notes", "terms"]);
-  profile = escFields(profile, ["name", "abn", "address", "email", "phone", "bank_name", "account_name", "bsb", "account_number"]);
-  items = (items || []).map((it) => escFields(it, ["description", "note"]));
-  const divMeta = DIVISION_META[normalizeDivision(inv.division)] || DIVISION_META.mworx;
-  const accent = divMeta.accent;
-  const docType = inv.type === "quote" ? "QUOTE" : "INVOICE";
-  const isQuote = inv.type === "quote";
-  const bName = profile.name || "Company";
-  const tagline = divMeta.tagline;
-
-  const logoHTML = logoDataUrl
-    ? `<img src="${logoDataUrl}" style="max-height:70px;max-width:200px;object-fit:contain;display:block" />`
-    : `<div style="font-size:24px;font-weight:800;color:#1e293b;letter-spacing:-0.02em">${bName}</div>`;
-
-  const isLump = inv.pricing_mode === "lump_sum";
-
-  const lumpScope = (items || []).map((i) => i.description || "").filter((d) => d.trim()).join("\n");
-  const lumpNotes = (items || []).map((i) => i.note || "").filter((n) => n.trim()).join("\n");
-
-  const itemsTable = isLump
-    ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-        <thead><tr style="background:#f8fafc">
-          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Scope of Works</th>
-        </tr></thead>
-        <tbody><tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">${bulletizeScope(lumpScope, true)}${lumpNotes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb;font-size:10px;color:#6b7280;line-height:1.6;white-space:pre-wrap">${lumpNotes}</div>` : ""}</td></tr></tbody>
-      </table>`
-    : `<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-        <thead><tr style="background:#f8fafc">
-          <th style="text-align:left;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b">Description</th>
-          <th style="text-align:center;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:50px">Qty</th>
-          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:90px">Rate</th>
-          <th style="text-align:right;padding:9px 12px;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid #1e293b;width:100px">Amount</th>
-        </tr></thead>
-        <tbody>${(items || []).map((item) => {
-          const amount = (Number(item.qty) || 0) * (Number(item.rate) || 0);
-          return `<tr>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#1e293b;vertical-align:top">
-              ${bulletizeScope(item.description)}
-              ${item.note ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;white-space:pre-wrap">${item.note}</div>` : ""}
-            </td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:center;vertical-align:top">${Number(item.qty) || 1}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#374151;text-align:right;vertical-align:top;font-variant-numeric:tabular-nums">${fmtAUD(item.rate || 0)}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:600;color:#1e293b;text-align:right;vertical-align:top;font-variant-numeric:tabular-nums">${fmtAUD(amount)}</td>
-          </tr>`;
-        }).join("")}</tbody>
-      </table>`;
-
-  const subtotal = isLump ? (Number(inv.total) || 0) : (items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
-
-  const accountName = profile.account_name || profile.name || bName;
-
-  const planRows = isQuote && Array.isArray(inv.payment_plan) && inv.payment_plan.length
-    ? (() => {
-        const t = Number(inv.total) || 0;
-        const rows = inv.payment_plan.map((st) => ({ label: st.label || "", amount: Math.round(((t * (Number(st.percent) || 0)) / 100) * 100) / 100, percent: Number(st.percent) || 0 }));
-        const summed = rows.reduce((s, r) => s + r.amount, 0);
-        const pct = inv.payment_plan.reduce((s, st) => s + (Number(st.percent) || 0), 0);
-        if (rows.length && Math.abs(pct - 100) < 0.005) rows[rows.length - 1].amount = Math.round((rows[rows.length - 1].amount + (t - summed)) * 100) / 100;
-        return rows;
-      })()
-    : [];
-  const paymentPlanHTML = planRows.length ? `
-    <div style="margin-top:18px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
-      <div style="background:#f8fafc;padding:8px 12px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;border-bottom:1px solid #e2e8f0">Payment Schedule</div>
-      <table style="width:100%;border-collapse:collapse;font-size:11px;color:#1e293b">
-        ${planRows.map((r, i) => `<tr>
-          <td style="padding:8px 12px;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.label}</td>
-          <td style="padding:8px 12px;text-align:right;color:#64748b;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${r.percent}%</td>
-          <td style="padding:8px 12px;text-align:right;font-weight:600;white-space:nowrap;${i ? "border-top:1px solid #f1f5f9;" : ""}">${fmtAUD(r.amount)}</td>
-        </tr>`).join("")}
-      </table>
-    </div>` : "";
-
-  const paymentSection = !isQuote ? `
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin-top:24px">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:${accent};margin-bottom:10px">How to Pay</div>
-      <table style="font-size:11px;color:#374151;line-height:1.8;border-collapse:collapse">
-        ${profile.bank_name ? `<tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Bank</td><td style="font-weight:600">${profile.bank_name}</td></tr>` : ""}
-        <tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Account Name</td><td style="font-weight:600">${accountName}</td></tr>
-        ${profile.bsb ? `<tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">BSB</td><td style="font-weight:600">${profile.bsb}</td></tr>` : ""}
-        ${profile.account_number ? `<tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Account Number</td><td style="font-weight:600">${profile.account_number}</td></tr>` : ""}
-        <tr><td style="padding-right:20px;color:#6b7280;white-space:nowrap">Reference</td><td style="font-weight:600">${inv.number || ""}</td></tr>
-      </table>
-    </div>` : `
-    <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:14px 20px;margin-top:24px">
-      <div style="font-size:11px;color:#0f766e;line-height:1.6">${inv.due_date ? `This quote is valid until ${fmtDate(inv.due_date)}.` : ""} Payment details will be provided upon acceptance.</div>
-    </div>`;
-
-  // "Pay by card" button for invoices (not quotes) when Stripe is enabled. The
-  // link is un-guessable via pay_token; the customer is charged the total plus a
-  // disclosed surcharge.
-  const payButtonHTML = (PAY_ENABLED && !isQuote && inv.pay_token) ? `
-    <div style="text-align:center;margin-top:20px">
-      <a href="${PAY_BASE}/.netlify/functions/pay-invoice?invoice=${inv.id}&t=${inv.pay_token}" style="display:inline-block;background:${accent};color:#fff;padding:12px 30px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none">Pay ${fmtAUD(subtotal)} by card</a>
-      <div style="font-size:9px;color:#94a3b8;margin-top:6px">${SURCHARGE_PCT > 0 ? `A ${SURCHARGE_PCT}% card surcharge applies at checkout. ` : ""}Or pay by bank transfer using the details above.</div>
-    </div>` : "";
-
-  // Explicit page list so the footer can say "Page 1 of 2". A plain invoice with
-  // no terms is one page, and then the label is omitted rather than printing
-  // "Page 1 of 1".
-  const hasTermsPage = !!((inv.terms && inv.terms.trim()) || isQuote);
-  const totalPages = hasTermsPage ? 2 : 1;
-  const pageNum = (n) => (totalPages > 1 ? `<div class="pagenum">Page ${n} of ${totalPages}</div>` : "");
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  @page { size: A4; margin: 0; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #fff; color: #1e293b; -webkit-print-color-adjust: exact; }
-  .page { width: 210mm; min-height: 297mm; padding: 40px 44px 84px; display: flex; flex-direction: column; }
-  /* Sits at the bottom of each page's own content, just clear of the fixed footer. */
-  .pagenum { margin-top: auto; padding-top: 14px; text-align: center; font-size: 8.5px; color: #cbd5e1; letter-spacing: 0.04em; }
-  /* Fixed footer repeats at the bottom of every printed A4 page (incl. the T&Cs page). */
-  .doc-footer { position: fixed; left: 44px; right: 44px; bottom: 20px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 12px; background: #fff; }
-</style>
-</head>
-<body>
-<div class="page">
-
-  <!-- Header -->
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
-    <div>
-      ${logoHTML}
-      <div style="margin-top:10px">
-        ${profile.abn ? `<div style="font-size:10px;color:#475569;font-weight:600;margin-bottom:3px">ABN ${profile.abn}</div>` : ""}
-        <div style="font-size:10px;color:#6b7280;line-height:1.6">
-          ${profile.email || ""}${profile.phone ? ` · ${profile.phone}` : ""}
-        </div>
-      </div>
-    </div>
-    <div style="text-align:right">
-      <div style="font-size:32px;font-weight:700;color:#1e293b;letter-spacing:0.04em;text-transform:uppercase">${docType}</div>
-      <div style="font-size:14px;font-weight:700;color:#374151;margin-top:4px">${inv.number || ""}</div>
-    </div>
-  </div>
-
-  <div style="height:2px;background:${accent};margin-bottom:24px"></div>
-
-  <!-- Bill To / Dates row -->
-  <div style="display:flex;justify-content:space-between;margin-bottom:28px">
-    <div style="flex:1">
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:6px">${isQuote ? "Quote For" : "Bill To"}</div>
-      <div style="font-size:12px;color:#1e293b;line-height:1.7">
-        <strong>${inv.contact_name || ""}</strong>
-        ${inv.contact_company ? `<br>${inv.contact_company}` : ""}
-        ${inv.contact_abn ? `<br><span style="font-size:10px;color:#6b7280">ABN ${inv.contact_abn}</span>` : ""}
-        ${inv.contact_address ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_address}</span>` : ""}
-        ${inv.contact_email ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_email}</span>` : ""}
-        ${inv.contact_phone ? `<br><span style="color:#6b7280;font-size:11px">${inv.contact_phone}</span>` : ""}
-      </div>
-    </div>
-    <div style="text-align:right;min-width:180px">
-      <table style="font-size:11px;margin-left:auto;border-collapse:collapse">
-        <tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Quote Date" : "Invoice Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.date)}</td></tr>
-        ${inv.due_date ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">${isQuote ? "Valid Until" : "Due Date"}</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${fmtDate(inv.due_date)}</td></tr>` : ""}
-        ${inv.job ? `<tr><td style="color:#94a3b8;padding:3px 14px 3px 0;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Job / Ref</td><td style="color:#1e293b;font-weight:500;padding:3px 0">${inv.job}</td></tr>` : ""}
-      </table>
-    </div>
-  </div>
-
-  <!-- Line items / scope of works -->
-  ${itemsTable}
-
-  <!-- Totals -->
-  <div style="display:flex;justify-content:flex-end">
-    <div style="width:240px">
-      <div style="display:flex;justify-content:space-between;padding:10px 0 4px;margin-top:4px;border-top:2px solid #1e293b">
-        <span style="font-size:14px;font-weight:700;color:#1e293b">Total AUD</span>
-        <span style="font-size:16px;font-weight:800;color:${accent};font-variant-numeric:tabular-nums">${fmtAUD(subtotal)}</span>
-      </div>
-      ${profile.gst_not_registered ? `<div style="text-align:right;font-size:9px;color:#94a3b8;padding-top:2px">GST not applicable</div>` : ""}
-    </div>
-  </div>
-
-  <!-- Payment / Quote notice -->
-  ${paymentPlanHTML}
-  ${paymentSection}
-  ${payButtonHTML}
-
-  <!-- Notes -->
-  ${inv.notes ? `<div style="font-size:10px;color:#6b7280;line-height:1.6;margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;white-space:pre-wrap">${inv.notes}</div>` : ""}
-
-  ${pageNum(1)}
-</div>
-
-<!-- Terms & Conditions + acceptance (own page for quotes) -->
-${hasTermsPage ? `<div class="page" style="break-before:page">
-    ${inv.terms && inv.terms.trim() ? `<div style="font-size:16px;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid ${accent}">Terms &amp; Conditions</div>
-    <div style="font-size:9.5px;color:#475569;line-height:1.65;white-space:pre-wrap">${inv.terms}</div>` : ""}
-    ${isQuote ? acceptanceBlock(inv) : ""}
-  ${pageNum(2)}
-</div>` : ""}
-
-<!-- Footer: fixed, so it repeats at the bottom of every printed page -->
-<div class="doc-footer">
-  <div style="font-size:10px;color:#64748b;margin-bottom:2px">Thank you for your business.</div>
-  <div style="font-size:9px;color:#94a3b8">${bName}${profile.abn ? ` · ABN ${profile.abn}` : ""}${profile.email ? ` · ${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}</div>
-  ${tagline ? `<div style="font-size:8px;color:#94a3b8;margin-top:2px">${tagline}</div>` : ""}
-</div>
-
-</body>
-</html>`;
 }
 
 const handler = async (req) => {
@@ -392,8 +111,13 @@ const handler = async (req) => {
   // Fetch logo as base64
   const logoDataUrl = await fetchLogoBase64(profile?.logo_url);
 
-  // Build HTML
-  const html = buildInvoiceHTML(inv, items || [], profile || {}, logoDataUrl);
+  // Build HTML (shared layout, print mode)
+  const { body: docBody, css, footer } = buildDocHTML(inv, items || [], profile || {}, {
+    logoDataUrl,
+    mode: "pdf",
+    pay: PAY_ENABLED ? { base: PAY_BASE, surchargePct: SURCHARGE_PCT } : null,
+  });
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${docBody}</body></html>`;
 
   // Launch Puppeteer
   let browser = null;
@@ -411,6 +135,11 @@ const handler = async (req) => {
       format: "A4",
       printBackground: true,
       preferCSSPageSize: true,
+      // Footer (business line + "Page n of N") drawn in the @page bottom margin
+      // on every page. An empty header keeps Chromium's default (URL + date) off.
+      displayHeaderFooter: true,
+      headerTemplate: "<span></span>",
+      footerTemplate: footer,
     });
 
     // Upload to Supabase Storage
