@@ -2356,39 +2356,6 @@ export default function BookkeeperApp() {
     }
   };
 
-  const sendReminder = (inv) => {
-    const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    const bName = profile.name || "our company";
-    const subject = `Reminder: ${docType} ${inv.number} from ${bName}`;
-    const overdueDays = inv.due_date ? Math.max(0, Math.floor((Date.now() - new Date(inv.due_date)) / 86400000)) : 0;
-    const sig = profile.email_signature || `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
-    const body = `Hi ${firstName(inv.contact_name)},\n\nThis is a friendly reminder that ${docType.toLowerCase()} ${inv.number} for ${fmt(inv.total || 0)} ${overdueDays > 0 ? `was due ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago` : "is due for payment"}.\n\n${profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}\n\n` : ""}Please let us know if you have any questions.\n\nKind regards,\n${sig}`;
-    window.open(`mailto:${inv.contact_email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-    markOverdueQuiet(inv);
-  };
-
-  // Send the reminder email directly via Resend (the same service the automated
-  // reminders use), rather than opening a mailto draft. Falls back to the draft if
-  // the email service isn't reachable (e.g. running locally).
-  const sendReminderViaResend = async (inv) => {
-    if (!inv.contact_email) { alert("This invoice has no contact email."); return; }
-    if (!window.confirm(`Email a payment reminder to ${inv.contact_name || inv.contact_email} now?`)) return;
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const resp = await fetch(`${API_BASE}/.netlify/functions/send-reminders`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ invoice_id: inv.id, business_id: biz }),
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok || !data?.ok) throw new Error((data && data.error) || `Request failed (${resp.status})`);
-      alert(`Reminder emailed to ${data.sent_to || inv.contact_email}.`);
-      markOverdueQuiet(inv);
-    } catch (err) {
-      if (window.confirm(`Couldn't send via the email service (${err.message}).\n\nOpen an email draft instead?`)) sendReminder(inv);
-    }
-  };
-
   const markPaid = (inv) => {
     updateInvoice(inv.id, { status: "paid", paid_date: today() });
     fileIssuedToOneDrive(inv.id);
@@ -2535,14 +2502,6 @@ Are you sure you want it ${verb}?`);
     if (next === "sent" && !doc.sent_at) patch.sent_at = new Date().toISOString();
     if (doc.type !== "quote" && next === "paid") patch.paid_date = doc.paid_date || today();
     await updateInvoice(doc.id, patch);
-  };
-
-  const markOverdueQuiet = async (inv) => {
-    if (!(inv.due_date && new Date(inv.due_date) < new Date() && inv.status === "sent")) return;
-    const upd = { status: "overdue" };
-    const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark overdue");
-    if (!ok) return;
-    setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
   };
 
   const markPaidQuiet = async (inv) => {
@@ -4040,8 +3999,7 @@ Are you sure you want it ${verb}?`);
     const isQuote = inv.type === "quote";
     if (inv.status === "draft") return { key: "email", label: "Send", icon: <Icons.Send />, tone: "#3b82f6", run: () => emailDoc(inv) };
     if (isQuote && inv.status === "sent") return { key: "accept", label: "Accept", icon: <Icons.Check />, tone: "#10b981", run: () => acceptAndOfferDeposit(inv) };
-    if (!isQuote && inv.status === "overdue") return { key: "remind", label: "Remind", icon: <Icons.Bell />, tone: "#ef4444", run: () => sendReminderViaResend(inv) };
-    if (!isQuote && inv.status === "sent") return { key: "paid", label: "Mark paid", icon: <Icons.Check />, tone: "#10b981", run: () => markPaid(inv) };
+    if (!isQuote && (inv.status === "sent" || inv.status === "overdue")) return { key: "paid", label: "Mark paid", icon: <Icons.Check />, tone: "#10b981", run: () => markPaid(inv) };
     return null;
   };
 
@@ -4064,7 +4022,6 @@ Are you sure you want it ${verb}?`);
     if (!isQuote && inv.status !== "paid") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
     if (isQuote && !QUOTE_CLOSED.has(inv.status)) items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
     items.push({ key: "email", label: emailConn ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
-    if (!isQuote && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "remind", label: "Send payment reminder", icon: <Icons.Bell />, run: () => sendReminderViaResend(inv) });
     // Only where the link actually does something: pay-invoice.mjs answers
     // "Already paid" once the invoice is paid, and a draft has not been issued
     // to anyone yet.
