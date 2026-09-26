@@ -198,11 +198,17 @@ const DOC_STATUS = {
   // Declined's grey.
   superseded: { label: "Superseded", color: "#f59e0b" },
   declined: { label: "Declined", color: "#64748b", variant: "outline" },
+  // An invoice withdrawn or replaced (e.g. folded into a later invoice). Kept
+  // as a record so the number sequence has no unexplained gap, but it is not
+  // money owed or earned, so every total, reminder and pay link ignores it.
+  cancelled: { label: "Cancelled", color: "#64748b", variant: "outline" },
 };
 const QUOTE_STATUSES = ["draft", "sent", "accepted", "superseded", "declined"];
 // Quotes that are done with: no Accept affordance should be offered on these.
 const QUOTE_CLOSED = new Set(["accepted", "declined", "superseded"]);
-const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue"];
+const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"];
+// Invoice statuses that never represent money invoiced.
+const NOT_INVOICED = new Set(["draft", "cancelled"]);
 // Falls back to the raw value, never to another status.
 const statusInfo = (st) => DOC_STATUS[st] || { label: st || "--", color: "#64748b", variant: "outline" };
 
@@ -578,7 +584,7 @@ function docTotals(docs) {
   const sum = (arr) => arr.reduce((s, i) => s + (Number(i.total) || 0), 0);
   const quoted = sum(docs.filter((i) => i.type === "quote" && i.status === "accepted"));
   const realInvoices = docs.filter((i) => i.type === "invoice");
-  const invoiced = sum(realInvoices.filter((i) => i.status !== "draft"));
+  const invoiced = sum(realInvoices.filter((i) => !NOT_INVOICED.has(i.status)));
   const paid = sum(realInvoices.filter((i) => i.status === "paid"));
   const contract = Math.max(quoted, invoiced);
   return { contract, quoted, invoiced, paid, remaining: contract - paid, outstanding: invoiced - paid, leftToInvoice: contract - invoiced };
@@ -1827,7 +1833,7 @@ export default function BookkeeperApp() {
 
   // Bulk actions for the invoices list (one DB round-trip, one state update each).
   const bulkMarkInvoicesPaid = async (ids) => {
-    const pids = invoices.filter((i) => ids.includes(i.id) && i.type === "invoice" && i.status !== "paid").map((i) => i.id);
+    const pids = invoices.filter((i) => ids.includes(i.id) && i.type === "invoice" && i.status !== "paid" && i.status !== "cancelled").map((i) => i.id);
     if (!pids.length) return true;
     const { ok } = await sbWrite(supabase.from("bk_invoices").update({ status: "paid", paid_date: today() }).in("id", pids), "mark invoices paid");
     if (!ok) return false;
@@ -2492,8 +2498,10 @@ Are you sure you want it ${verb}?`);
       }
       // Marking an invoice unpaid puts it back in front of the reminder cron,
       // which emails the customer without asking again. Say so.
-      if (!window.confirm(`${doc.number} is marked Paid${doc.paid_date ? ` (${fmtDate(doc.paid_date)})` : ""}.\n\nChanging it to ${statusInfo(next).label} treats it as unpaid again.${next === "draft" ? "" : " Once it is past its due date, automatic reminder emails to the customer resume."}\n\nChange the status anyway?`)) return;
+      if (!window.confirm(`${doc.number} is marked Paid${doc.paid_date ? ` (${fmtDate(doc.paid_date)})` : ""}.\n\nChanging it to ${statusInfo(next).label} treats it as unpaid again.${next === "draft" || next === "cancelled" ? "" : " Once it is past its due date, automatic reminder emails to the customer resume."}\n\nChange the status anyway?`)) return;
     }
+    if (doc.type !== "quote" && next === "cancelled"
+      && !window.confirm(`Cancel invoice ${doc.number}?\n\nIt stays in the list as a record, but is left out of all totals, gets no reminder emails, and its card payment link stops working.`)) return;
     // Fill in a missing payment date when marking paid, the way markPaid does.
     // Deliberately NOT cleared on the way back out: the settlement date is a
     // record that only exists here, and a mis-click followed by a correction
@@ -4019,7 +4027,7 @@ Are you sure you want it ${verb}?`);
     const isQuote = inv.type === "quote";
     const prim = docPrimaryAction(inv);
     const items = [{ key: "view", label: "Open", icon: <Icons.Eye />, run: () => viewInvoice(inv) }];
-    if (!isQuote && inv.status !== "paid") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
+    if (!isQuote && inv.status !== "paid" && inv.status !== "cancelled") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
     if (isQuote && !QUOTE_CLOSED.has(inv.status)) items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
     items.push({ key: "email", label: emailConn ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
     // Only where the link actually does something: pay-invoice.mjs answers
@@ -4035,6 +4043,7 @@ Are you sure you want it ${verb}?`);
     items.push({ key: "status", label: "Change status…", icon: <Icons.Filter />, run: () => setStatusPick({ doc: inv, anchor }) });
     items.push({ key: "edit", label: "Edit", icon: <Icons.Edit />, run: () => { setEditItem(inv); setModal("invoice"); } });
     items.push({ key: "duplicate", label: isQuote ? "Duplicate quote" : "Duplicate invoice", icon: <Icons.Plus />, run: () => duplicateDoc(inv) });
+    if (!isQuote && inv.status !== "paid" && inv.status !== "cancelled") items.push({ key: "cancel", label: "Cancel invoice", icon: <Icons.X />, run: () => changeDocStatus(inv, "cancelled") });
     items.push({ key: "delete", label: isQuote ? "Delete quote" : "Delete invoice", icon: <Icons.Trash />, danger: true, run: () => deleteInvoice(inv.id) });
     // The row already shows the primary; repeating it in the menu is noise.
     return items.filter((it) => !(prim && it.key === prim.key));
@@ -4104,11 +4113,11 @@ Are you sure you want it ${verb}?`);
     const fyNote = fy === ALL_FY ? null : fyLabel(fy);
     const tiles = isQuoteList
       ? [{ label: "Total quoted", value: fmt(sumTotals(sorted.filter((i) => i.status !== "superseded"))), note: fyNote }, { label: "Accepted", value: fmt(sumTotals(sorted.filter((i) => i.status === "accepted"))), color: "#10b981", note: fyNote }, { label: "Awaiting", value: fmt(sumTotals(allTime.filter((i) => i.status === "draft" || i.status === "sent"))), color: "#3b82f6", note: "all time" }]
-      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => i.status !== "draft"))), note: fyNote }, { label: "Outstanding", value: fmt(sumTotals(allTime.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6", note: "all time" }, { label: "Overdue", value: fmt(sumTotals(allTime.filter(isOverdue))), color: "#ef4444", note: "all time" }];
+      : [{ label: "Invoiced", value: fmt(sumTotals(sorted.filter((i) => !NOT_INVOICED.has(i.status)))), note: fyNote }, { label: "Outstanding", value: fmt(sumTotals(allTime.filter((i) => i.status === "sent" || i.status === "overdue"))), color: "#3b82f6", note: "all time" }, { label: "Overdue", value: fmt(sumTotals(allTime.filter(isOverdue))), color: "#ef4444", note: "all time" }];
 
     // Invoices: MYOB-style sortable columns + bulk selection. Quotes keep the
     // original date-sorted list untouched.
-    const balanceOf = (i) => i.status === "paid" ? 0 : Number(i.total || 0);
+    const balanceOf = (i) => i.status === "paid" || i.status === "cancelled" ? 0 : Number(i.total || 0);
     const sortVal = (i) => ({ date: i.date || "", number: i.number || "", customer: (i.contact_name || i.contact_company || "").toLowerCase(), status: statusInfo(i.status).label, total: Number(i.total || 0), balance: balanceOf(i), due_date: i.due_date || "" })[sortKey] ?? "";
     const rows = isQuoteList ? filtered : [...filtered].sort((a, b) => {
       const va = sortVal(a), vb = sortVal(b);
