@@ -108,6 +108,9 @@ const handler = async (req) => {
   if (inv.status === "paid") {
     return page({ heading: "Already paid", sub: `Invoice ${esc(inv.number || "")} has already been paid. Thank you!`, tone: "success" });
   }
+  if (inv.status === "cancelled") {
+    return page({ heading: "Invoice cancelled", sub: `Invoice ${esc(inv.number || "")} has been cancelled and no payment is due. Please contact us if you have any questions.`, tone: "error" }, 410);
+  }
   const base = Number(inv.total) || 0;
   if (base <= 0) {
     return page({ heading: "Nothing to pay", sub: "This invoice has no outstanding amount.", tone: "error" }, 400);
