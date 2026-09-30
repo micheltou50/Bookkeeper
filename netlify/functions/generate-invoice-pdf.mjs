@@ -5,6 +5,7 @@ import { wrapCors } from './lib/cors.mjs';
 // The document layout is shared with the in-app preview, so what you see on
 // screen is what Chromium prints here — page breaks, footer and all.
 import { buildDocHTML } from "../../src/lib/doc-html.mjs";
+import { CARD_PAYMENTS_VISIBLE } from "../../src/lib/card-payments.mjs";
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
@@ -12,7 +13,8 @@ const supabase = createClient(
 );
 
 // When Stripe is configured, invoices (not quotes) get a "Pay by card" button.
-const PAY_ENABLED = !!process.env.STRIPE_SECRET_KEY;
+// Hidden while CARD_PAYMENTS_VISIBLE is false (src/lib/card-payments.mjs).
+const PAY_ENABLED = CARD_PAYMENTS_VISIBLE && !!process.env.STRIPE_SECRET_KEY;
 const PAY_BASE = process.env.URL || "https://bkeeper.netlify.app";
 const SURCHARGE_PCT = Number(process.env.STRIPE_SURCHARGE_PCT ?? "1.7") || 0;
 

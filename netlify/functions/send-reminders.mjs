@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { wrapCors } from './lib/cors.mjs';
+import { CARD_PAYMENTS_VISIBLE } from '../../src/lib/card-payments.mjs';
 
 // Resolve ALL configuration from environment at request time. No hardcoded
 // secret/URL fallbacks: committing those values can trip Netlify secret
@@ -40,7 +41,8 @@ function resolveRuntime() {
   RESEND_API_KEY = cfg.resendApiKey;
   REMINDER_FROM_EMAIL = cfg.reminderFromEmail;
   REMINDER_BCC_EMAIL = cfg.reminderBccEmail;
-  PAY_ENABLED = !!cfg.stripeSecretKey;
+  // Hidden while CARD_PAYMENTS_VISIBLE is false (src/lib/card-payments.mjs).
+  PAY_ENABLED = CARD_PAYMENTS_VISIBLE && !!cfg.stripeSecretKey;
   SURCHARGE_PCT = cfg.surchargePct;
   if (cfg.supabaseUrl && cfg.supabaseServiceKey) {
     try {

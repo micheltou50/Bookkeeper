@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
+import { CARD_PAYMENTS_VISIBLE } from "./lib/card-payments.mjs";
 import { buildDocHTML, isPageBreak, PAGE_BREAK, scopeTextToItems, itemsToScopeText } from "./lib/doc-html.mjs";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://bkeeper.netlify.app" : "";
@@ -1273,7 +1274,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
         )}
         </>
       ))}
-      {panel("stripe", "Card Payments", "Let customers pay invoices by card", (
+      {CARD_PAYMENTS_VISIBLE && panel("stripe", "Card Payments", "Let customers pay invoices by card", (
         <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
           When <code>STRIPE_SECRET_KEY</code> is set in Netlify, every invoice gets a secure <strong>Pay by card</strong> button in its PDF and in overdue reminder emails, plus a <strong>Copy pay link</strong> action in each invoice's menu (⋯). Paid invoices are marked <strong>paid</strong> automatically once Stripe confirms — no manual step. A card surcharge (default 1.7%, configurable via <code>STRIPE_SURCHARGE_PCT</code>) is added at checkout so the processing fee is passed to the customer. Cards plus Apple&nbsp;Pay / Google&nbsp;Pay are offered.
         </div>
@@ -4033,7 +4034,7 @@ Are you sure you want it ${verb}?`);
     // Only where the link actually does something: pay-invoice.mjs answers
     // "Already paid" once the invoice is paid, and a draft has not been issued
     // to anyone yet.
-    if (!isQuote && inv.pay_token && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "paylink", label: "Copy pay link", icon: <Icons.Link />, run: () => {
+    if (CARD_PAYMENTS_VISIBLE && !isQuote && inv.pay_token && (inv.status === "sent" || inv.status === "overdue")) items.push({ key: "paylink", label: "Copy pay link", icon: <Icons.Link />, run: () => {
       const url = `${API_BASE || "https://bkeeper.netlify.app"}/.netlify/functions/pay-invoice?invoice=${inv.id}&t=${inv.pay_token}`;
       navigator.clipboard?.writeText(url);
       alert("Card payment link copied to clipboard.");

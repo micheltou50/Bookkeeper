@@ -33,7 +33,7 @@ function esc(s) {
 
 // A minimal, self-contained branded page (same inline-style approach as the
 // reminder email HTML). Used for every customer-visible outcome.
-function page({ heading, sub, accent = "#0d9488", tone = "neutral", cta = null }, status = 200) {
+function page({ heading, sub, accent = "#0d9488", tone = "neutral", cta = null, stripeFooter = true }, status = 200) {
   const toneBg = tone === "success" ? "#f0fdf4" : tone === "error" ? "#fef2f2" : "#f8fafc";
   const toneBorder = tone === "success" ? "#bbf7d0" : tone === "error" ? "#fecaca" : "#e2e8f0";
   const html = `<!DOCTYPE html>
@@ -51,7 +51,7 @@ function page({ heading, sub, accent = "#0d9488", tone = "neutral", cta = null }
         ${cta ? `<div style="text-align:center;margin-top:24px"><a href="${esc(cta.href)}" style="display:inline-block;background:${accent};color:#fff;padding:13px 28px;border-radius:8px;font-weight:700;text-decoration:none">${esc(cta.label)}</a></div>` : ""}
       </div>
     </div>
-    <p style="text-align:center;font-size:11px;color:#94a3b8;margin-top:16px">Secure payment powered by Stripe.</p>
+    ${stripeFooter ? `<p style="text-align:center;font-size:11px;color:#94a3b8;margin-top:16px">Secure payment powered by Stripe.</p>` : ""}
   </div>
 </body>
 </html>`;
@@ -98,8 +98,13 @@ const handler = async (req) => {
   if (error || !inv) {
     return page({ heading: "Invoice not found", sub: "This payment link doesn't match an invoice.", tone: "error" }, 404);
   }
+  // No pay_token = card payment switched off for this invoice (the link in an
+  // already-sent PDF/reminder lands here). Point to bank transfer, no card talk.
+  if (!inv.pay_token) {
+    return page({ heading: "Pay by bank transfer", sub: "Please pay by bank transfer using the details on your invoice.", stripeFooter: false });
+  }
   // Constant token compare (both are plain strings here).
-  if (!inv.pay_token || String(inv.pay_token) !== String(token)) {
+  if (String(inv.pay_token) !== String(token)) {
     return page({ heading: "Invalid link", sub: "This payment link isn't valid. Please use the most recent link from your invoice or reminder email.", tone: "error" }, 403);
   }
   if (inv.type === "quote") {
