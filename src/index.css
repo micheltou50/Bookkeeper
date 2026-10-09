@@ -16,6 +16,10 @@ html {
 }
 
 body {
+  /* Base font for everything outside the app shell: modals, pickers and the
+     document viewer are siblings of the shell div that sets DM Sans inline,
+     so without this they fell back to the browser default serif. */
+  font-family: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   overflow: hidden;
   background: var(--bk-bg);
   /* kill the grey tap flash and rubber-band scroll that scream "web page" */

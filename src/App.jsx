@@ -27,27 +27,63 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", gst_not_registered: false };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", gst_not_registered: false, short_name: "", subtitle: "", tagline: "", accent: "", invoice_prefix: "", quote_prefix: "", sort_order: 0, archived: false };
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
 const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts", vault: "Vault" };
 
 
-// One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
-// invoices, expenses, and projects live there today. Division is an extra tag
-// on those same rows — not a second business or database setup.
+// One tenant in Supabase (business_id = 'mworx'): every invoice, project and
+// contact row carries that as its business_id. The COMPANY a row belongs to is
+// its `division` column — a slug such as 'mworx' or 'mt_management'.
+// Companies themselves are rows in bk_profiles, one per company, keyed by
+// business_id = that same slug (so the Mworx Group profile row is 'mworx', and
+// an MT Management invoice has business_id 'mworx', division 'mt_management').
+// COMPANY.name is only shown on the login screen.
 const COMPANY = { id: "mworx", name: "MT Management Pty Ltd" };
 
 const ALL_DIVISIONS = "all";
 
-const DIVISIONS = [
-  { id: "mworx", name: "Mworx Group", short: "Mworx", subtitle: "Drafting & planning", accent: "#10b981", invoicePrefix: "MWX", quotePrefix: "QMWX", tagline: "Design · Consultancy · Project Management" },
-  { id: "mt_management", name: "MT Management", short: "MT Mgmt", subtitle: "STR property management", accent: "#3b82f6", invoicePrefix: "MTM", quotePrefix: "QMTM", tagline: "Short-Term Rental Property Management" },
+// Built-in companies: the registry until bk_profiles has loaded, and the only
+// registry if that table is empty. After load the registry is whatever
+// Settings → Company holds — see setCompanyRegistry.
+const DEFAULT_COMPANIES = [
+  { id: "mworx", name: "Mworx Group", short: "Mworx", subtitle: "Drafting & planning", accent: "#0d9488", invoicePrefix: "MWX", quotePrefix: "QMWX", tagline: "Design · Consultancy · Project Management" },
+  { id: "mt_management", name: "MT Management", short: "MT Mgmt", subtitle: "STR property management", accent: "#2563eb", invoicePrefix: "MTM", quotePrefix: "QMTM", tagline: "Short-Term Rental Property Management" },
 ];
+let DIVISIONS = DEFAULT_COMPANIES;        // companies you can switch to (not archived), in Settings order
+let KNOWN_COMPANIES = DEFAULT_COMPANIES;  // the same plus archived ones — their old documents still need a name and colour
 
-const DIVISION_MENU_OPTIONS = [
-  { id: ALL_DIVISIONS, name: "All", subtitle: "Combined view", accent: "#6366f1" },
+// Fallback prefix for a company row saved without one: initials, e.g. "Harbour Homes" → "HH".
+const prefixFromName = (name) => (name || "").split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4) || "DOC";
+const companyFromProfile = (p) => {
+  const inv = (p.invoice_prefix || "").trim().toUpperCase() || prefixFromName(p.name);
+  return {
+    id: p.business_id,
+    name: p.name || p.business_id,
+    short: p.short_name || p.name || p.business_id,
+    subtitle: p.subtitle || "",
+    accent: p.accent || "#64748b",
+    invoicePrefix: inv,
+    quotePrefix: (p.quote_prefix || "").trim().toUpperCase() || `Q${inv}`,
+    tagline: p.tagline || "",
+    archived: !!p.archived,
+  };
+};
+// Module-level on purpose: recordDivision / divisionInfo / getNextDocumentNumber
+// are plain functions called from many places, and threading the list through
+// every one of them buys nothing — the registry only changes when profiles load
+// or Settings saves, and both are followed by a React state update that re-renders.
+function setCompanyRegistry(profiles) {
+  const rows = (profiles || []).map(companyFromProfile);
+  if (!rows.length) { DIVISIONS = DEFAULT_COMPANIES; KNOWN_COMPANIES = DEFAULT_COMPANIES; return; }
+  KNOWN_COMPANIES = rows;
+  const live = rows.filter((c) => !c.archived);
+  DIVISIONS = live.length ? live : rows.slice(0, 1);
+}
+const divisionMenuOptions = () => [
+  { id: ALL_DIVISIONS, name: "All companies", subtitle: "Combined view", accent: "#6366f1" },
   ...DIVISIONS,
 ];
 
@@ -56,7 +92,7 @@ function DivisionMenu({ division, onSwitch, onClose, style }) {
     <>
       <div style={{ position: "fixed", inset: 0, zIndex: 58 }} onClick={onClose} aria-hidden="true" />
       <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, minWidth: 200, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 12px 28px -8px rgba(16,24,40,0.25)", padding: 4, zIndex: 59, ...style }}>
-        {DIVISION_MENU_OPTIONS.map((d) => {
+        {divisionMenuOptions().map((d) => {
           const active = division === d.id;
           return (
             <button
@@ -124,15 +160,18 @@ function MoneyBig({ value, color = "#0f172a", size = 30 }) {
   );
 }
 
+// Which company a document/project row belongs to. Legacy spellings of the MT
+// slug are normalised; a slug no company owns any more falls back to the first
+// company, which is what the original single-company data was.
 const recordDivision = (r) => {
   const d = r?.division;
   if (!d || d === "mworx") return "mworx";
   if (d === "mtmgmt" || d === "mt_management" || d === "MT Management") return "mt_management";
-  return "mworx"; // unknown values → treat as Mworx (existing data)
+  return KNOWN_COMPANIES.some((c) => c.id === d) ? d : "mworx";
 };
 const divisionInfo = (id) => {
-  if (id === ALL_DIVISIONS) return { id: ALL_DIVISIONS, name: "All Divisions", short: "All", subtitle: "Combined view", accent: "#6366f1", invoicePrefix: "MWX", quotePrefix: "QMWX", tagline: "" };
-  return DIVISIONS.find((d) => d.id === id) || DIVISIONS[0];
+  if (id === ALL_DIVISIONS) return { id: ALL_DIVISIONS, name: "All companies", short: "All", subtitle: "Combined view", accent: "#6366f1", invoicePrefix: DIVISIONS[0]?.invoicePrefix || "DOC", quotePrefix: DIVISIONS[0]?.quotePrefix || "QDOC", tagline: "" };
+  return KNOWN_COMPANIES.find((d) => d.id === id) || DIVISIONS[0] || DEFAULT_COMPANIES[0];
 };
 const isValidDivision = (id) => id === ALL_DIVISIONS || DIVISIONS.some((d) => d.id === id);
 
@@ -860,7 +899,7 @@ function DocViewer({ inv, profile, accent, isMobile, pdfLoading, onClose, onDown
   useEffect(() => {
     let alive = true;
     (async () => {
-      const logoDataUrl = await fetchLogoBase64();
+      const logoDataUrl = await fetchLogoBase64(profile);
       // Same layout as the PDF (src/lib/doc-html.mjs): A4 sheets, split where
       // the document's own page breaks say, with an overflow warning on any
       // sheet holding more than A4 fits.
@@ -1032,6 +1071,60 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
 // PDFs in an <iframe>, images in an <img>. Top-level so a parent re-render doesn't
 // reload it.
 
+// "Add company" form, shown inside the Settings company strip. Module scope
+// for the usual reason: declared inside BusinessSettings it would remount on
+// every keystroke there and lose what was typed.
+function NewCompanyForm({ s, accent, takenPrefixes, onCreate, onCancel }) {
+  const [name, setName] = useState("");
+  const [short, setShort] = useState("");
+  const [invPrefix, setInvPrefix] = useState("");
+  const [quotePrefix, setQuotePrefix] = useState("");
+  const [prefixEdited, setPrefixEdited] = useState(false);
+  const [color, setColor] = useState("#8b5cf6");
+  const [abn, setAbn] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const onName = (v) => {
+    setName(v);
+    if (!prefixEdited) { const p = prefixFromName(v); setInvPrefix(p === "DOC" ? "" : p); setQuotePrefix(p === "DOC" ? "" : `Q${p}`); }
+  };
+  const submit = async () => {
+    setErr(null);
+    const nm = name.trim();
+    if (!nm) { setErr("Give the company a name."); return; }
+    const ip = invPrefix.trim().toUpperCase();
+    const qp = quotePrefix.trim().toUpperCase();
+    if (!/^[A-Z0-9]{2,6}$/.test(ip) || !/^[A-Z0-9]{2,7}$/.test(qp)) { setErr("Prefixes are 2–6 letters or digits, e.g. MWX and QMWX."); return; }
+    if (ip === qp) { setErr("Invoice and quote prefixes must differ."); return; }
+    if (takenPrefixes.includes(ip) || takenPrefixes.includes(qp)) { setErr("That prefix is already used by another company."); return; }
+    setBusy(true);
+    const ok = await onCreate({ name: nm, short_name: short.trim() || nm, invoice_prefix: ip, quote_prefix: qp, accent: color, abn: abn.trim() });
+    setBusy(false);
+    if (ok) onCancel();
+  };
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #e2e8f0" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", marginBottom: 8 }}>New company</div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 10 }}><label style={s.label}>Company name</label><input value={name} onChange={(e) => onName(e.target.value)} autoFocus placeholder="Harbour Homes Pty Ltd" style={s.input} /></div>
+        <div style={{ marginBottom: 10 }}><label style={s.label}>Short name</label><input value={short} onChange={(e) => setShort(e.target.value)} placeholder={name || "Shown in menus"} style={s.input} /></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10 }}>
+        <div style={{ marginBottom: 10 }}><label style={s.label}>Invoice prefix</label><input value={invPrefix} onChange={(e) => { setPrefixEdited(true); setInvPrefix(e.target.value.toUpperCase()); }} placeholder="HH" maxLength={6} spellCheck={false} style={{ ...s.input, fontFamily: "monospace" }} /></div>
+        <div style={{ marginBottom: 10 }}><label style={s.label}>Quote prefix</label><input value={quotePrefix} onChange={(e) => { setPrefixEdited(true); setQuotePrefix(e.target.value.toUpperCase()); }} placeholder="QHH" maxLength={7} spellCheck={false} style={{ ...s.input, fontFamily: "monospace" }} /></div>
+        <div style={{ marginBottom: 10 }}><label style={s.label}>ABN</label><input value={abn} onChange={(e) => setAbn(e.target.value)} placeholder="optional" style={s.input} /></div>
+        <div style={{ marginBottom: 10 }}><label style={s.label}>Colour</label><input type="color" value={color} onChange={(e) => setColor(e.target.value)} style={{ width: 46, height: 36, padding: 2, border: "1px solid #e2e8f0", borderRadius: 9, background: "#fff", cursor: "pointer" }} /></div>
+      </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10, lineHeight: 1.5 }}>Logo, address, bank account, templates and mailbox are set on the next screen once the company exists.</div>
+      {err && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" onClick={onCancel} style={s.btnOutline}>Cancel</button>
+        <button type="button" onClick={submit} disabled={busy || !name.trim()} style={{ ...s.btn(accent), opacity: busy || !name.trim() ? 0.5 : 1 }}>{busy ? "Adding…" : "Add company"}</button>
+      </div>
+    </div>
+  );
+}
+
 // Business settings. At MODULE scope, not inside BookkeeperApp: a component
 // declared inside App is a new function type on every App render, so React
 // unmounts and remounts it and every useState resets — silently emptying the
@@ -1042,7 +1135,7 @@ function ComposeEmail({ inv, accent, isMobile, defaults, onClose, onSend }) {
 // component would reintroduce the very bug this hoist removes, one level down:
 // its inputs would remount on every keystroke.
 
-function BusinessSettings({ s, accent, biz, session, profile, saveProfile, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate, updateQuoteTemplate, appTypeChoices, formDirtyRef, requestCloseModal }) {
+function BusinessSettings({ s, accent, biz, session, profile, profiles, activeCompanyId, createCompany, setCompanyArchived, switchCompany, saveProfile, emailConn, connectOutlook, disconnectOutlook, quoteTemplates, renameQuoteTemplate, deleteQuoteTemplate, updateQuoteTemplate, appTypeChoices, formDirtyRef, requestCloseModal }) {
   const initial = {
     ...profile,
     email_template_invoice: profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE,
@@ -1057,6 +1150,18 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
   useEffect(() => { formDirtyRef.current = JSON.stringify(f) !== initialSnapshot.current; }, [f, formDirtyRef]);
   const [logoPreview, setLogoPreview] = useState(null);
   const fileRef = useRef(null);
+  // Company strip: which company this screen edits, plus add / archive.
+  const [addingCompany, setAddingCompany] = useState(false);
+  const activeCompanies = (profiles || []).filter((p) => !p.archived);
+  const archivedCompanies = (profiles || []).filter((p) => p.archived);
+  // Every prefix in use, so a new company can't pick one that's taken.
+  const takenPrefixes = (profiles || []).flatMap((p) => [p.invoice_prefix, p.quote_prefix]).filter(Boolean).map((x) => String(x).toUpperCase());
+  const pickCompany = (slug) => {
+    if (slug === activeCompanyId) return;
+    if (formDirtyRef.current && !window.confirm(`Discard unsaved changes to ${profile.name || "this company"}'s settings?`)) return;
+    formDirtyRef.current = false;
+    switchCompany(slug);
+  };
   const [reminderRunning, setReminderRunning] = useState(false);
   const [reminderResult, setReminderResult] = useState(null);
   const SHOW_MANUAL_REMINDER_CONTROLS = false; // manual Preview/Send Now buttons hidden; daily auto-reminders unaffected
@@ -1097,7 +1202,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
   const handleLogo = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const filePath = `${session.user.id}/${biz}_logo_${Date.now()}.${file.name.split(".").pop()}`;
+    const filePath = `${session.user.id}/${f.business_id || biz}_logo_${Date.now()}.${file.name.split(".").pop()}`;
     const { error } = await supabase.storage.from("receipts").upload(filePath, file, { contentType: file.type, upsert: true });
     if (!error) {
       const { data } = supabase.storage.from("receipts").getPublicUrl(filePath);
@@ -1129,8 +1234,29 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business Settings</h3>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Settings</h3>
         <button onClick={() => requestCloseModal()} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, background: "none", border: "none", color: "#64748b", cursor: "pointer", borderRadius: 8 }}><Icons.X /></button>
+      </div>
+      {/* Which company the rest of this screen edits. Picking one here also
+          switches the app, so the next document you create belongs to it. */}
+      <div style={{ marginBottom: 16, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+          <span style={{ ...s.label, margin: 0 }}>Company</span>
+          {!addingCompany && <button type="button" onClick={() => setAddingCompany(true)} style={{ ...s.btnOutline, display: "inline-flex", alignItems: "center", gap: 5 }}><Icons.Plus /> Add company</button>}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {activeCompanies.map((p) => {
+            const on = p.business_id === activeCompanyId;
+            return (
+              <button key={p.business_id} type="button" onClick={() => pickCompany(p.business_id)} style={{ ...s.pill(on), background: on ? (p.accent || accent) : "#ffffff" }}>
+                {!on && <span style={{ width: 8, height: 8, borderRadius: 4, background: p.accent || "#94a3b8", display: "inline-block" }} />}
+                {p.short_name || p.name || p.business_id}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, lineHeight: 1.5 }}>Everything below belongs to <strong>{profile.name || "this company"}</strong> — its logo, ABN, bank account, mailbox and templates. Quote types are shared by all companies.</div>
+        {addingCompany && <NewCompanyForm s={s} accent={accent} takenPrefixes={takenPrefixes} onCreate={createCompany} onCancel={() => setAddingCompany(false)} />}
       </div>
       <div style={{ marginBottom: 16 }}>
         <label style={s.label}>Logo</label>
@@ -1145,6 +1271,16 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
         <div style={{ marginBottom: 12 }}><label style={s.label}>Business Name</label><input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} style={s.input} /></div>
         <div style={{ marginBottom: 12 }}><label style={s.label}>ABN</label><input value={f.abn || ""} onChange={(e) => setF({ ...f, abn: e.target.value })} placeholder="12 345 678 901" style={s.input} /></div>
       </div>
+      <div style={s.grid2}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Short Name (menus)</label><input value={f.short_name || ""} onChange={(e) => setF({ ...f, short_name: e.target.value })} placeholder={f.name || "Short name"} style={s.input} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Tagline (under the logo on documents)</label><input value={f.tagline || ""} onChange={(e) => setF({ ...f, tagline: e.target.value })} placeholder="Design · Consultancy · Project Management" style={s.input} /></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12 }}>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Invoice Prefix</label><input value={f.invoice_prefix || ""} onChange={(e) => setF({ ...f, invoice_prefix: e.target.value.toUpperCase() })} placeholder="MWX" maxLength={6} spellCheck={false} style={{ ...s.input, fontFamily: "monospace" }} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Quote Prefix</label><input value={f.quote_prefix || ""} onChange={(e) => setF({ ...f, quote_prefix: e.target.value.toUpperCase() })} placeholder="QMWX" maxLength={7} spellCheck={false} style={{ ...s.input, fontFamily: "monospace" }} /></div>
+        <div style={{ marginBottom: 12 }}><label style={s.label}>Colour</label><input type="color" value={/^#[0-9a-f]{6}$/i.test(f.accent || "") ? f.accent : "#64748b"} onChange={(e) => setF({ ...f, accent: e.target.value })} title="Used on this company's documents and in the app" style={{ width: 46, height: 36, padding: 2, border: "1px solid #e2e8f0", borderRadius: 9, background: "#fff", cursor: "pointer" }} /></div>
+      </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: -4, marginBottom: 12, lineHeight: 1.5 }}>Numbers look like {`${(f.invoice_prefix || "MWX").toUpperCase()}${String(new Date().getFullYear()).slice(-2)}001`} and {`${(f.quote_prefix || "QMWX").toUpperCase()}${String(new Date().getFullYear()).slice(-2)}001`}. Changing a prefix only affects documents created from now on.</div>
       <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, color: "#475569", marginBottom: 12, cursor: "pointer", lineHeight: 1.45 }}>
         <input type="checkbox" checked={!!f.gst_not_registered} onChange={(e) => setF({ ...f, gst_not_registered: e.target.checked })} style={{ marginTop: 2, accentColor: accent }} />
         <span>Not registered for GST — print “GST not applicable” under the total on quotes and invoices.</span>
@@ -1179,12 +1315,12 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
           </div>
         </>
       ))}
-      {panel("email_conn", "Email Integration", emailConn ? `Outlook connected${emailConn.email ? " · " + emailConn.email : ""}` : "Not connected — tap to connect Outlook", (
+      {panel("email_conn", "Email Sending", emailConn ? `${f.short_name || f.name || "This company"} sends from ${emailConn.email || "Outlook"}` : `No mailbox connected for ${f.short_name || f.name || "this company"} — tap to connect Outlook`, (
         emailConn ? (
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#ecfdf5", borderRadius: 8, border: "1px solid #a7f3d0" }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Outlook Connected</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Outlook connected — {f.name || "this company"}'s quotes and invoices send from here</div>
               <div style={{ fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{emailConn.email || "Connected"}</div>
             </div>
             <button onClick={disconnectOutlook} style={{ ...s.btnOutline, color: "#ef4444", borderColor: "#ef444440", fontSize: 10 }}>Disconnect</button>
@@ -1247,7 +1383,7 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
       {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
         <>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-          Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au. Each reminder is only ever sent once — nothing for you to do.
+          Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au under {f.name || "this company"}'s name and logo; replies go to {f.email || "the email address above"}. Each reminder is only ever sent once — nothing for you to do.
         </div>
         {/* Manual Preview / Send Now controls hidden per preference; the daily
             automatic reminders still run. Flip to true to bring them back. */}
@@ -1288,7 +1424,26 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
       {panel("security", "Security", `Change the sign-in password for ${session?.user?.email || "your account"}`, (
         <ChangePasswordForm s={s} accent={accent} />
       ))}
-      <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
+      {panel("company_admin", "Archive or Restore Companies", archivedCompanies.length ? `${archivedCompanies.length} archived` : "Hide a company you no longer invoice from", (
+        <>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>Archiving hides {f.name || "this company"} from the company switcher and from new documents. Its existing quotes, invoices and projects are kept and still show under “All companies”.</div>
+          <button type="button" onClick={() => { if (window.confirm(`Archive ${f.name || "this company"}? You can restore it here later.`)) setCompanyArchived(f.business_id, true); }} disabled={activeCompanies.length <= 1} style={{ ...s.btnOutline, color: "#b91c1c", opacity: activeCompanies.length <= 1 ? 0.5 : 1 }}>Archive {f.short_name || f.name || "company"}</button>
+          {activeCompanies.length <= 1 && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>Add another company before archiving this one.</div>}
+          {archivedCompanies.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <label style={s.label}>Archived</label>
+              {archivedCompanies.map((p) => (
+                <div key={p.business_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 12 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: p.accent || "#94a3b8", flexShrink: 0 }} />
+                  <span style={{ flex: 1 }}>{p.name}</span>
+                  <button type="button" onClick={() => setCompanyArchived(p.business_id, false)} style={s.btnOutline}>Restore</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ))}
+      <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save {f.short_name || f.name || ""} Settings</button>
     </div>
   );
 }
@@ -1953,8 +2108,12 @@ export default function BookkeeperApp() {
   // The reusable scope lines. One row = one printed line, so "Site Plan" is
   // stored once and used by every DA, CC and CDC quote that needs it.
   const [scopeLines, setScopeLines] = useState([]);
-  const [profile, setProfile] = useState({ ...DEFAULT_PROFILE });
-  const [emailConn, setEmailConn] = useState(null);
+  // One row per company (Settings → Company). `profile` further down is the
+  // active company's row; docProfile(doc) is the row for whichever company a
+  // document belongs to, which is what PDFs, emails and reminders must use.
+  const [profiles, setProfiles] = useState([]);
+  // Outlook connections — one per company that has connected a mailbox.
+  const [emailConns, setEmailConns] = useState([]);
 
   const [divMenuOpen, setDivMenuOpen] = useState(false);
   // { doc, anchor } for the inline status picker. Lives here, not in the list,
@@ -1984,7 +2143,27 @@ export default function BookkeeperApp() {
 
   const divInfo = divisionInfo(division);
   const accent = divInfo.accent;
-  const insertDivision = division === ALL_DIVISIONS ? (localStorage.getItem("bk_lastSpecificDivision") || "mworx") : division;
+  const lastSpecificDivision = localStorage.getItem("bk_lastSpecificDivision");
+  const insertDivision = division === ALL_DIVISIONS
+    ? (lastSpecificDivision && lastSpecificDivision !== ALL_DIVISIONS && isValidDivision(lastSpecificDivision) ? lastSpecificDivision : (DIVISIONS[0]?.id || "mworx"))
+    : division;
+  // The company Settings edits and new documents go to — in the combined view,
+  // the last specific company chosen.
+  const activeCompanyId = insertDivision;
+  const profileFor = (slug) => {
+    const row = profiles.find((p) => p.business_id === slug);
+    if (row) return row;
+    const d = divisionInfo(slug);
+    return { ...DEFAULT_PROFILE, business_id: slug, name: d.name, short_name: d.short, subtitle: d.subtitle, tagline: d.tagline, accent: d.accent, invoice_prefix: d.invoicePrefix, quote_prefix: d.quotePrefix };
+  };
+  const activeProfile = profileFor(activeCompanyId);
+  const profile = activeProfile;
+  const docProfile = (doc) => profileFor(recordDivision(doc));
+  const emailConnFor = (slug) => emailConns.find((c) => c.business_id === slug) || null;
+  const emailConn = emailConnFor(activeCompanyId);
+  const docConn = (doc) => emailConnFor(recordDivision(doc));
+  // OneDrive is one drive however many companies send mail: any connection files.
+  const hasMicrosoft = emailConns.length > 0;
   const inActiveDiv = (r) => division === ALL_DIVISIONS || recordDivision(r) === division;
   const divInvoices = invoices.filter(inActiveDiv);
   const divJobs = jobs.filter(inActiveDiv);
@@ -2050,9 +2229,9 @@ export default function BookkeeperApp() {
     const [cRes, iRes, pRes, jRes, eRes, qtRes, slRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
-      supabase.from("bk_profiles").select("*").eq("business_id", businessId).maybeSingle(),
+      supabase.from("bk_profiles").select("*").order("sort_order").order("name"),
       supabase.from("bk_jobs").select("*").eq("business_id", businessId).order("last_used_at", { ascending: false }),
-      supabase.from("bk_email_connections").select("*").eq("business_id", businessId).eq("provider", "outlook").maybeSingle(),
+      supabase.from("bk_email_connections").select("*").eq("provider", "outlook"),
       supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_scope_lines").select("*").eq("business_id", businessId).eq("archived", false).order("sort_order"),
     ]);
@@ -2084,8 +2263,19 @@ export default function BookkeeperApp() {
     setJobParties(loadedParties);
     setQuoteTemplates(qtRes.data || []);
     setScopeLines(slRes.data || []);
-    setProfile(pRes.data || { ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group" });
-    setEmailConn(eRes.data || null);
+    // Companies. An empty (or pre-0025) table means a single tenant row, so
+    // Settings still works and its first save creates the row.
+    const loadedProfiles = (pRes.data || []).length ? pRes.data : [{ ...DEFAULT_PROFILE, business_id: businessId, name: "Mworx Group", onedrive_folder: "Mworx Group", short_name: "Mworx", invoice_prefix: "MWX", quote_prefix: "QMWX", accent: "#0d9488", tagline: "Design · Consultancy · Project Management" }];
+    setCompanyRegistry(loadedProfiles);
+    setProfiles(loadedProfiles);
+    setEmailConns(eRes.data || []);
+    // The remembered company may have been archived since, and one added on
+    // another device only becomes valid once the registry holds it.
+    setDivision((cur) => {
+      const saved = localStorage.getItem("bk_activeDivision");
+      const want = cur === ALL_DIVISIONS ? cur : (isValidDivision(saved) ? saved : cur);
+      return isValidDivision(want) ? want : (DIVISIONS[0]?.id || "mworx");
+    });
     setLoading(false);
 
     // Mark overdue invoices server-side. Scope to type "invoice" only — quotes share
@@ -2124,16 +2314,16 @@ export default function BookkeeperApp() {
     setContacts([]);
     setInvoices([]);
     setJobs([]);
-    setProfile({ ...DEFAULT_PROFILE });
-    setEmailConn(null);
+    setProfiles([]);
+    setEmailConns([]);
   };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const outlookStatus = params.get("outlook");
     if (outlookStatus === "connected") {
-      const connectedEmail = params.get("email") || "";
-      setEmailConn((prev) => prev ? { ...prev, email: connectedEmail } : { email: connectedEmail, provider: "outlook" });
+      // The new connection row is picked up by loadData once the session is
+      // known (it loads every company's mailbox), so only the URL needs tidying.
       window.history.replaceState({}, "", window.location.pathname);
     } else if (outlookStatus === "error") {
       console.error("Outlook connection error:", params.get("reason"));
@@ -2177,7 +2367,7 @@ export default function BookkeeperApp() {
     // division column is exactly that case, so exclude it explicitly.
     if (!res.ok && res.error?.code !== "23505" && res.error?.message?.match(/division/i) && "division" in row) {
       if (row.division !== "mworx") {
-        alert("To save MT Management records, apply supabase/migrations/0007_divisions.sql in Supabase first.");
+        alert("To save records for a second company, apply supabase/migrations/0007_divisions.sql in Supabase first.");
         return res;
       }
       const { division: _d, ...noDiv } = row;
@@ -2268,7 +2458,7 @@ export default function BookkeeperApp() {
       }
       setInvoices((prev) => [inserted, ...prev]);
     }
-    if (inserted && emailConn) saveToOneDrive("invoice", inserted.id, { silent: true });
+    if (inserted && hasMicrosoft) saveToOneDrive("invoice", inserted.id, { silent: true });
     formDirtyRef.current = false;
     invoiceDraftRef.current = null;
     setModal(null);
@@ -2330,7 +2520,7 @@ export default function BookkeeperApp() {
     // number/type changed, tell the server the old name so it drops that stale copy.
     const oldRow = invoices.find((i) => i.id === id);
     const finalStatus = "status" in dbUpdates ? dbUpdates.status : oldRow?.status;
-    if ("items" in updates && emailConn && finalStatus === "draft") {
+    if ("items" in updates && hasMicrosoft && finalStatus === "draft") {
       const newName = oneDriveDocName(dbUpdates.type || oldRow?.type, dbUpdates.number ?? oldRow?.number, id);
       const oldName = oldRow ? oneDriveDocName(oldRow.type, oldRow.number, id) : null;
       const prev = oldName && oldName !== newName
@@ -2437,7 +2627,7 @@ export default function BookkeeperApp() {
       }
       // Create the matching OneDrive folder ("26106 - 10 McPherson Road …").
       // Best-effort: never block project creation on the Microsoft connection.
-      if (emailConn) saveToOneDrive("project", inserted.id, { silent: true });
+      if (hasMicrosoft) saveToOneDrive("project", inserted.id, { silent: true });
     }
     return inserted;
   };
@@ -2607,7 +2797,7 @@ export default function BookkeeperApp() {
     inserted.items = itemsRes.ok ? (itemsRes.data || []) : [];
     invoicesRef.current = [inserted, ...invoicesRef.current]; // synchronous, so an immediate re-check/renumber sees it
     setInvoices((prev) => [inserted, ...prev]);
-    if (emailConn) saveToOneDrive("invoice", inserted.id, { silent: true });
+    if (hasMicrosoft) saveToOneDrive("invoice", inserted.id, { silent: true });
     return inserted;
   };
 
@@ -2669,15 +2859,67 @@ export default function BookkeeperApp() {
     setEditItem(null);
   };
 
+  // Document prefixes must be unique across live companies: numbers are only
+  // unique per company in the database, so two companies sharing "MWX" would
+  // both issue MWX26001 and nobody could tell whose it was.
+  const prefixClash = (slug, ip, qp) => profiles.find((o) => o.business_id !== slug && !o.archived && [o.invoice_prefix, o.quote_prefix].some((x) => x && (x === ip || x === qp)));
   const saveProfile = async (p) => {
-    const row = { user_id: session.user.id, business_id: biz, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", gst_not_registered: !!p.gst_not_registered, email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "" };
+    const slug = p.business_id || activeCompanyId;
+    const ip = String(p.invoice_prefix || "").trim().toUpperCase();
+    const qp = String(p.quote_prefix || "").trim().toUpperCase();
+    if ((ip && !/^[A-Z0-9]{2,6}$/.test(ip)) || (qp && !/^[A-Z0-9]{2,7}$/.test(qp))) { alert("Prefixes are 2–6 letters or digits, e.g. MWX and QMWX."); return; }
+    if (ip && ip === qp) { alert("Invoice and quote prefixes must differ."); return; }
+    const clash = prefixClash(slug, ip, qp);
+    if (clash) { alert(`That prefix is already used by ${clash.name}. Each company needs its own.`); return; }
+    const row = { user_id: session.user.id, business_id: slug, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", gst_not_registered: !!p.gst_not_registered, email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "", short_name: p.short_name || "", subtitle: p.subtitle || "", tagline: p.tagline ?? "", accent: p.accent || null, invoice_prefix: ip || null, quote_prefix: qp || null };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
-    if (saved) setProfile(saved);
+    if (saved) {
+      const next = profiles.some((x) => x.business_id === slug) ? profiles.map((x) => (x.business_id === slug ? saved : x)) : [...profiles, saved];
+      setCompanyRegistry(next);
+      setProfiles(next);
+    }
     setModal(null);
   };
 
-  const fetchLogoBase64 = async () => {
+  // Settings → Company → Add company. The slug is derived from the name and
+  // becomes the `division` on everything the company creates, so it never
+  // changes once made — rename the company freely, the slug is internal.
+  const slugify = (name) => (name || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "company";
+  const createCompany = async (c) => {
+    const base = slugify(c.name) === ALL_DIVISIONS ? "company_all" : slugify(c.name);
+    const taken = new Set(profiles.map((p) => p.business_id));
+    let slug = base;
+    for (let n = 2; taken.has(slug); n++) slug = `${base}_${n}`;
+    const clash = prefixClash(slug, c.invoice_prefix, c.quote_prefix);
+    if (clash) { alert(`That prefix is already used by ${clash.name}.`); return false; }
+    const row = { user_id: session.user.id, business_id: slug, name: c.name, short_name: c.short_name || c.name, invoice_prefix: c.invoice_prefix, quote_prefix: c.quote_prefix, accent: c.accent || null, abn: c.abn || null, subtitle: "", tagline: "", sort_order: profiles.length, archived: false };
+    const { ok, data } = await sbWrite(supabase.from("bk_profiles").insert(row).select().single(), "add company");
+    if (!ok) return false;
+    const next = [...profiles, data];
+    setCompanyRegistry(next);
+    setProfiles(next);
+    switchDivision(slug);
+    return true;
+  };
+
+  const setCompanyArchived = async (slug, archived) => {
+    const remaining = profiles.filter((p) => !p.archived && p.business_id !== slug);
+    if (archived && remaining.length === 0) { alert("You can't archive the only company — add another first."); return false; }
+    const { ok, data } = await sbWrite(supabase.from("bk_profiles").update({ archived }).eq("user_id", session.user.id).eq("business_id", slug).select().single(), archived ? "archive company" : "restore company");
+    if (!ok) return false;
+    const next = profiles.map((p) => (p.business_id === slug ? data : p));
+    setCompanyRegistry(next);
+    setProfiles(next);
+    if (archived && activeCompanyId === slug) switchDivision(remaining[0].business_id);
+    return true;
+  };
+
+  // Logo of the given company (default: the active one) as a data URL for the
+  // document HTML. Document code passes docProfile(inv) so an MT Management
+  // quote carries MT's logo whichever company the app is switched to.
+  const fetchLogoBase64 = async (prof = activeProfile) => {
+    const profile = prof;
     if (!profile.logo_url) return null;
     try {
       const match = profile.logo_url.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
@@ -2740,8 +2982,9 @@ export default function BookkeeperApp() {
       console.error("Server PDF unavailable, using browser print (A4):", err);
       // Print to a true A4 page via the browser (like Microsoft Word): content flows
       // and paginates onto A4, and the footer is pinned to the bottom of every page.
-      const logoDataUrl = await fetchLogoBase64();
-      const { body: docBody, css } = buildDocHTML(inv, inv.items || [], profile, { logoDataUrl, mode: "pdf" });
+      const docProf = docProfile(inv);
+      const logoDataUrl = await fetchLogoBase64(docProf);
+      const { body: docBody, css } = buildDocHTML(inv, inv.items || [], docProf, { logoDataUrl, mode: "pdf" });
       const printDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${inv.number || "Document"}</title><style>${css}</style></head><body>${docBody}</body></html>`;
       const iframe = document.createElement("iframe");
       Object.assign(iframe.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
@@ -2784,7 +3027,8 @@ export default function BookkeeperApp() {
 
   // Plain-text default signature, used by the mailto fallback and as the base for
   // the compose window's signature preview.
-  const defaultSignatureText = () => {
+  const defaultSignatureText = (prof) => {
+    const profile = prof || activeProfile;
     const bName = profile.name || "our company";
     // Treat a whitespace-only signature as empty so the fallback still applies.
     return (profile.email_signature || "").trim() ? profile.email_signature : `${bName}${profile.abn ? `\nABN: ${profile.abn}` : ""}${profile.email ? `\n${profile.email}` : ""}${profile.phone ? ` · ${profile.phone}` : ""}`;
@@ -2793,12 +3037,13 @@ export default function BookkeeperApp() {
   // withSignature:false strips the {signature} placeholder so the compose window
   // can prefill the message body and show/append the signature separately.
   const buildEmailBody = (inv, { withSignature = true } = {}) => {
+    const profile = docProfile(inv); // the document's company, not the active one
     const isQuote = inv.type === "quote";
     const bName = profile.name || "our company";
     const template = isQuote
       ? (profile.email_template_quote || DEFAULT_EMAIL_TEMPLATE_QUOTE)
       : (profile.email_template_invoice || DEFAULT_EMAIL_TEMPLATE_INVOICE);
-    const sig = withSignature ? defaultSignatureText() : "";
+    const sig = withSignature ? defaultSignatureText(profile) : "";
     const dueDateLine = inv.due_date ? `Payment is due by ${fmtDate(inv.due_date)}.` : "";
     const paymentDetails = profile.bsb ? `Bank details:\n${profile.bank_name ? `Bank: ${profile.bank_name}\n` : ""}Account: ${profile.account_name || bName}\nBSB: ${profile.bsb}\nAccount #: ${profile.account_number}\nReference: ${inv.number}` : "";
     return template
@@ -2817,6 +3062,7 @@ export default function BookkeeperApp() {
   };
 
   const sendInvoice = (inv) => {
+    const profile = docProfile(inv);
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
     const bName = profile.name || "our company";
     const subject = `${docType} ${inv.number} from ${bName}`;
@@ -2848,7 +3094,7 @@ export default function BookkeeperApp() {
   // close whatever modal is open).
   const sendInvoiceNow = async (inv, opts = {}) => {
     const docType = inv.type === "quote" ? "Quote" : "Invoice";
-    if (!emailConn) { alert("Connect Outlook in Settings first."); return false; }
+    if (!docConn(inv)) { alert(`No mailbox is connected for ${docProfile(inv).name || "this company"}. Connect one in Settings → Email Sending first.`); return false; }
     if (!inv.contact_email) { alert(`This ${docType.toLowerCase()} has no contact email — add one first.`); return false; }
     if (sendInFlightRef.current.has(inv.id)) return false; // already sending this one
     if (!opts.skipConfirm && !window.confirm(`Send ${docType.toLowerCase()} ${inv.number} (${fmt(inv.total || 0)}) to ${inv.contact_email} with the PDF attached?`)) return false;
@@ -3093,7 +3339,7 @@ Are you sure you want it ${verb}?`);
   // OneDrive copy stays current. Issued docs are never auto-refiled — they only
   // move/update on an explicit send, preserving the sent record.
   const regenAndFileOneDrive = async (invId, prev = {}) => {
-    if (!emailConn) return;
+    if (!hasMicrosoft) return;
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) return;
@@ -3109,7 +3355,7 @@ Are you sure you want it ${verb}?`);
   // "mark sent", accept a quote, mark paid — must still move from the central
   // pending area into its project folder. Best-effort, silent. (The compose send
   // already re-files itself.)
-  const fileIssuedToOneDrive = (invId) => { if (emailConn) saveToOneDrive("invoice", invId, { silent: true }); };
+  const fileIssuedToOneDrive = (invId) => { if (hasMicrosoft) saveToOneDrive("invoice", invId, { silent: true }); };
 
   // Explicit "put this document in OneDrive now", with a visible result. Unlike
   // the silent auto-file, it regenerates the PDF first so the filed copy reflects
@@ -3119,7 +3365,7 @@ Are you sure you want it ${verb}?`);
   // invoice) — the server keys the subfolder off the document's own type.
   const fileToOneDrive = async (inv) => {
     if (!inv?.id) return false;
-    if (!emailConn) { alert("Connect Outlook in Settings to file to OneDrive."); return false; }
+    if (!hasMicrosoft) { alert("Connect Outlook in Settings to file to OneDrive."); return false; }
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (token) await fetch(`${API_BASE}/.netlify/functions/generate-invoice-pdf`, {
@@ -3137,7 +3383,7 @@ Are you sure you want it ${verb}?`);
       const resp = await fetch(`${API_BASE}/.netlify/functions/outlook-oauth-start`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ business_id: biz }),
+        body: JSON.stringify({ business_id: activeCompanyId }), // the company whose mailbox this becomes
       });
       const result = await resp.json();
       if (!resp.ok || !result.url) throw new Error(result.error || "Failed to start OAuth");
@@ -3148,11 +3394,14 @@ Are you sure you want it ${verb}?`);
     }
   };
 
-  const disconnectOutlook = async () => {
-    if (!emailConn?.id) return;
-    const { ok } = await sbWrite(supabase.from("bk_email_connections").delete().eq("id", emailConn.id), "disconnect Outlook");
+  // Disconnects the active company's mailbox (the Settings button passes its
+  // click event, hence the id check rather than a default parameter).
+  const disconnectOutlook = async (maybeConn) => {
+    const conn = maybeConn && maybeConn.id ? maybeConn : emailConn;
+    if (!conn?.id) return;
+    const { ok } = await sbWrite(supabase.from("bk_email_connections").delete().eq("id", conn.id), "disconnect Outlook");
     if (!ok) return;
-    setEmailConn(null);
+    setEmailConns((prev) => prev.filter((c) => c.id !== conn.id));
   };
 
 
@@ -3437,10 +3686,13 @@ Are you sure you want it ${verb}?`);
     const saveAndFileOneDrive = async () => {
       const saved = await saveInv();
       if (!saved?.id) return; // save failed, or cancelled at the sent-figures guard
-      if (!emailConn) { alert("Invoice saved. Connect Outlook in Settings to file it to OneDrive."); return; }
+      if (!hasMicrosoft) { alert("Invoice saved. Connect Outlook in Settings to file it to OneDrive."); return; }
       await fileToOneDrive(saved); // regenerate + file, with a visible result
     };
-    const canCompose = !!emailConn && !!(f.contact_email || "").trim();
+    // Compose sends from the DOCUMENT's company mailbox, which for an existing
+    // document is the company it was created under, not the one the app shows.
+    const formConn = emailConnFor(existing?.division ? recordDivision(existing) : insertDivision);
+    const canCompose = !!formConn && !!(f.contact_email || "").trim();
 
     // Stages of the project's accepted quote(s) not yet invoiced. An invoice
     // records which stage it bills (converted_from_quote_id + quote_stage; the
@@ -3863,7 +4115,7 @@ Are you sure you want it ${verb}?`);
         {/* Save actions. With Outlook connected: Save & email (when there's a
             contact to email) plus Save to OneDrive. Without Outlook there is no
             OneDrive to file to, so it falls back to a plain save. */}
-        {emailConn ? (<>
+        {hasMicrosoft ? (<>
           {canCompose && (
             <button disabled={saving} onClick={async () => { setSaving(true); await saveAndCompose(); setSaving(false); }} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: saving ? 0.5 : 1, gap: 6 }}>{saving ? "Saving…" : <><Icons.Send /> {existing ? "Save" : "Create"} &amp; Email…</>}</button>
           )}
@@ -4536,7 +4788,7 @@ Are you sure you want it ${verb}?`);
   // so the same document can never be offered different actions depending on
   // where you look at it. Nothing new happens: every run() below is an existing
   // handler, with its existing confirmations.
-  const emailDoc = async (inv) => { if (emailConn) { openComposeFor(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } };
+  const emailDoc = async (inv) => { if (docConn(inv)) { openComposeFor(inv); } else { sendInvoice(inv); await offerMarkSent(inv); } };
   const acceptAndOfferDeposit = async (inv) => { const proj = await acceptQuote(inv); if (proj) await offerDepositInvoice(inv, proj); };
 
   // The single action a row earns a permanent button for, chosen by its state.
@@ -4567,7 +4819,7 @@ Are you sure you want it ${verb}?`);
     const items = [{ key: "view", label: "Open", icon: <Icons.Eye />, run: () => viewInvoice(inv) }];
     if (!isQuote && inv.status !== "paid" && inv.status !== "cancelled") items.push({ key: "paid", label: "Mark paid", icon: <Icons.Check />, run: () => markPaid(inv) });
     if (isQuote && !QUOTE_CLOSED.has(inv.status)) items.push({ key: "accept", label: "Accept quote", icon: <Icons.Check />, run: () => acceptAndOfferDeposit(inv) });
-    items.push({ key: "email", label: emailConn ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
+    items.push({ key: "email", label: docConn(inv) ? "Compose email…" : "Email via default app", icon: <Icons.Send />, run: () => emailDoc(inv) });
     // Only where the link actually does something: pay-invoice.mjs answers
     // "Already paid" once the invoice is paid, and a draft has not been issued
     // to anyone yet.
@@ -4917,7 +5169,7 @@ Are you sure you want it ${verb}?`);
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
         <div style={{ position: "relative" }}>
           <button type="button" onClick={() => setDivMenuOpen((v) => !v)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: "#94a3b8", textTransform: "uppercase" }}>{COMPANY.name}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: "#94a3b8", textTransform: "uppercase" }}>{divInfo.subtitle || "BookKeeper"}</div>
             <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a", letterSpacing: -0.5, marginTop: 2 }}>{PAGE_TITLES[page] || ""}</div>
             <div style={{ fontSize: 12, color: accent, fontWeight: 600, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 4 }}>
               {divInfo.name}
@@ -5162,9 +5414,9 @@ Are you sure you want it ${verb}?`);
   // stripped from the body; shown/appended separately) + the HTML signature.
   const composeDefaults = composeDoc ? {
     to: composeDoc.contact_email || "",
-    subject: `${composeDoc.type === "quote" ? "Quote" : "Invoice"} ${composeDoc.number || ""} from ${profile.name || "Our company"}`.trim(),
+    subject: `${composeDoc.type === "quote" ? "Quote" : "Invoice"} ${composeDoc.number || ""} from ${docProfile(composeDoc).name || "Our company"}`.trim(),
     body: buildEmailBody(composeDoc, { withSignature: false }).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd(),
-    signatureHtml: signatureToHtml(defaultSignatureText()),
+    signatureHtml: signatureToHtml(defaultSignatureText(docProfile(composeDoc))),
   } : null;
 
   const SidebarContent = () => (
@@ -5173,7 +5425,7 @@ Are you sure you want it ${verb}?`);
         <button
           type="button"
           onClick={() => setDivMenuOpen((v) => !v)}
-          title="Switch division"
+          title="Switch company"
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: navCollapsed ? "center" : "left" }}
         >
           {navCollapsed ? (
@@ -5186,7 +5438,7 @@ Are you sure you want it ${verb}?`);
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2.5" style={{ transform: divMenuOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease" }}><path d="M6 9l6 6 6-6"/></svg>
               </div>
               <div style={{ fontSize: 12, color: accent, fontWeight: 600, marginTop: 4 }}>{divInfo.name}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 1 }}>{COMPANY.name}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 1 }}>{divInfo.subtitle || ""}</div>
             </>
           )}
         </button>
@@ -5243,7 +5495,7 @@ Are you sure you want it ${verb}?`);
         {modal === "invoice" && <InvoiceForm existing={editItem} />}
         {modal === "quoteStart" && <QuoteStart />}
         {modal === "project" && <ProjectForm existing={editItem} />}
-        {modal === "settings" && <BusinessSettings s={s} accent={accent} biz={biz} session={session} profile={profile} saveProfile={saveProfile} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} updateQuoteTemplate={updateQuoteTemplate} appTypeChoices={appTypeChoices} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
+        {modal === "settings" && <BusinessSettings s={s} accent={accent} key={activeCompanyId} biz={biz} session={session} profile={profile} profiles={profiles} activeCompanyId={activeCompanyId} createCompany={createCompany} setCompanyArchived={setCompanyArchived} switchCompany={switchDivision} saveProfile={saveProfile} emailConn={emailConn} connectOutlook={connectOutlook} disconnectOutlook={disconnectOutlook} quoteTemplates={quoteTemplates} renameQuoteTemplate={renameQuoteTemplate} deleteQuoteTemplate={deleteQuoteTemplate} updateQuoteTemplate={updateQuoteTemplate} appTypeChoices={appTypeChoices} formDirtyRef={formDirtyRef} requestCloseModal={requestCloseModal} />}
       </div>
     </div>
   );
@@ -5281,7 +5533,7 @@ Are you sure you want it ${verb}?`);
       {statusPick && <StatusPicker doc={statusPick.doc} anchor={statusPick.anchor} isMobile={isMobile} badgeStyle={s.badge}
         onClose={() => setStatusPick(null)}
         onPick={(next) => { const d = statusPick.doc; setStatusPick(null); changeDocStatus(d, next); }} />}
-      {viewDoc && <DocViewer inv={viewDoc} profile={profile} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onSaveEdits={saveDocEdits} onRenderPdf={renderPdfUrl} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
+      {viewDoc && <DocViewer inv={viewDoc} profile={docProfile(viewDoc)} accent={accent} isMobile={isMobile} pdfLoading={pdfLoading} onSaveEdits={saveDocEdits} onRenderPdf={renderPdfUrl} onClose={() => setViewDoc(null)} onDownload={downloadPDF} onEmail={emailDoc} onSaveOneDrive={fileToOneDrive} fetchLogoBase64={fetchLogoBase64} />}
       {composeDoc && <ComposeEmail inv={composeDoc} accent={accent} isMobile={isMobile} defaults={composeDefaults} onClose={() => setComposeDoc(null)} onSend={handleComposeSend} />}
     </>
   );

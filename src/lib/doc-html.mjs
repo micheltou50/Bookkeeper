@@ -150,9 +150,13 @@ export function buildDocHTML(inv, items, profile, opts = {}) {
   const rawItems = items || inv.items || [];
   items = rawItems.map((it) => escFields(it, ["description", "note"]));
 
-  const divMeta = DIVISION_META[normalizeDivision(inv.division)] || DIVISION_META.mworx;
-  const accent = divMeta.accent;
-  const tagline = divMeta.tagline;
+  // Colour and tagline come from the company's profile row (Settings → Company).
+  // DIVISION_META is only the fallback for the two original companies' rows
+  // saved before those columns existed; a newer company without them prints
+  // no tagline and the default colour.
+  const builtin = (!inv.division || ["mworx", "mtmgmt", "mt_management"].includes(inv.division)) ? DIVISION_META[normalizeDivision(inv.division)] : null;
+  const accent = profile.accent || builtin?.accent || DIVISION_META.mworx.accent;
+  const tagline = profile.tagline != null ? profile.tagline : (builtin?.tagline || "");
   const isQuote = inv.type === "quote";
   const docType = isQuote ? "QUOTE" : "INVOICE";
   const bName = profile.name || "Company";

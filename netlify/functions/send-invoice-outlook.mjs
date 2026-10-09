@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 import { wrapCors } from './lib/cors.mjs';
+import { companyOf, loadCompanyProfile, loadCompanyConnection } from "./lib/company.mjs";
 
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
@@ -124,15 +125,13 @@ const handler = async (req) => {
     return new Response(JSON.stringify({ error: "Invoice has no contact email" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
-  const { data: conn } = await supabase.from("bk_email_connections")
-    .select("*")
-    .eq("user_id", user.id)
-    .eq("business_id", inv.business_id)
-    .eq("provider", "outlook")
-    .single();
+  // The mailbox and the letterhead both belong to the document's company (its
+  // division), so an MT Management invoice never goes out from the Mworx mailbox.
+  const profile = await loadCompanyProfile(supabase, user.id, inv);
+  const conn = await loadCompanyConnection(supabase, user.id, inv);
 
   if (!conn) {
-    return new Response(JSON.stringify({ error: "No Outlook connection found" }), { status: 400, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: `No mailbox is connected for ${profile?.name || companyOf(inv)}. Connect one in Settings → Email Sending.` }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
   let accessToken, refreshToken;
@@ -150,7 +149,6 @@ const handler = async (req) => {
     }
   }
 
-  const { data: profile } = await supabase.from("bk_profiles").select("*").eq("user_id", user.id).eq("business_id", inv.business_id).single();
   const bName = profile?.name || "Our company";
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
 
