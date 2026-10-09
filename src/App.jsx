@@ -1167,7 +1167,7 @@ function BusinessSettings({ s, accent, biz, session, profile, profiles, activeCo
   const SHOW_MANUAL_REMINDER_CONTROLS = false; // manual Preview/Send Now buttons hidden; daily auto-reminders unaffected
 
   const runReminderJob = async (dryRun) => {
-    if (!dryRun && !window.confirm("Send overdue payment reminders now? Emails will go out to clients whose invoices are 1, 7, 14 or 30 days overdue.")) return;
+    if (!dryRun && !window.confirm("Send payment reminders now? Emails will go out to clients whose invoices are due within 3 days, or 1, 7, 14 or 30 days overdue.")) return;
     setReminderRunning(true);
     setReminderResult(null);
     try {
@@ -1383,7 +1383,7 @@ function BusinessSettings({ s, accent, biz, session, profile, profiles, activeCo
       {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
         <>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-          Overdue reminders send automatically each day at 1, 7, 14 and 30 days overdue, emailed from noreply@mworxgroup.com.au under {f.name || "this company"}'s name and logo; replies go to {f.email || "the email address above"}. Each reminder is only ever sent once — nothing for you to do.
+          Reminders send automatically each day: a courtesy note 3 days before the due date, then at 1, 7, 14 and 30 days overdue. They go out from noreply@mworxgroup.com.au under {f.name || "this company"}'s name and logo; replies go to {f.email || "the email address above"}. Each reminder is only ever sent once — nothing for you to do.
         </div>
         {/* Manual Preview / Send Now controls hidden per preference; the daily
             automatic reminders still run. Flip to true to bring them back. */}
