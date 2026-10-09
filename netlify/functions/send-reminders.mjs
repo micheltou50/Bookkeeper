@@ -59,6 +59,14 @@ function resolveRuntime() {
 }
 
 const THRESHOLDS = [1, 7, 14, 30];
+// A courtesy note before the due date (what MYOB's "before due" reminder does).
+// Logged under threshold -3 so the (invoice_id, threshold) dedup applies to it
+// like any other, and it is only ever sent once per invoice.
+const DUE_SOON_DAYS = 3;
+const DUE_SOON_THRESHOLD = -DUE_SOON_DAYS;
+// Don't nag about an invoice that only just went out: if it was sent within
+// this window the invoice email itself was the heads-up.
+const DUE_SOON_MIN_AGE_MS = 2 * 24 * 60 * 60 * 1000;
 const BUSINESS_TZ = process.env.BUSINESS_TIMEZONE || "Australia/Sydney";
 // Absolute base for pay links embedded in emails (the recipient's browser has
 // no API_BASE). Netlify sets URL in production; fall back to the known domain.
@@ -98,12 +106,37 @@ function daysOverdueFor(dueDate) {
   return Math.round((a - b) / 86400000);
 }
 
+// YYYY-MM-DD plus a number of days, in the same calendar-day arithmetic as
+// daysOverdueFor (UTC midnights, so no DST drift).
+function addDaysStr(ymd, days) {
+  const d = new Date(String(ymd).slice(0, 10) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // The highest threshold that has been reached (item 5): if a cron day was
 // missed, the next run still sends the highest unsent threshold <= daysOverdue.
-function applicableThreshold(daysOverdue) {
+// Negative daysOverdue = not yet due: inside the courtesy window (1–3 days
+// before the due date) that is the "due soon" reminder; on the due date itself
+// nothing goes out — the "1 day overdue" reminder follows the next morning.
+function applicableThreshold(daysOverdue, inv) {
+  if (daysOverdue < 0) {
+    if (daysOverdue < -DUE_SOON_DAYS) return null;
+    if (inv?.sent_at && Date.now() - new Date(inv.sent_at).getTime() < DUE_SOON_MIN_AGE_MS) return null;
+    return DUE_SOON_THRESHOLD;
+  }
   let best = null;
   for (const t of THRESHOLDS) if (t <= daysOverdue) best = t;
   return best;
+}
+
+// Subject line for the scheduled and on-demand sends alike.
+function reminderSubject(inv, profile, daysOverdue) {
+  const docType = inv.type === "quote" ? "Quote" : "Invoice";
+  const from = profile.name || "Our company";
+  if (daysOverdue > 0) return `Reminder: ${docType} ${inv.number} from ${from} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
+  if (daysOverdue === 0) return `Reminder: ${docType} ${inv.number} from ${from} — due today`;
+  return `Reminder: ${docType} ${inv.number} from ${from} — due ${fmtDate(inv.due_date)}`;
 }
 
 // --- Email sending (Resend) ---------------------------------------------------
@@ -212,9 +245,9 @@ function buildReminderHTML(inv, profile, daysOverdue) {
 
       <div style="padding:0 36px 32px">
         <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1e293b">Payment Reminder</h1>
-        <p style="margin:0 0 24px;font-size:14px;color:#64748b">${docType} ${esc(inv.number)} ${daysOverdue > 0 ? `is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue` : "— payment reminder"}</p>
+        <p style="margin:0 0 24px;font-size:14px;color:#64748b">${docType} ${esc(inv.number)} ${daysOverdue > 0 ? `is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue` : daysOverdue === 0 ? "is due today" : `is due in ${-daysOverdue} day${daysOverdue === -1 ? "" : "s"}`}</p>
 
-        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:20px 24px;margin-bottom:24px">
+        <div style="background:${daysOverdue > 0 ? "#fef2f2" : "#f8fafc"};border:1px solid ${daysOverdue > 0 ? "#fecaca" : "#e2e8f0"};border-radius:8px;padding:20px 24px;margin-bottom:24px">
           <table style="width:100%;font-size:14px">
             <tr>
               <td style="color:#64748b;padding-bottom:8px">${docType} Number</td>
@@ -222,7 +255,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
             </tr>
             <tr>
               <td style="color:#64748b;padding-bottom:8px">Due Date</td>
-              <td style="text-align:right;font-weight:600;color:#ef4444;padding-bottom:8px">${fmtDate(inv.due_date)}</td>
+              <td style="text-align:right;font-weight:600;color:${daysOverdue > 0 ? "#ef4444" : "#1e293b"};padding-bottom:8px">${fmtDate(inv.due_date)}</td>
             </tr>
             <tr>
               <td style="color:#64748b">Amount Due</td>
@@ -235,7 +268,7 @@ function buildReminderHTML(inv, profile, daysOverdue) {
           Hi ${esc(firstName(inv.contact_name) || "there")},
         </p>
         <p style="font-size:14px;color:#334155;line-height:1.7;margin:0 0 24px">
-          This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> ${daysOverdue > 0 ? `was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago)` : `is due on <strong>${fmtDate(inv.due_date)}</strong>`}. We'd appreciate prompt payment at your earliest convenience.
+          This is a friendly reminder that ${docType.toLowerCase()} <strong>${esc(inv.number)}</strong> for <strong>${total}</strong> ${daysOverdue > 0 ? `was due on <strong>${fmtDate(inv.due_date)}</strong> (${daysOverdue} day${daysOverdue === 1 ? "" : "s"} ago)` : daysOverdue === 0 ? `is due <strong>today</strong>, ${fmtDate(inv.due_date)}` : `is due on <strong>${fmtDate(inv.due_date)}</strong> (in ${-daysOverdue} day${daysOverdue === -1 ? "" : "s"})`}. ${daysOverdue > 0 ? "We'd appreciate prompt payment at your earliest convenience." : "This is just a courtesy note ahead of the due date — no action is needed if payment is already on its way."}
         </p>
 
         ${payHTML}
@@ -318,7 +351,7 @@ async function setLogStatus(id, status, detail) {
 // Returns { threshold, disposition } where disposition is one of:
 // skipped_not_due | already_sent | in_progress | will_send | failed_retryable
 function classify(inv, daysOverdue, logRow) {
-  const threshold = applicableThreshold(daysOverdue);
+  const threshold = applicableThreshold(daysOverdue, inv);
   if (!threshold) return { threshold: null, disposition: "skipped_not_due" };
   if (!logRow) return { threshold, disposition: "will_send" };
   if (logRow.status === "sent") return { threshold, disposition: "already_sent" };
@@ -342,7 +375,7 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
     .in("status", ["sent", "overdue"])
     .not("due_date", "is", null)
     .not("contact_email", "is", null)
-    .lt("due_date", todayStr);
+    .lte("due_date", addDaysStr(todayStr, DUE_SOON_DAYS)); // overdue, due today, or due within the courtesy window
   if (userId) query = query.eq("user_id", userId);
   if (businessId) query = query.eq("business_id", businessId);
 
@@ -373,7 +406,7 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
     const profile = profileMap[`${inv.user_id}|${companyOf(inv)}`] || profileMap[`${inv.user_id}|${inv.business_id}`] || {};
 
     // What threshold applies, and has it already been handled?
-    const probe = applicableThreshold(daysOverdue);
+    const probe = applicableThreshold(daysOverdue, inv);
     let logRow = null;
     if (probe) {
       const { data } = await supabase
@@ -419,7 +452,7 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
     if (!claimId) { skipped++; continue; }
 
     const html = buildReminderHTML(inv, profile, daysOverdue);
-    const subject = `Reminder: ${inv.type === "quote" ? "Quote" : "Invoice"} ${inv.number} from ${profile.name || "Our company"} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
+    const subject = reminderSubject(inv, profile, daysOverdue);
 
     const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: profile.name, replyTo: profile.email });
 
@@ -452,8 +485,7 @@ async function sendOneReminder({ invoiceId, userId }) {
 
   const daysOverdue = inv.due_date ? daysOverdueFor(inv.due_date) : 0;
   const html = buildReminderHTML(inv, prof, daysOverdue);
-  const overdueLabel = daysOverdue > 0 ? ` — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue` : "";
-  const subject = `Reminder: Invoice ${inv.number} from ${prof.name || "Our company"}${overdueLabel}`;
+  const subject = reminderSubject(inv, prof, daysOverdue);
 
   const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: prof.name, replyTo: prof.email });
   if (!res.ok) return { ok: false, status: 502, message: res.detail || "Send failed" };
