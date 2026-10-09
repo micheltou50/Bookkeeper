@@ -2,6 +2,7 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { createClient } from "@supabase/supabase-js";
 import { wrapCors } from './lib/cors.mjs';
+import { loadCompanyProfile } from "./lib/company.mjs";
 // The document layout is shared with the in-app preview, so what you see on
 // screen is what Chromium prints here — page breaks, footer and all.
 import { buildDocHTML } from "../../src/lib/doc-html.mjs";
@@ -102,13 +103,9 @@ const handler = async (req) => {
     .eq("invoice_id", invoice_id)
     .order("sort_order");
 
-  // Fetch profile
-  const { data: profile } = await supabase
-    .from("bk_profiles")
-    .select("*")
-    .eq("user_id", inv.user_id)
-    .eq("business_id", inv.business_id)
-    .single();
+  // The document's own company (its division) supplies the letterhead — logo,
+  // ABN, bank details, tagline — not the tenant row.
+  const profile = await loadCompanyProfile(supabase, inv.user_id, inv);
 
   // Fetch logo as base64
   const logoDataUrl = await fetchLogoBase64(profile?.logo_url);

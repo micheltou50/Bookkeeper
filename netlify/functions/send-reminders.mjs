@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { wrapCors } from './lib/cors.mjs';
+import { companyOf, loadCompanyProfile } from "./lib/company.mjs";
 import { CARD_PAYMENTS_VISIBLE } from '../../src/lib/card-payments.mjs';
 
 // Resolve ALL configuration from environment at request time. No hardcoded
@@ -118,7 +119,7 @@ async function fetchWithTimeout(url, options, ms = 12000) {
 }
 
 // Send via Resend. Returns { ok: true } or { ok: false, detail } — never throws.
-async function sendViaResend({ to, toName, subject, html, fromName }) {
+async function sendViaResend({ to, toName, subject, html, fromName, replyTo }) {
   if (!RESEND_API_KEY) return { ok: false, detail: "RESEND_API_KEY not set" };
   try {
     const resp = await fetchWithTimeout("https://api.resend.com/emails", {
@@ -126,6 +127,8 @@ async function sendViaResend({ to, toName, subject, html, fromName }) {
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: `${fromName || "Accounts"} <${REMINDER_FROM_EMAIL}>`,
+        // Replies go to the company's own address, not the no-reply sender.
+        ...(replyTo ? { reply_to: replyTo } : {}),
         to: [to],
         // Blind-copy the monitoring inbox so there's always a reviewable record
         // of the exact email + recipient. Skip it when the recipient IS the BCC
@@ -166,7 +169,7 @@ async function resolveLogoUrl(logoUrl) {
 function buildReminderHTML(inv, profile, daysOverdue) {
   const bName = profile.name || "Our company";
   const docType = inv.type === "quote" ? "Quote" : "Invoice";
-  const accent = profile.business_id === "mworx" ? "#0d9488" : "#0f766e";
+  const accent = profile.accent || (profile.business_id === "mworx" ? "#0d9488" : "#0f766e");
   const total = fmtAUD(inv.total || 0);
 
   const logoHTML = profile.logo_url
@@ -366,7 +369,8 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
     if (inv.type === "quote") continue; // quotes don't get payment reminders
 
     const daysOverdue = daysOverdueFor(inv.due_date);
-    const profile = profileMap[`${inv.user_id}|${inv.business_id}`] || {};
+    // The invoice's company (division) first; the tenant row for pre-0025 data.
+    const profile = profileMap[`${inv.user_id}|${companyOf(inv)}`] || profileMap[`${inv.user_id}|${inv.business_id}`] || {};
 
     // What threshold applies, and has it already been handled?
     const probe = applicableThreshold(daysOverdue);
@@ -417,7 +421,7 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
     const html = buildReminderHTML(inv, profile, daysOverdue);
     const subject = `Reminder: ${inv.type === "quote" ? "Quote" : "Invoice"} ${inv.number} from ${profile.name || "Our company"} — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`;
 
-    const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: profile.name });
+    const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: profile.name, replyTo: profile.email });
 
     if (res.ok) {
       sent++;
@@ -442,7 +446,7 @@ async function sendOneReminder({ invoiceId, userId }) {
   if (!inv.contact_email) return { ok: false, status: 400, message: "This invoice has no contact email" };
   if (!RESEND_API_KEY) return { ok: false, status: 500, message: "Email sending not configured (RESEND_API_KEY missing in Netlify)." };
 
-  const { data: profile } = await supabase.from("bk_profiles").select("*").eq("user_id", inv.user_id).eq("business_id", inv.business_id).maybeSingle();
+  const profile = await loadCompanyProfile(supabase, inv.user_id, inv);
   const prof = profile || {};
   if (prof.logo_url) prof.logo_url = await resolveLogoUrl(prof.logo_url);
 
@@ -451,7 +455,7 @@ async function sendOneReminder({ invoiceId, userId }) {
   const overdueLabel = daysOverdue > 0 ? ` — ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue` : "";
   const subject = `Reminder: Invoice ${inv.number} from ${prof.name || "Our company"}${overdueLabel}`;
 
-  const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: prof.name });
+  const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: prof.name, replyTo: prof.email });
   if (!res.ok) return { ok: false, status: 502, message: res.detail || "Send failed" };
   await writeLog(inv, 0, "sent", "manual send"); // threshold 0 = manual, on-demand
   return { ok: true, status: 200, sent_to: inv.contact_email };

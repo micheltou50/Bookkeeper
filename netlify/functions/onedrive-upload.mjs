@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 import { wrapCors } from './lib/cors.mjs';
+import { loadCompanyProfile, loadCompanyConnection } from "./lib/company.mjs";
 
 // File an invoice/quote PDF into its project folder in the user's OneDrive, or
 // create the project folder itself. Receipt filing lived here too until MYOB
@@ -310,13 +311,14 @@ const handler = async (req) => {
   const { data: { user } } = await userClient.auth.getUser(authToken);
   if (!user) return json({ error: "Unauthorized" }, 401);
 
-  let businessId, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
+  let businessId, ownerRow, fileBuffer, fileName, contentType, jobNumber, jobLabel, fallbackName;
   let docSubfolder = null; // "Quotes" | "Invoices" — Admin subfolder for kind "invoice"
 
   if (kind === "invoice") {
     let { data: inv } = await supabase.from("bk_invoices").select("*").eq("id", id).single();
     if (!inv || inv.user_id !== user.id) return json({ error: "Invoice not found" }, 404);
     businessId = inv.business_id;
+    ownerRow = inv;
     if (!inv.pdf_path) {
       const gen = await fetchWithTimeout(`${APP_URL}/.netlify/functions/generate-invoice-pdf`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -343,6 +345,7 @@ const handler = async (req) => {
     const { data: job } = await supabase.from("bk_jobs").select("*").eq("id", id).single();
     if (!job || job.user_id !== user.id) return json({ error: "Project not found" }, 404);
     businessId = job.business_id;
+    ownerRow = job;
     jobNumber = job.job_number;
     jobLabel = job.address || job.name;
     fallbackName = sanitize(job.name || `Project ${id}`);
@@ -350,8 +353,9 @@ const handler = async (req) => {
     return json({ error: "Unknown kind" }, 400);
   }
 
-  const { data: conn } = await supabase.from("bk_email_connections")
-    .select("*").eq("user_id", user.id).eq("business_id", businessId).eq("provider", "outlook").single();
+  // Filing goes to OneDrive, and there is one drive however many companies send
+  // mail — prefer the document's company's connection, accept any of the user's.
+  const conn = await loadCompanyConnection(supabase, user.id, ownerRow, { fallbackToAny: true });
   if (!conn) return json({ error: "Connect Microsoft in Settings first" }, 400);
 
   let accessToken, refreshTok;
@@ -365,8 +369,10 @@ const handler = async (req) => {
     if (!accessToken) return json({ error: "Reconnect Microsoft in Settings" }, 401);
   }
 
-  const { data: profile } = await supabase.from("bk_profiles").select("onedrive_folder").eq("user_id", user.id).eq("business_id", businessId).maybeSingle();
-  const projectsBase = (profile?.onedrive_folder || "Mworx Group").trim();
+  // Each company files under its own base folder (Settings → Saving Locations);
+  // a company that hasn't set one gets a folder named after itself.
+  const profile = await loadCompanyProfile(supabase, user.id, ownerRow);
+  const projectsBase = (profile?.onedrive_folder || profile?.name || "Mworx Group").trim();
 
   const run = async (tok) => {
     if (kind === "project") {
