@@ -454,7 +454,7 @@ export async function runReminders({ dryRun, userId = null, businessId = null })
     const html = buildReminderHTML(inv, profile, daysOverdue);
     const subject = reminderSubject(inv, profile, daysOverdue);
 
-    const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: profile.name, replyTo: profile.email });
+    const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: profile.name, replyTo: profile.reminder_reply_to || profile.email });
 
     if (res.ok) {
       sent++;
@@ -487,7 +487,7 @@ async function sendOneReminder({ invoiceId, userId }) {
   const html = buildReminderHTML(inv, prof, daysOverdue);
   const subject = reminderSubject(inv, prof, daysOverdue);
 
-  const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: prof.name, replyTo: prof.email });
+  const res = await sendViaResend({ to: inv.contact_email, toName: inv.contact_name, subject, html, fromName: prof.name, replyTo: prof.reminder_reply_to || prof.email });
   if (!res.ok) return { ok: false, status: 502, message: res.detail || "Send failed" };
   await writeLog(inv, 0, "sent", "manual send"); // threshold 0 = manual, on-demand
   return { ok: true, status: 200, sent_to: inv.contact_email };
