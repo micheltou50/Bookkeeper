@@ -3,6 +3,7 @@ import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabaseClient";
 import { CARD_PAYMENTS_VISIBLE } from "./lib/card-payments.mjs";
 import { buildDocHTML, isPageBreak, PAGE_BREAK, scopeTextToItems, itemsToScopeText } from "./lib/doc-html.mjs";
+import { createVault, unlockVault, changeVaultPassphrase, encryptJson, decryptJson, passphraseStrength, generatePassword, WrongPassphraseError } from "./lib/vault-crypto.mjs";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://bkeeper.netlify.app" : "";
 
@@ -30,7 +31,7 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts" };
+const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts", vault: "Vault" };
 
 
 // One legal entity in Supabase (business_id = 'mworx'). All existing Mworx
@@ -649,6 +650,11 @@ const Icons = {
   ChevronLeft: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
   ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>,
   Filter: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
+  Lock: ({ size = 18 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>,
+  Unlock: ({ size = 18 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 019.9-1"/></svg>,
+  EyeOff: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><path d="M1 1l22 22"/></svg>,
+  Copy: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>,
+  Key: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></svg>,
 };
 
 // Mworx brand mark — two green triangles meeting at the centre on a black tile,
@@ -1283,6 +1289,536 @@ function BusinessSettings({ s, accent, biz, session, profile, saveProfile, email
         <ChangePasswordForm s={s} accent={accent} />
       ))}
       <button onClick={() => saveProfile(f)} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", marginTop: 4 }}>Save Settings</button>
+    </div>
+  );
+}
+
+// ═══ VAULT ═══════════════════════════════════════════════════════════════════
+// An encrypted safe for the business's own secrets — ASIC corporate key, ATO /
+// myGovID logins, bank portals, insurance policies, software licences. Every
+// entry is encrypted in the browser under a passphrase that never leaves it, so
+// Supabase (and anyone holding the database) only ever sees ciphertext. The
+// scheme lives in src/lib/vault-crypto.mjs.
+//
+// Module scope for the same reason as BusinessSettings: declared inside App it
+// would be a fresh type on every App render, remounting and dropping the
+// in-memory data key — the vault would lock itself whenever anything else in
+// the app changed state. It is also rendered directly rather than through
+// pageMap for the same reason.
+
+const VAULT_CATEGORIES = ["Government", "Banking", "Insurance", "Software", "Business IDs", "Other"];
+const VAULT_CATEGORY_COLOR = { Government: "#3b82f6", Banking: "#34d399", Insurance: "#f59e0b", Software: "#8b5cf6", "Business IDs": "#64748b", Other: "#64748b" };
+const VAULT_AUTOLOCK_MS = 5 * 60 * 1000;
+const VAULT_MIN_PASSPHRASE = 10;
+const VAULT_MASK = "••••••••••••";
+const EMPTY_VAULT_ITEM = { title: "", category: "Government", username: "", secret: "", url: "", notes: "", fields: [] };
+const vaultIconBtn = { background: "none", border: "none", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, padding: 0, flexShrink: 0 };
+const vaultMono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const vaultUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
+const vaultDate = (iso) => (iso ? new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "");
+
+function VaultStrengthMeter({ value }) {
+  if (!value) return null;
+  const n = passphraseStrength(value);
+  const colors = ["#e2e8f0", "#ef4444", "#f59e0b", "#34d399", "#059669"];
+  const labels = ["Too short", "Too weak", "Weak", "Good", "Strong"];
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", gap: 4 }}>
+        {[1, 2, 3, 4].map((i) => <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: i <= n ? colors[n] : "#e2e8f0", transition: "background .15s" }} />)}
+      </div>
+      <div style={{ fontSize: 10, color: n >= 3 ? "#059669" : "#64748b", marginTop: 4 }}>
+        {labels[n]}{value.length < VAULT_MIN_PASSPHRASE ? ` · at least ${VAULT_MIN_PASSPHRASE} characters` : ""}
+      </div>
+    </div>
+  );
+}
+
+// One row of an unlocked entry: label, value (masked while sensitive), reveal + copy.
+function VaultField({ label, value, sensitive, link, revealed, onToggle, onCopy, copied, stacked }) {
+  if (!value) return null;
+  const hidden = sensitive && !revealed;
+  const valueEl = link && !sensitive
+    ? <a href={vaultUrl(value)} target="_blank" rel="noreferrer" style={{ color: "#2563eb", overflowWrap: "anywhere" }}>{value}</a>
+    : <span style={{ fontFamily: sensitive ? vaultMono : undefined, letterSpacing: hidden ? "0.08em" : undefined, overflowWrap: "anywhere", whiteSpace: "pre-wrap", userSelect: hidden ? "none" : "text" }}>{hidden ? VAULT_MASK : value}</span>;
+  return (
+    <div style={{ display: "flex", flexDirection: stacked ? "column" : "row", alignItems: stacked ? "stretch" : "center", gap: stacked ? 2 : 10, padding: "8px 0", borderBottom: "1px solid #f1f5f9" }}>
+      <div style={{ width: stacked ? "auto" : 130, flexShrink: 0, fontSize: 10, fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 2, flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#0f172a" }}>{valueEl}</div>
+        {sensitive && <button type="button" onClick={onToggle} title={revealed ? "Hide" : "Reveal"} style={vaultIconBtn}>{revealed ? <Icons.EyeOff /> : <Icons.Eye />}</button>}
+        <button type="button" onClick={onCopy} title="Copy" style={{ ...vaultIconBtn, color: copied ? "#059669" : "#94a3b8" }}>{copied ? <Icons.Check /> : <Icons.Copy />}</button>
+      </div>
+    </div>
+  );
+}
+
+// A decrypted entry in the list: collapsed header row, expands to show every field.
+function VaultEntry({ item, s, expanded, onToggle, onEdit, onDelete, revealed, onReveal, onCopy, copied, stacked }) {
+  const color = VAULT_CATEGORY_COLOR[item.category] || "#64748b";
+  const rows = [
+    { key: "username", label: "Username / email", value: item.username },
+    { key: "secret", label: "Password / key", value: item.secret, sensitive: true },
+    { key: "url", label: "Website", value: item.url, link: true },
+    ...(item.fields || []).map((f, i) => ({ key: `f${i}`, label: f.label || "Field", value: f.value, sensitive: !!f.secret })),
+    { key: "notes", label: "Notes", value: item.notes },
+  ];
+  return (
+    <div style={{ borderBottom: "1px solid #f1f5f9" }}>
+      <button type="button" onClick={onToggle} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "11px 4px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+        <span style={{ width: 8, height: 8, borderRadius: 4, background: color, flexShrink: 0 }} />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || "Untitled"}</span>
+          {(item.username || item.url) && <span style={{ display: "block", fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 1 }}>{item.username || item.url}</span>}
+        </span>
+        {!stacked && <span style={s.badge(color)}>{item.category}</span>}
+        <span style={{ color: "#94a3b8", display: "inline-flex", transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s" }}><Icons.ChevronRight /></span>
+      </button>
+      {expanded && (
+        <div style={{ padding: stacked ? "0 4px 12px" : "0 4px 12px 22px" }}>
+          {item.corrupt ? (
+            <div style={{ fontSize: 12, color: "#991b1b", padding: "6px 0" }}>This entry could not be decrypted. It was probably saved under a different passphrase.</div>
+          ) : rows.map((r) => {
+            const tag = `${item.id}:${r.key}`;
+            return (
+              <VaultField key={r.key} label={r.label} value={r.value} sensitive={r.sensitive} link={r.link} stacked={stacked}
+                revealed={!!revealed[tag]} onToggle={() => onReveal(tag)} onCopy={() => onCopy(r.value, tag)} copied={copied === tag} />
+            );
+          })}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#94a3b8", flex: 1 }}>Updated {vaultDate(item.updated_at)}</span>
+            <button type="button" onClick={onDelete} style={{ ...s.btnOutline, color: "#b91c1c", display: "inline-flex", alignItems: "center", gap: 5 }}><Icons.Trash /> Delete</button>
+            {!item.corrupt && <button type="button" onClick={onEdit} style={{ ...s.btnOutline, display: "inline-flex", alignItems: "center", gap: 5 }}><Icons.Edit /> Edit</button>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Add / edit one entry. Plaintext only ever lives in this form's state and the
+// parent's decrypted list; onSave encrypts before anything is written.
+function VaultItemForm({ existing, s, accent, isMobile, onSave, onClose }) {
+  const initial = existing
+    ? { title: existing.title || "", category: existing.category || "Other", username: existing.username || "", secret: existing.secret || "", url: existing.url || "", notes: existing.notes || "", fields: (existing.fields || []).map((x) => ({ label: x.label || "", value: x.value || "", secret: !!x.secret, show: false })) }
+    : { ...EMPTY_VAULT_ITEM };
+  const [f, setF] = useState(initial);
+  const snapshot = useRef(JSON.stringify(initial));
+  const [showSecret, setShowSecret] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF((v) => ({ ...v, [k]: e.target.value }));
+  const setField = (i, patch) => setF((v) => ({ ...v, fields: v.fields.map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
+  const addField = () => setF((v) => ({ ...v, fields: [...v.fields, { label: "", value: "", secret: false, show: false }] }));
+  const removeField = (i) => setF((v) => ({ ...v, fields: v.fields.filter((_, j) => j !== i) }));
+  const close = () => { if (JSON.stringify(f) !== snapshot.current && !window.confirm("Discard changes to this entry?")) return; onClose(); };
+  const save = async () => {
+    if (!f.title.trim()) { alert("Give this entry a title."); return; }
+    setSaving(true);
+    const plain = {
+      title: f.title.trim(),
+      category: VAULT_CATEGORIES.includes(f.category) ? f.category : "Other",
+      username: f.username.trim(),
+      secret: f.secret,
+      url: f.url.trim(),
+      notes: f.notes,
+      fields: f.fields.filter((x) => x.label.trim() || x.value.trim()).map((x) => ({ label: x.label.trim(), value: x.value, secret: !!x.secret })),
+    };
+    const ok = await onSave(plain, existing?.id || null);
+    setSaving(false);
+    if (ok) onClose();
+  };
+  const panel = isMobile
+    ? { ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }
+    : s.modalContent;
+  return (
+    <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div className="bk-modal" style={panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{existing ? "Edit entry" : "New vault entry"}</h3>
+          <button type="button" onClick={close} style={{ ...vaultIconBtn, width: 32, height: 32, borderRadius: 8, color: "#64748b" }}><Icons.X /></button>
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={s.label}>Title</label>
+          <input value={f.title} onChange={set("title")} autoFocus placeholder="e.g. ASIC Corporate Key, ATO Business Portal" autoComplete="off" style={s.input} />
+        </div>
+        <div style={{ ...s.grid2, gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", marginBottom: 10 }}>
+          <div>
+            <label style={s.label}>Category</label>
+            <select value={f.category} onChange={set("category")} style={s.select}>{VAULT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          </div>
+          <div>
+            <label style={s.label}>Website</label>
+            <input value={f.url} onChange={set("url")} placeholder="e.g. connectonline.asic.gov.au" autoComplete="off" spellCheck={false} style={s.input} />
+          </div>
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={s.label}>Username / email</label>
+          <input value={f.username} onChange={set("username")} placeholder="Login name, email or client ID" autoComplete="off" spellCheck={false} style={s.input} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={s.label}>Password / key</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input type={showSecret ? "text" : "password"} value={f.secret} onChange={set("secret")} placeholder="Password, corporate key, PIN…" autoComplete="new-password" spellCheck={false} style={{ ...s.input, fontFamily: showSecret ? vaultMono : undefined }} />
+            <button type="button" onClick={() => setShowSecret((v) => !v)} title={showSecret ? "Hide" : "Show"} style={{ ...s.btnOutline, padding: "0 10px", display: "inline-flex", alignItems: "center" }}>{showSecret ? <Icons.EyeOff /> : <Icons.Eye />}</button>
+            <button type="button" onClick={() => { setF((v) => ({ ...v, secret: generatePassword(20) })); setShowSecret(true); }} title="Generate a strong random password" style={{ ...s.btnOutline, padding: "0 10px", whiteSpace: "nowrap" }}>Generate</button>
+          </div>
+        </div>
+        {f.fields.length > 0 && (
+          <div style={{ marginBottom: 6 }}>
+            <label style={s.label}>Extra fields</label>
+            {f.fields.map((x, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                <input value={x.label} onChange={(e) => setField(i, { label: e.target.value })} placeholder="Label (e.g. ACN)" autoComplete="off" style={{ ...s.input, flex: "0 0 34%" }} />
+                <input type={x.secret && !x.show ? "password" : "text"} value={x.value} onChange={(e) => setField(i, { value: e.target.value })} placeholder="Value" autoComplete="off" spellCheck={false} style={{ ...s.input, flex: 1, fontFamily: x.secret && x.show ? vaultMono : undefined }} />
+                <button type="button" onClick={() => setField(i, { secret: !x.secret, show: false })} title={x.secret ? "Sensitive — masked until revealed. Click to show in plain text." : "Plain text. Click to mask it like a password."} style={{ ...vaultIconBtn, color: x.secret ? accent : "#cbd5e1" }}>{x.secret ? <Icons.Lock size={15} /> : <Icons.Unlock size={15} />}</button>
+                {x.secret && <button type="button" onClick={() => setField(i, { show: !x.show })} title={x.show ? "Hide" : "Show"} style={vaultIconBtn}>{x.show ? <Icons.EyeOff /> : <Icons.Eye />}</button>}
+                <button type="button" onClick={() => removeField(i)} title="Remove field" style={vaultIconBtn}><Icons.X /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <button type="button" onClick={addField} style={{ ...s.btnOutline, marginBottom: 12, display: "inline-flex", alignItems: "center", gap: 5 }}><Icons.Plus /> Add field</button>
+        <div style={{ marginBottom: 14 }}>
+          <label style={s.label}>Notes</label>
+          <textarea value={f.notes} onChange={set("notes")} rows={3} placeholder="Security questions, renewal dates, who else has access…" style={{ ...s.input, resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" onClick={close} style={s.btnOutline}>Cancel</button>
+          <button type="button" onClick={save} disabled={saving} style={{ ...s.btn(accent), opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : existing ? "Save changes" : "Add to vault"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Change the vault passphrase. Only the wrapped data key is rewritten — the
+// entries themselves are untouched, so this is instant regardless of size.
+function VaultPassphraseForm({ s, accent, isMobile, onChange, onClose }) {
+  const [oldP, setOldP] = useState("");
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const submit = async () => {
+    setMsg(null);
+    if (p1.length < VAULT_MIN_PASSPHRASE) { setMsg(`Use at least ${VAULT_MIN_PASSPHRASE} characters.`); return; }
+    if (p1 !== p2) { setMsg("The new passphrases don't match."); return; }
+    setBusy(true);
+    try {
+      await onChange(oldP, p1);
+      setBusy(false);
+      onClose();
+    } catch (e) {
+      setBusy(false);
+      setMsg(e instanceof WrongPassphraseError ? "Current passphrase is incorrect." : e.message || "Could not change the passphrase.");
+    }
+  };
+  const panel = isMobile
+    ? { ...s.modalContent, maxWidth: "100%", borderRadius: "16px 16px 0 0", position: "fixed", bottom: 0, left: 0, right: 0, maxHeight: "90vh", overflowY: "auto" }
+    : { ...s.modalContent, maxWidth: 440 };
+  const disabled = busy || !oldP || !p1 || !p2;
+  return (
+    <div className="bk-overlay" style={s.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bk-modal" style={panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Change vault passphrase</h3>
+          <button type="button" onClick={onClose} style={{ ...vaultIconBtn, width: 32, height: 32, borderRadius: 8, color: "#64748b" }}><Icons.X /></button>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12, lineHeight: 1.5 }}>Your entries stay exactly as they are — only the key that protects them is re-wrapped. As before, the new passphrase is never sent anywhere and cannot be recovered if forgotten.</div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={s.label}>Current passphrase</label>
+          <input type={show ? "text" : "password"} value={oldP} onChange={(e) => setOldP(e.target.value)} autoComplete="current-password" autoFocus style={s.input} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={s.label}>New passphrase</label>
+          <input type={show ? "text" : "password"} value={p1} onChange={(e) => setP1(e.target.value)} autoComplete="new-password" style={s.input} />
+          <VaultStrengthMeter value={p1} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={s.label}>Confirm new passphrase</label>
+          <input type={show ? "text" : "password"} value={p2} onChange={(e) => setP2(e.target.value)} autoComplete="new-password" onKeyDown={(e) => e.key === "Enter" && !disabled && submit()} style={s.input} />
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#64748b", marginBottom: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show passphrases
+        </label>
+        {msg && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 10 }}>{msg}</div>}
+        <button type="button" onClick={submit} disabled={disabled} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: disabled ? 0.5 : 1 }}>{busy ? "Updating…" : "Update passphrase"}</button>
+      </div>
+    </div>
+  );
+}
+
+function VaultPage({ s, accent, session, isMobile }) {
+  const [vault, setVault] = useState(undefined);   // undefined = loading · null = not set up · row = exists
+  const [rows, setRows] = useState([]);            // ciphertext rows straight from bk_vault_items
+  const [items, setItems] = useState(null);        // decrypted entries while unlocked, else null
+  const dataKeyRef = useRef(null);                 // the live AES key — memory only, never persisted
+  const [pass, setPass] = useState("");
+  const [pass2, setPass2] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetWord, setResetWord] = useState("");
+  const [query, setQuery] = useState("");
+  const [cat, setCat] = useState("all");
+  const [expanded, setExpanded] = useState(null);
+  const [revealed, setRevealed] = useState({});
+  const [copied, setCopied] = useState(null);
+  const [editing, setEditing] = useState(null);    // null · "new" · item
+  const [passOpen, setPassOpen] = useState(false);
+  const lockTimer = useRef(null);
+  const userId = session?.user?.id;
+  const unlocked = !!items;
+
+  const load = useCallback(async () => {
+    const { data: v, error } = await supabase.from("bk_vaults").select("*").eq("business_id", COMPANY.id).maybeSingle();
+    if (error) {
+      console.error("vault load failed", error);
+      setErr(/bk_vaults/.test(error.message || "") && /not find|does not exist/i.test(error.message || "") ? "The vault tables aren't set up yet — apply supabase/migrations/0024_vault.sql in Supabase first." : error.message);
+      setVault(null);
+      return;
+    }
+    setVault(v || null);
+    if (v) {
+      const { data: its, error: e2 } = await supabase.from("bk_vault_items").select("*").eq("vault_id", v.id).order("created_at", { ascending: false });
+      if (e2) { console.error("vault items load failed", e2); setErr(e2.message); }
+      setRows(its || []);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const lock = useCallback(() => {
+    dataKeyRef.current = null;
+    setItems(null); setRevealed({}); setExpanded(null); setEditing(null); setPassOpen(false); setCopied(null);
+    setPass(""); setPass2(""); setErr(null);
+  }, []);
+
+  // Auto-lock after VAULT_AUTOLOCK_MS without a click or keypress, and always on
+  // unmount (leaving the page, signing out) so the data key never outlives it.
+  useEffect(() => {
+    if (!unlocked) return undefined;
+    const bump = () => { clearTimeout(lockTimer.current); lockTimer.current = setTimeout(lock, VAULT_AUTOLOCK_MS); };
+    bump();
+    const evs = ["pointerdown", "keydown", "touchstart"];
+    evs.forEach((e) => window.addEventListener(e, bump, { passive: true }));
+    return () => { clearTimeout(lockTimer.current); evs.forEach((e) => window.removeEventListener(e, bump)); };
+  }, [unlocked, lock]);
+  useEffect(() => () => { dataKeyRef.current = null; }, []);
+
+  const decryptAll = async (key, src) => {
+    const out = [];
+    for (const r of src) {
+      try {
+        out.push({ ...EMPTY_VAULT_ITEM, ...(await decryptJson(key, r.ciphertext)), id: r.id, created_at: r.created_at, updated_at: r.updated_at });
+      } catch (e) {
+        console.error("vault item unreadable", r.id, e);
+        out.push({ ...EMPTY_VAULT_ITEM, id: r.id, created_at: r.created_at, updated_at: r.updated_at, title: "Unreadable entry", category: "Other", corrupt: true });
+      }
+    }
+    return out;
+  };
+
+  const create = async () => {
+    setErr(null);
+    if (pass.length < VAULT_MIN_PASSPHRASE) { setErr(`Use at least ${VAULT_MIN_PASSPHRASE} characters — a few words you'll remember works well.`); return; }
+    if (pass !== pass2) { setErr("The two passphrases don't match."); return; }
+    setBusy(true);
+    try {
+      const { row, dataKey } = await createVault(pass);
+      const { data, error } = await supabase.from("bk_vaults").insert({ user_id: userId, business_id: COMPANY.id, ...row }).select().single();
+      if (error) throw error;
+      dataKeyRef.current = dataKey;
+      setVault(data); setRows([]); setItems([]); setPass(""); setPass2("");
+    } catch (e) {
+      setErr(e.message || "Could not create the vault.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unlock = async () => {
+    if (!pass) return;
+    setErr(null); setBusy(true);
+    try {
+      const key = await unlockVault(pass, vault);
+      dataKeyRef.current = key;
+      setItems(await decryptAll(key, rows));
+      setPass("");
+    } catch (e) {
+      setErr(e instanceof WrongPassphraseError ? "Incorrect passphrase." : e.message || "Could not unlock the vault.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveItem = async (plain, id) => {
+    const key = dataKeyRef.current;
+    if (!key) { lock(); return false; }
+    let ciphertext;
+    try { ciphertext = await encryptJson(key, plain); } catch (e) { alert(`Encryption failed: ${e.message}`); return false; }
+    if (id) {
+      const { data, error } = await supabase.from("bk_vault_items").update({ ciphertext, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+      if (error) { alert(`Failed to save entry: ${error.message}`); return false; }
+      setRows((r) => r.map((x) => (x.id === id ? data : x)));
+      setItems((it) => it.map((x) => (x.id === id ? { ...EMPTY_VAULT_ITEM, ...plain, id, created_at: data.created_at, updated_at: data.updated_at } : x)));
+    } else {
+      const { data, error } = await supabase.from("bk_vault_items").insert({ vault_id: vault.id, user_id: userId, ciphertext }).select().single();
+      if (error) { alert(`Failed to save entry: ${error.message}`); return false; }
+      setRows((r) => [data, ...r]);
+      setItems((it) => [{ ...EMPTY_VAULT_ITEM, ...plain, id: data.id, created_at: data.created_at, updated_at: data.updated_at }, ...it]);
+      setExpanded(data.id);
+    }
+    return true;
+  };
+
+  const deleteItem = async (item) => {
+    if (!window.confirm(`Delete "${item.title}" from the vault? This cannot be undone.`)) return;
+    const { error } = await supabase.from("bk_vault_items").delete().eq("id", item.id);
+    if (error) { alert(`Failed to delete: ${error.message}`); return; }
+    setRows((r) => r.filter((x) => x.id !== item.id));
+    setItems((it) => it.filter((x) => x.id !== item.id));
+    if (expanded === item.id) setExpanded(null);
+  };
+
+  const changePassphrase = async (oldP, newP) => {
+    const fields = await changeVaultPassphrase(oldP, newP, vault);
+    const { data, error } = await supabase.from("bk_vaults").update({ ...fields, updated_at: new Date().toISOString() }).eq("id", vault.id).select().single();
+    if (error) throw error;
+    setVault(data);
+  };
+
+  // "Forgot passphrase": there is nothing to recover from, so the only way out
+  // is to delete the vault (items cascade) and start a new one.
+  const resetVault = async () => {
+    if (resetWord !== "DELETE") return;
+    const n = rows.length;
+    if (!window.confirm(`Permanently delete the vault and the ${n} entr${n === 1 ? "y" : "ies"} inside it? This cannot be undone.`)) return;
+    setBusy(true);
+    const { error } = await supabase.from("bk_vaults").delete().eq("id", vault.id);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    setVault(null); setRows([]); setResetOpen(false); setResetWord(""); setPass(""); setPass2(""); setErr(null);
+  };
+
+  const copy = async (text, tag) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(tag);
+      setTimeout(() => setCopied((c) => (c === tag ? null : c)), 1500);
+    } catch {
+      alert("Couldn't access the clipboard — reveal the value and copy it manually.");
+    }
+  };
+
+  const wrap = (children) => <div style={{ padding: isMobile ? "8px 16px 24px" : 0 }}>{children}</div>;
+
+  if (vault === undefined) return wrap(<div style={{ ...s.card, color: "#64748b" }}>Loading vault…</div>);
+
+  // ── Locked / not yet created ─────────────────────────────────────────────
+  if (!unlocked) {
+    const creating = vault === null;
+    const go = creating ? create : unlock;
+    const disabled = busy || !pass || (creating && !pass2);
+    return wrap(
+      <div style={{ maxWidth: 440, margin: isMobile ? "12px auto" : "40px auto" }}>
+        <div style={{ ...s.card, padding: 24 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", marginBottom: 18 }}>
+            <div style={{ width: 52, height: 52, borderRadius: 26, background: accent + "18", color: accent, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}><Icons.Lock size={24} /></div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{creating ? "Set up your vault" : "Vault locked"}</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 6, lineHeight: 1.5 }}>
+              {creating
+                ? "A safe for your corporate key, ATO and ASIC logins, bank portals and anything else you keep having to dig for. Choose a passphrase: everything is encrypted on this device before it is saved, and the passphrase itself is never sent anywhere."
+                : "Enter your vault passphrase to decrypt your entries on this device."}
+            </div>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <label style={s.label}>{creating ? "Vault passphrase" : "Passphrase"}</label>
+            <input type={showPass ? "text" : "password"} value={pass} onChange={(e) => setPass(e.target.value)} autoComplete={creating ? "new-password" : "current-password"} autoFocus placeholder={creating ? `At least ${VAULT_MIN_PASSPHRASE} characters` : "Vault passphrase"} onKeyDown={(e) => e.key === "Enter" && !disabled && go()} style={s.input} />
+            {creating && <VaultStrengthMeter value={pass} />}
+          </div>
+          {creating && (
+            <div style={{ marginBottom: 10 }}>
+              <label style={s.label}>Confirm passphrase</label>
+              <input type={showPass ? "text" : "password"} value={pass2} onChange={(e) => setPass2(e.target.value)} autoComplete="new-password" placeholder="Re-enter passphrase" onKeyDown={(e) => e.key === "Enter" && !disabled && go()} style={s.input} />
+            </div>
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#64748b", marginBottom: 12, cursor: "pointer" }}>
+            <input type="checkbox" checked={showPass} onChange={(e) => setShowPass(e.target.checked)} /> Show passphrase
+          </label>
+          {creating && (
+            <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5 }}>
+              <strong>There is no reset.</strong> Because the passphrase never leaves your device, a forgotten passphrase means the vault's contents cannot be recovered — not by you, not by us, not by anyone with the database. Keep a copy somewhere safe.
+            </div>
+          )}
+          {err && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 10 }}>{err}</div>}
+          <button type="button" onClick={go} disabled={disabled} style={{ ...s.btn(accent), width: "100%", justifyContent: "center", opacity: disabled ? 0.5 : 1 }}>
+            {busy ? (creating ? "Creating…" : "Unlocking…") : (creating ? "Create vault" : "Unlock")}
+          </button>
+          {!creating && (
+            <div style={{ marginTop: 14, textAlign: "center" }}>
+              <button type="button" onClick={() => { setResetOpen((v) => !v); setResetWord(""); }} style={{ background: "none", border: "none", color: "#94a3b8", fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>Forgot your passphrase?</button>
+            </div>
+          )}
+          {!creating && resetOpen && (
+            <div style={{ marginTop: 12, padding: 12, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 12, color: "#7f1d1d", lineHeight: 1.5 }}>
+              <strong>The passphrase cannot be recovered or reset.</strong> It never left your device, so there is nothing on the server to reset it from. The only way forward is to delete this vault — including the {rows.length} entr{rows.length === 1 ? "y" : "ies"} inside it — and start a new one.
+              <input value={resetWord} onChange={(e) => setResetWord(e.target.value)} placeholder="Type DELETE to confirm" autoComplete="off" style={{ ...s.input, borderColor: "#fecaca", marginTop: 8 }} />
+              <button type="button" onClick={resetVault} disabled={resetWord !== "DELETE" || busy} style={{ ...s.btn("#b91c1c"), width: "100%", justifyContent: "center", marginTop: 8, opacity: resetWord !== "DELETE" || busy ? 0.5 : 1 }}>Delete vault and start over</button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Unlocked ─────────────────────────────────────────────────────────────
+  const q = query.trim().toLowerCase();
+  const matches = (it) => !q || [it.title, it.username, it.url, it.notes, it.category, ...(it.fields || []).map((f) => f.label)].some((v) => (v || "").toLowerCase().includes(q));
+  const countFor = (c) => items.filter((it) => c === "all" || it.category === c).length;
+  const visible = items.filter((it) => (cat === "all" || it.category === cat) && matches(it));
+  const pills = ["all", ...VAULT_CATEGORIES.filter((c) => countFor(c) > 0)];
+
+  return wrap(
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search the vault…" autoComplete="off" style={{ ...s.input, width: isMobile ? "100%" : 260 }} />
+        {!isMobile && <div style={{ flex: 1 }} />}
+        <button type="button" onClick={() => setEditing("new")} style={s.btn(accent, true)}><Icons.Plus /> Entry</button>
+        <button type="button" onClick={() => setPassOpen(true)} title="Change the vault passphrase" style={{ ...s.btnOutline, display: "inline-flex", alignItems: "center", gap: 6 }}><Icons.Key /> Passphrase</button>
+        <button type="button" onClick={lock} title="Lock the vault now" style={{ ...s.btnOutline, display: "inline-flex", alignItems: "center", gap: 6 }}><Icons.Lock size={14} /> Lock</button>
+      </div>
+      {items.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+          {pills.map((c) => (
+            <button key={c} type="button" onClick={() => setCat(c)} style={s.pill(cat === c)}>
+              {c === "all" ? "All" : c}<span style={s.pillCount(cat === c)}>{countFor(c)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ ...s.card, paddingTop: 4, paddingBottom: 4 }}>
+        {items.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "36px 16px", color: "#64748b" }}>
+            <div style={{ color: "#cbd5e1", marginBottom: 8 }}><Icons.Lock size={28} /></div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>Your vault is empty</div>
+            <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5, maxWidth: 380, margin: "4px auto 0" }}>Add your ASIC corporate key, ATO and myGovID logins, bank portal details, insurance policies — anything you keep having to dig for.</div>
+            <button type="button" onClick={() => setEditing("new")} style={{ ...s.btn(accent), marginTop: 14 }}><Icons.Plus /> Add first entry</button>
+          </div>
+        ) : visible.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "28px 16px", color: "#64748b", fontSize: 12 }}>No entries match “{query}”.</div>
+        ) : visible.map((item) => (
+          <VaultEntry key={item.id} item={item} s={s} stacked={isMobile}
+            expanded={expanded === item.id} onToggle={() => setExpanded((e) => (e === item.id ? null : item.id))}
+            onEdit={() => setEditing(item)} onDelete={() => deleteItem(item)}
+            revealed={revealed} onReveal={(tag) => setRevealed((r) => ({ ...r, [tag]: !r[tag] }))}
+            onCopy={copy} copied={copied} />
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, lineHeight: 1.5 }}>Encrypted on this device with your passphrase · locks automatically after 5 minutes idle, or when you leave this page.</div>
+      {editing && <VaultItemForm key={editing === "new" ? "new" : editing.id} existing={editing === "new" ? null : editing} s={s} accent={accent} isMobile={isMobile} onSave={saveItem} onClose={() => setEditing(null)} />}
+      {passOpen && <VaultPassphraseForm s={s} accent={accent} isMobile={isMobile} onChange={changePassphrase} onClose={() => setPassOpen(false)} />}
     </div>
   );
 }
@@ -2631,6 +3167,7 @@ Are you sure you want it ${verb}?`);
     { id: "quotes", label: "Quotes", icon: Icons.Quotes },
     { id: "projects", label: "Projects", icon: Icons.Projects },
     { id: "contacts", label: "Contacts", icon: Icons.Contacts },
+    { id: "vault", label: "Vault", icon: Icons.Lock },
   ];
   const activeNav = page;
 
@@ -4367,7 +4904,7 @@ Are you sure you want it ${verb}?`);
   const MobileTabBar = () => (
     <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 calc(env(safe-area-inset-bottom) + 10px)", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
       {navItems.map(({ id, label, icon: Icon }) => (
-        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 12px", color: activeNav === id ? accent : "#94a3b8" }}>
+        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 6px", minWidth: 0, color: activeNav === id ? accent : "#94a3b8" }}>
           <Icon />
           <span style={{ fontSize: 10, fontWeight: 500 }}>{label}</span>
         </button>
@@ -4390,7 +4927,7 @@ Are you sure you want it ${verb}?`);
           {divMenuOpen && <DivisionMenu division={division} onSwitch={switchDivision} onClose={() => setDivMenuOpen(false)} />}
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
-        {page !== "dashboard" && (
+        {page !== "dashboard" && page !== "vault" && (
           <button onClick={() => { if (page === "quotes") { openQuoteStart(); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Plus />
           </button>
@@ -4403,7 +4940,7 @@ Are you sure you want it ${verb}?`);
         </button>
         </div>
       </div>
-      <div style={{ marginTop: 10 }}>{fySelectEl({ width: "100%" })}</div>
+      {page !== "vault" && <div style={{ marginTop: 10 }}>{fySelectEl({ width: "100%" })}</div>}
     </div>
   );
 
@@ -4612,6 +5149,7 @@ Are you sure you want it ${verb}?`);
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
         {page === "contacts" && <MobileContacts />}
+        {page === "vault" && <VaultPage s={s} accent={accent} session={session} isMobile />}
       </div>
       <MobileTabBar />
     </div>
@@ -4724,14 +5262,16 @@ Are you sure you want it ${verb}?`);
               <div style={{ fontSize: 10, color: accent, fontWeight: 600, marginTop: 2 }}>{divInfo.name}</div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              {fySelectEl()}
+              {page !== "vault" && fySelectEl()}
               {page === "quotes" && <button onClick={() => { openQuoteStart(); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
               {page === "contacts" && <button onClick={() => setModal("contact")} style={s.btn(accent, true)}><Icons.Plus /> Contact</button>}
             </div>
           </div>
-          <div style={s.content}><PageComponent /></div>
+          {/* VaultPage is module-scope and rendered directly (not via pageMap) so it
+              keeps its in-memory data key across App re-renders — see its comment. */}
+          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : <PageComponent />}</div>
         </div>
       </div>
       )}
