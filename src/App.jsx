@@ -27,7 +27,7 @@ This quote is valid until {due_date}. Payment details will be provided upon acce
 Kind regards,
 {signature}`;
 
-const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", gst_not_registered: false, short_name: "", subtitle: "", tagline: "", accent: "", invoice_prefix: "", quote_prefix: "", sort_order: 0, archived: false };
+const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", bank_name: "", account_name: "", bsb: "", account_number: "", logo_url: "", email_template_invoice: "", email_template_quote: "", email_signature: "", onedrive_folder: "", gst_not_registered: false, short_name: "", subtitle: "", tagline: "", accent: "", invoice_prefix: "", quote_prefix: "", sort_order: 0, archived: false, reminder_reply_to: "" };
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
@@ -1383,7 +1383,12 @@ function BusinessSettings({ s, accent, biz, session, profile, profiles, activeCo
       {panel("reminders", "Payment Reminders", "Automatic overdue email reminders", (
         <>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
-          Reminders send automatically each day: a courtesy note 3 days before the due date, then at 1, 7, 14 and 30 days overdue. They go out from noreply@mworxgroup.com.au under {f.name || "this company"}'s name and logo; replies go to {f.email || "the email address above"}. Each reminder is only ever sent once — nothing for you to do.
+          Reminders send automatically each day: a courtesy note 3 days before the due date, then at 1, 7, 14 and 30 days overdue. They go out from noreply@mworxgroup.com.au under {f.name || "this company"}'s name and logo. Each reminder is only ever sent once — nothing for you to do.
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={s.label}>Replies go to</label>
+          <input type="email" value={f.reminder_reply_to || ""} onChange={(e) => setF({ ...f, reminder_reply_to: e.target.value })} placeholder={f.email || "accounts@yourcompany.com.au"} autoComplete="off" spellCheck={false} style={s.input} />
+          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 6 }}>When a client replies to a reminder it lands here. Leave blank to use {f.email ? f.email : "the company email above"}. The email printed on quotes and invoices is unaffected.</div>
         </div>
         {/* Manual Preview / Send Now controls hidden per preference; the daily
             automatic reminders still run. Flip to true to bring them back. */}
@@ -2871,7 +2876,7 @@ export default function BookkeeperApp() {
     if (ip && ip === qp) { alert("Invoice and quote prefixes must differ."); return; }
     const clash = prefixClash(slug, ip, qp);
     if (clash) { alert(`That prefix is already used by ${clash.name}. Each company needs its own.`); return; }
-    const row = { user_id: session.user.id, business_id: slug, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", gst_not_registered: !!p.gst_not_registered, email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "", short_name: p.short_name || "", subtitle: p.subtitle || "", tagline: p.tagline ?? "", accent: p.accent || null, invoice_prefix: ip || null, quote_prefix: qp || null };
+    const row = { user_id: session.user.id, business_id: slug, name: p.name, abn: p.abn, address: p.address, email: p.email, phone: p.phone, bank_name: p.bank_name, account_name: p.account_name, bsb: p.bsb, account_number: p.account_number, logo_url: p.logo_url, email_template_invoice: p.email_template_invoice || "", email_template_quote: p.email_template_quote || "", gst_not_registered: !!p.gst_not_registered, email_signature: p.email_signature || "", onedrive_folder: p.onedrive_folder || "", short_name: p.short_name || "", subtitle: p.subtitle || "", tagline: p.tagline ?? "", accent: p.accent || null, invoice_prefix: ip || null, quote_prefix: qp || null, reminder_reply_to: (p.reminder_reply_to || "").trim() || null };
     const { ok, data: saved } = await sbWrite(supabase.from("bk_profiles").upsert(row, { onConflict: "user_id,business_id" }).select().single(), "save settings");
     if (!ok) return;
     if (saved) {
