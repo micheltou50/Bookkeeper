@@ -31,7 +31,7 @@ const DEFAULT_PROFILE = { name: "", abn: "", address: "", email: "", phone: "", 
 
 // Header titles per page. Sub-pages (reimbursements/reconcile live under Expenses,
 // quotes under Sales) keep their own title even though they share a nav item.
-const PAGE_TITLES = { dashboard: "Dashboard", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts", vault: "Vault" };
+const PAGE_TITLES = { dashboard: "Dashboard", inbox: "Inbox", invoices: "Invoices", quotes: "Quotes", projects: "Projects", contacts: "Contacts", vault: "Vault" };
 
 
 // One tenant in Supabase (business_id = 'mworx'): every invoice, project and
@@ -670,6 +670,7 @@ const Icons = {
   Invoices: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>,
   Projects: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><path d="M2 13h20"/></svg>,
   Quotes: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>,
+  Inbox: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>,
   Plus: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>,
   X: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>,
   Trash: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
@@ -1983,6 +1984,228 @@ function VaultPage({ s, accent, session, isMobile }) {
   );
 }
 
+// Inbox — the action list the scheduled email runs write into (bk_inbox_items,
+// migration 0027). Each row is one thing to act on: a reply the run drafted, a
+// consultant to chase, a Council deadline, a payment to record in Bookkeeper, a
+// file it couldn't place. Ticking a row Done, or "Don't flag again", is what
+// stops the next run raising it: the runs skip anything not 'open'.
+//
+// Module scope, like VaultPage: nested in App it would remount on every parent
+// render and lose its filters and in-flight state.
+const INBOX_KINDS = [
+  { id: "chase", label: "Chase", tone: "#ef4444", blurb: "Promised and overdue, or asked and unanswered" },
+  { id: "reply", label: "Needs your reply", tone: "#f59e0b", blurb: "Drafts are in Outlook — fill the [brackets] and send" },
+  { id: "deadline", label: "Deadlines", tone: "#3b82f6", blurb: "Council, Planning Portal and certifier dates" },
+  { id: "money", label: "Money", tone: "#10b981", blurb: "Payments to record, remittances, approvals" },
+  { id: "call", label: "Needs your call", tone: "#8b5cf6", blurb: "Files the run couldn't place, new jobs with no folder" },
+  { id: "fyi", label: "FYI", tone: "#64748b", blurb: "" },
+  { id: "file", label: "Filed", tone: "#94a3b8", blurb: "Attachments moved into job folders" },
+  { id: "skipped", label: "Skipped", tone: "#cbd5e1", blurb: "Signature images, duplicates, unrelated mail" },
+];
+// Kinds that count towards the nav badge: things Michel must do, not the record of
+// what the run already did for him.
+const INBOX_ACTION_KINDS = new Set(["chase", "reply", "deadline", "money", "call"]);
+const inboxKindInfo = (id) => INBOX_KINDS.find((k) => k.id === id) || { id, label: id, tone: "#64748b", blurb: "" };
+const inboxIsActionable = (it) => it && it.status === "open" && INBOX_ACTION_KINDS.has(it.kind);
+const MAILBOX_LABEL = { info: "info@", accounts: "accounts@", energy: "energy@" };
+const inboxDays = (iso) => { if (!iso) return null; const ms = Date.now() - new Date(iso).getTime(); return Math.max(0, Math.floor(ms / 86400000)); };
+const inboxRunLabel = { morning: "Morning run", closeoff: "Close-off", manual: "Manual" };
+const fmtSydney = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
+
+function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, onChanged }) {
+  const [items, setItems] = useState(null);        // null = loading
+  const [runs, setRuns] = useState([]);
+  const [err, setErr] = useState(null);
+  const [kind, setKind] = useState("all");
+  const [showDone, setShowDone] = useState(false);
+  const [busy, setBusy] = useState({});
+  const [expanded, setExpanded] = useState(null);
+  const userId = session?.user?.id;
+
+  const load = useCallback(async () => {
+    const statuses = showDone ? ["open", "done", "dismissed"] : ["open"];
+    const [{ data, error }, { data: rs, error: e2 }] = await Promise.all([
+      supabase.from("bk_inbox_items").select("*").eq("business_id", COMPANY.id).in("status", statuses).order("created_at", { ascending: false }).limit(500),
+      supabase.from("bk_inbox_runs").select("*").eq("business_id", COMPANY.id).order("ran_at", { ascending: false }).limit(3),
+    ]);
+    if (error) {
+      console.error("inbox load failed", error);
+      const missing = /bk_inbox/.test(error.message || "") && /not find|does not exist|schema cache/i.test(error.message || "");
+      setErr(missing ? "The Inbox tables aren't set up yet — apply supabase/migrations/0027_inbox.sql in Supabase first." : error.message);
+      setItems([]);
+      return;
+    }
+    if (e2) console.error("inbox runs load failed", e2);
+    setErr(null);
+    setItems(data || []);
+    setRuns(rs || []);
+  }, [showDone]);
+  useEffect(() => { load(); }, [load]);
+
+  const inDiv = (it) => division === ALL_DIVISIONS || recordDivision(it) === division;
+  const visible = (items || []).filter(inDiv).filter((it) => kind === "all" || it.kind === kind);
+  const openCount = (id) => (items || []).filter(inDiv).filter((it) => it.status === "open" && (id === "all" ? INBOX_ACTION_KINDS.has(it.kind) : it.kind === id)).length;
+  const jobById = (id) => (id ? (jobs || []).find((j) => j.id === id) : null);
+
+  const setStatus = async (it, status, note) => {
+    setBusy((b) => ({ ...b, [it.id]: true }));
+    const now = new Date().toISOString();
+    const upd = status === "open"
+      ? { status, resolved_at: null, resolved_note: null, updated_at: now }
+      : { status, resolved_at: now, resolved_note: note || null, updated_at: now };
+    const { error } = await supabase.from("bk_inbox_items").update(upd).eq("id", it.id).eq("user_id", userId);
+    setBusy((b) => { const n = { ...b }; delete n[it.id]; return n; });
+    if (error) { console.error("inbox update failed", error); setErr(error.message); return; }
+    setItems((prev) => (prev || []).map((x) => (x.id === it.id ? { ...x, ...upd } : x)).filter((x) => showDone || x.status === "open"));
+    onChanged && onChanged();
+  };
+
+  const open = (url) => { if (url) window.open(url, "_blank", "noopener"); };
+
+  // Sort inside a group: soonest due first, then newest.
+  const sorted = [...visible].sort((a, b) => {
+    const ka = INBOX_KINDS.findIndex((k) => k.id === a.kind), kb = INBOX_KINDS.findIndex((k) => k.id === b.kind);
+    if (ka !== kb) return ka - kb;
+    if (a.due_date !== b.due_date) { if (!a.due_date) return 1; if (!b.due_date) return -1; return a.due_date.localeCompare(b.due_date); }
+    return (b.created_at || "").localeCompare(a.created_at || "");
+  });
+  const groups = [];
+  for (const it of sorted) { const g = groups[groups.length - 1]; if (g && g.kind === it.kind) g.rows.push(it); else groups.push({ kind: it.kind, rows: [it] }); }
+
+  const lastRun = runs[0];
+  const runTone = lastRun ? (lastRun.status === "ok" ? "#059669" : lastRun.status === "partial" ? "#d97706" : "#b91c1c") : "#94a3b8";
+  const counts = lastRun?.counts && typeof lastRun.counts === "object" ? lastRun.counts : {};
+  const countChips = INBOX_KINDS.map((k) => ({ ...k, n: Number(counts[k.id] || 0) })).filter((k) => k.n > 0);
+
+  const pill = (id, label) => {
+    const active = kind === id;
+    const n = openCount(id);
+    return (
+      <button key={id} onClick={() => setKind(id)} style={s.pill(active)}>
+        {label}{n > 0 && <span style={s.pillCount(active)}>{n}</span>}
+      </button>
+    );
+  };
+
+  const metaLine = (it) => {
+    const job = jobById(it.job_id);
+    const parts = [];
+    if (it.mailbox) parts.push(<span key="mb" style={{ fontWeight: 600, color: "#64748b" }}>{MAILBOX_LABEL[it.mailbox] || it.mailbox}</span>);
+    if (it.sender_name || it.sender_email) parts.push(<span key="snd">{it.sender_name || it.sender_email}</span>);
+    if (job) parts.push(<button key="job" type="button" onClick={(e) => { e.stopPropagation(); onOpenJob && onOpenJob(job); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: accent, fontWeight: 600, fontSize: "inherit" }}>{job.job_number ? `${job.job_number} · ` : ""}{job.address || job.name}</button>);
+    else if (it.job_address) parts.push(<span key="addr">{it.job_address}</span>);
+    if (it.due_date) {
+      const d = inboxDays(it.due_date);
+      const past = it.due_date < today();
+      parts.push(<span key="due" style={{ color: past && it.status === "open" ? "#b91c1c" : "#64748b", fontWeight: past ? 600 : 400 }}>{past ? `due ${fmtDate(it.due_date)} · ${d} day${d === 1 ? "" : "s"} ago` : `due ${fmtDate(it.due_date)}`}</span>);
+    } else if (it.promised_at) {
+      parts.push(<span key="prom">promised {fmtDate(it.promised_at)}</span>);
+    }
+    const age = inboxDays(it.created_at);
+    if (age !== null && age >= 1 && it.status === "open") parts.push(<span key="age">waiting {age} day{age === 1 ? "" : "s"}</span>);
+    return parts.reduce((acc, p, i) => (i ? [...acc, <span key={"sep" + i} style={{ color: "#cbd5e1" }}> · </span>, p] : [p]), []);
+  };
+
+  const row = (it, isLast) => {
+    const k = inboxKindInfo(it.kind);
+    const done = it.status !== "open";
+    const isBusy = !!busy[it.id];
+    const isOpen = expanded === it.id;
+    const linkBtn = (label, url) => url ? <button type="button" onClick={(e) => { e.stopPropagation(); open(url); }} style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Link /> {label}</button> : null;
+    return (
+      <div key={it.id} onClick={() => setExpanded(isOpen ? null : it.id)} style={{ display: "flex", gap: 10, padding: isMobile ? "12px 14px" : "10px 12px", borderBottom: isLast ? "none" : "1px solid #f1f5f9", cursor: "pointer", opacity: done ? 0.55 : 1, background: isOpen ? "#f8fafc" : "transparent" }}>
+        <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: 4, background: k.tone, marginTop: 6 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: isMobile ? 15 : 13, fontWeight: 600, color: "#0f172a", textDecoration: done ? "line-through" : "none" }}>{it.title}</div>
+          {it.detail && <div style={{ fontSize: isMobile ? 13 : 12, color: "#475569", marginTop: 2, whiteSpace: isOpen ? "pre-wrap" : "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.detail}</div>}
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", flexWrap: "wrap", gap: 2 }}>{metaLine(it)}</div>
+          {done && it.resolved_at && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>{it.status === "dismissed" ? "Won't be flagged again" : "Done"} · {fmtSydney(it.resolved_at)}{it.resolved_note ? ` · ${it.resolved_note}` : ""}</div>}
+          {isOpen && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+              {linkBtn("Open draft", it.draft_link)}
+              {linkBtn("Open email", it.email_link)}
+              {it.file_path && <span style={{ ...s.badge("#64748b", "outline"), alignSelf: "center" }} title={it.file_path}>{it.file_path.split("/").slice(-2).join(" / ")}</span>}
+              <span style={{ flex: 1 }} />
+              {done
+                ? <button type="button" disabled={isBusy} onClick={() => setStatus(it, "open")} style={{ ...s.btnOutline, padding: "5px 10px" }}>Reopen</button>
+                : (<>
+                    <button type="button" disabled={isBusy} onClick={() => setStatus(it, "dismissed")} title="Hide it and never raise it again" style={{ ...s.btnOutline, padding: "5px 10px" }}>Don't flag again</button>
+                    <button type="button" disabled={isBusy} onClick={() => setStatus(it, "done")} style={{ ...s.btn(accent, true), padding: "5px 12px" }}><Icons.Check /> Done</button>
+                  </>)}
+            </div>
+          )}
+        </div>
+        {!isOpen && !done && (
+          <button type="button" disabled={isBusy} onClick={(e) => { e.stopPropagation(); setStatus(it, "done"); }} title="Done" style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 13, border: "1px solid #e2e8f0", background: "#fff", color: "#94a3b8", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "center" }}><Icons.Check /></button>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ maxWidth: 960 }}>
+      {err && <div style={{ ...s.card, borderColor: "#fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 12 }}>{err}</div>}
+
+      <div style={{ ...s.card, display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Last run</div>
+          {lastRun ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{inboxRunLabel[lastRun.run_type] || lastRun.run_type}</span>
+                <span style={{ fontSize: 12, color: "#64748b" }}>{fmtSydney(lastRun.ran_at)}</span>
+                <span style={{ ...s.badge(runTone, lastRun.status === "ok" ? "outline" : "solid"), background: lastRun.status === "ok" ? "transparent" : runTone + "18", color: lastRun.status === "ok" ? "#065f46" : runTone, borderColor: lastRun.status === "ok" ? "#a7f3d0" : "transparent" }}>{lastRun.status === "ok" ? "ran clean" : lastRun.status}</span>
+              </div>
+              {lastRun.summary && <div style={{ fontSize: 13, color: "#334155", marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.45 }}>{lastRun.summary}</div>}
+              {lastRun.error && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastRun.error}</div>}
+              {countChips.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                  {countChips.map((k) => <span key={k.id} style={{ ...s.badge(k.tone, "outline"), display: "inline-flex", gap: 5, alignItems: "center" }}><span style={{ width: 6, height: 6, borderRadius: 3, background: k.tone }} />{k.n} {k.label.toLowerCase()}</span>)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 13, color: "#64748b", marginTop: 6 }}>No run has written here yet. The morning run (~7:12am) and close-off (~4:15pm) will fill this in.</div>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+          <button type="button" onClick={load} style={{ ...s.btnOutline, padding: "6px 12px" }}>Refresh</button>
+          <label style={{ fontSize: 12, color: "#64748b", display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> Show done
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: isMobile ? "nowrap" : "wrap", overflowX: isMobile ? "auto" : "visible", marginBottom: 12, paddingBottom: isMobile ? 4 : 0, scrollbarWidth: "none" }}>
+        {pill("all", "To do")}
+        {INBOX_KINDS.map((k) => pill(k.id, k.label))}
+      </div>
+
+      {items === null ? (
+        <div style={{ ...s.card, color: "#64748b" }}>Loading…</div>
+      ) : groups.length === 0 ? (
+        <div style={{ ...s.card, textAlign: "center", padding: 32 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a" }}>{kind === "all" && !showDone ? "Nothing waiting on you" : "Nothing here"}</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{kind === "all" && !showDone ? "Everything the runs raised has been dealt with." : "Try another filter, or show done items."}</div>
+        </div>
+      ) : groups.map((g) => {
+        const k = inboxKindInfo(g.kind);
+        return (
+          <div key={g.kind} style={{ ...s.card, padding: 0, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "10px 12px", borderBottom: "1px solid #f1f5f9", background: "#fafbfb" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: k.tone, alignSelf: "center" }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{k.label}</span>
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>{g.rows.length}</span>
+              {k.blurb && !isMobile && <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: "auto" }}>{k.blurb}</span>}
+            </div>
+            {g.rows.map((it, i) => row(it, i === g.rows.length - 1))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Contact form. Module scope for the same reason as BusinessSettings: nested in
 // App it was a fresh function type every render, so React remounted it and the
 // half-typed contact vanished. Thirty lines, no effects, no refs — it never
@@ -2119,6 +2342,9 @@ export default function BookkeeperApp() {
   const [profiles, setProfiles] = useState([]);
   // Outlook connections — one per company that has connected a mailbox.
   const [emailConns, setEmailConns] = useState([]);
+  // Open Inbox rows (id, kind, division, status only) — what the nav badge counts.
+  // The Inbox page loads the full rows itself and calls refreshInbox after a change.
+  const [inboxOpen, setInboxOpen] = useState([]);
 
   const [divMenuOpen, setDivMenuOpen] = useState(false);
   // { doc, anchor } for the inline status picker. Lives here, not in the list,
@@ -2231,7 +2457,7 @@ export default function BookkeeperApp() {
     if (!session) return;
     setLoading(true);
     try {
-    const [cRes, iRes, pRes, jRes, eRes, qtRes, slRes] = await Promise.all([
+    const [cRes, iRes, pRes, jRes, eRes, qtRes, slRes, ibRes] = await Promise.all([
       supabase.from("bk_contacts").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_invoices").select("*").eq("business_id", businessId).order("date", { ascending: false }),
       supabase.from("bk_profiles").select("*").order("sort_order").order("name"),
@@ -2239,7 +2465,10 @@ export default function BookkeeperApp() {
       supabase.from("bk_email_connections").select("*").eq("provider", "outlook"),
       supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_scope_lines").select("*").eq("business_id", businessId).eq("archived", false).order("sort_order"),
+      // Errors here (table not migrated yet) just mean an empty badge.
+      supabase.from("bk_inbox_items").select("id,kind,division,status").eq("business_id", businessId).eq("status", "open"),
     ]);
+    setInboxOpen(ibRes.data || []);
 
     const loadedInvoices = iRes.data || [];
     if (loadedInvoices.length) {
@@ -3415,8 +3644,16 @@ Are you sure you want it ${verb}?`);
   if (!session) return <LoginScreen />;
   if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b", fontFamily: "'DM Sans', sans-serif" }}>Loading...</div>;
 
+  // Badge: open items that need Michel, in the company being viewed. Filed /
+  // skipped / FYI rows are the run's record, not his to-do, so they don't count.
+  const inboxBadge = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable).length;
+  const refreshInbox = async () => {
+    const { data } = await supabase.from("bk_inbox_items").select("id,kind,division,status").eq("business_id", biz).eq("status", "open");
+    setInboxOpen(data || []);
+  };
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
+    { id: "inbox", label: "Inbox", icon: Icons.Inbox, badge: inboxBadge },
     { id: "invoices", label: "Invoices", icon: Icons.Invoices },
     { id: "quotes", label: "Quotes", icon: Icons.Quotes },
     { id: "projects", label: "Projects", icon: Icons.Projects },
@@ -4662,7 +4899,10 @@ Are you sure you want it ${verb}?`);
     const draftDocs = fyInvoices.filter((i) => i.status === "draft");
     const recentInvoices = [...fyRealInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
+    const inboxTodo = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable);
+    const inboxByKind = INBOX_KINDS.filter((k) => INBOX_ACTION_KINDS.has(k.id)).map((k) => ({ k, n: inboxTodo.filter((it) => it.kind === k.id).length })).filter((x) => x.n > 0);
     const attention = [
+      ...(inboxTodo.length ? [{ key: "inbox", tone: "#ef4444", label: `${inboxTodo.length} thing${inboxTodo.length === 1 ? "" : "s"} waiting in Inbox`, sub: inboxByKind.map((x) => `${x.n} ${x.k.label.toLowerCase()}`).join(" · "), amount: null, go: () => setPage("inbox") }] : []),
       ...overdueInvoices.slice(0, 4).map((i) => ({ key: "o" + i.id, tone: "#ef4444", label: `${i.number} — ${daysOverdue(i)} day${daysOverdue(i) === 1 ? "" : "s"} overdue`, sub: i.contact_name || i.contact_company || "", amount: i.total, go: () => { setEditItem(i); setModal("invoice"); } })),
       ...leftToInvoice.slice(0, 3).map(({ proj, remaining }) => ({ key: "a" + proj.id, tone: "#0ea5e9", label: `${proj.job_number || "Project"} — left to invoice`, sub: projectLabel(proj), amount: remaining, go: () => { setEditItem(proj); setModal("project"); } })),
       ...draftDocs.slice(0, 3).map((d) => ({ key: "d" + d.id, tone: "#94a3b8", label: `${d.number} still a draft`, sub: d.contact_name || d.contact_company || "", amount: d.total, go: () => { setEditItem(d); setModal("invoice"); } })),
@@ -4694,7 +4934,7 @@ Are you sure you want it ${verb}?`);
                   <tr key={a.key} onClick={a.go} style={{ cursor: "pointer" }}>
                     <td style={{ ...s.td, width: 6, paddingRight: 0 }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 3, background: a.tone }} /></td>
                     <td style={{ ...s.td, fontWeight: 500 }}>{a.label}<div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>{a.sub}</div></td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(a.amount || 0)}</td>
+                    <td style={{ ...s.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{a.amount == null ? <span style={{ color: accent, fontSize: 12 }}>Open →</span> : fmt(a.amount || 0)}</td>
                   </tr>
                 ))}
               </tbody></table>
@@ -5160,10 +5400,11 @@ Are you sure you want it ${verb}?`);
 
   const MobileTabBar = () => (
     <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "8px 0 calc(env(safe-area-inset-bottom) + 10px)", borderTop: "0.5px solid #e2e8f0", background: "#ffffff", flexShrink: 0 }}>
-      {navItems.map(({ id, label, icon: Icon }) => (
-        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 6px", minWidth: 0, color: activeNav === id ? accent : "#94a3b8" }}>
+      {navItems.map(({ id, label, icon: Icon, badge }) => (
+        <button key={id} onClick={() => setPage(id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 4px", minWidth: 0, color: activeNav === id ? accent : "#94a3b8", position: "relative" }}>
           <Icon />
           <span style={{ fontSize: 10, fontWeight: 500 }}>{label}</span>
+          {badge > 0 && <span style={{ position: "absolute", top: 0, right: -2, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 8, background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{badge > 99 ? "99+" : badge}</span>}
         </button>
       ))}
     </div>
@@ -5184,7 +5425,7 @@ Are you sure you want it ${verb}?`);
           {divMenuOpen && <DivisionMenu division={division} onSwitch={switchDivision} onClose={() => setDivMenuOpen(false)} />}
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
-        {page !== "dashboard" && page !== "vault" && (
+        {page !== "dashboard" && page !== "vault" && page !== "inbox" && (
           <button onClick={() => { if (page === "quotes") { openQuoteStart(); } else if (page === "invoices") { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); } else if (page === "projects") { setEditItem(null); setModal("project"); } else if (page === "contacts") setModal("contact"); }} style={{ width: 34, height: 34, borderRadius: 17, background: accent, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
             <Icons.Plus />
           </button>
@@ -5197,7 +5438,7 @@ Are you sure you want it ${verb}?`);
         </button>
         </div>
       </div>
-      {page !== "vault" && <div style={{ marginTop: 10 }}>{fySelectEl({ width: "100%" })}</div>}
+      {page !== "vault" && page !== "inbox" && <div style={{ marginTop: 10 }}>{fySelectEl({ width: "100%" })}</div>}
     </div>
   );
 
@@ -5266,6 +5507,11 @@ Are you sure you want it ${verb}?`);
           {tile("Paid", paidThisFY.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisFY.length} invoice${paidThisFY.length === 1 ? "" : "s"} · ${fyTag}`)}
           {tile("Projects", projectsRemaining, `${activeProjects.length} active`)}
         </div>
+        {(() => { const todo = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable); return todo.length > 0 && (
+          <MobileSection title="Inbox" onViewAll={() => setPage("inbox")}>
+            <MobileRow primary={`${todo.length} thing${todo.length === 1 ? "" : "s"} waiting on you`} secondary={INBOX_KINDS.filter((k) => INBOX_ACTION_KINDS.has(k.id)).map((k) => ({ k, n: todo.filter((it) => it.kind === k.id).length })).filter((x) => x.n > 0).map((x) => `${x.n} ${x.k.label.toLowerCase()}`).join(" · ")} right="Open" isLast onClick={() => setPage("inbox")} />
+          </MobileSection>
+        ); })()}
         {overdueInvoices.length > 0 && (
           <MobileSection title="Needs attention" onViewAll={() => setPage("invoices")}>
             {overdueInvoices.slice(0, 4).map((inv, i) => (
@@ -5402,6 +5648,7 @@ Are you sure you want it ${verb}?`);
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
+        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /></div>}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
@@ -5458,8 +5705,11 @@ Are you sure you want it ${verb}?`);
       </div>
       <div style={s.nav}>
         {navItems.map((item) => (
-          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? item.label : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10 }}>
+          <button key={item.id} onClick={() => setPage(item.id)} title={navCollapsed ? `${item.label}${item.badge ? ` (${item.badge})` : ""}` : undefined} style={{ ...s.navBtn(activeNav === item.id), justifyContent: navCollapsed ? "center" : "flex-start", padding: navCollapsed ? "10px 0" : "9px 12px", gap: navCollapsed ? 0 : 10, position: "relative" }}>
             <item.icon />{!navCollapsed && <span>{item.label}</span>}
+            {item.badge > 0 && (navCollapsed
+              ? <span style={{ position: "absolute", top: 4, right: 14, minWidth: 8, height: 8, borderRadius: 4, background: "#ef4444" }} />
+              : <span style={{ marginLeft: "auto", minWidth: 18, height: 18, padding: "0 6px", borderRadius: 9, background: "#ef4444", color: "#fff", fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{item.badge}</span>)}
           </button>
         ))}
       </div>
@@ -5519,7 +5769,7 @@ Are you sure you want it ${verb}?`);
               <div style={{ fontSize: 10, color: accent, fontWeight: 600, marginTop: 2 }}>{divInfo.name}</div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              {page !== "vault" && fySelectEl()}
+              {page !== "vault" && page !== "inbox" && fySelectEl()}
               {page === "quotes" && <button onClick={() => { openQuoteStart(); }} style={s.btn(accent, true)}><Icons.Plus /> Quote</button>}
               {page === "invoices" && <button onClick={() => { setEditItem(null); setInvoiceSeed({ type: "invoice" }); setModal("invoice"); }} style={s.btn(accent, true)}><Icons.Plus /> Invoice</button>}
               {page === "projects" && <button onClick={() => { projectDraftRef.current = null; setEditItem(null); setModal("project"); }} style={s.btn(accent, true)}><Icons.Plus /> Project</button>}
@@ -5528,7 +5778,7 @@ Are you sure you want it ${verb}?`);
           </div>
           {/* VaultPage is module-scope and rendered directly (not via pageMap) so it
               keeps its in-memory data key across App re-renders — see its comment. */}
-          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : <PageComponent />}</div>
+          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /> : <PageComponent />}</div>
         </div>
       </div>
       )}

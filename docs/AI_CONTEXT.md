@@ -1,0 +1,77 @@
+# BookKeeper — AI context
+
+Shared, durable understanding of this app for any assistant (Claude, ChatGPT,
+Cursor) working on it. Keep it accurate: update when architecture, features or
+integrations change, and commit it with the code. Day-to-day state lives in
+`AI_HANDOFF.md`.
+
+## What it is
+
+Michel Toubia's bookkeeping and job-admin app for his companies: **Mworx Group**
+(`mworx`, drafting and planning), **Mworx Energy** (`mworx_energy`, BASIX/NatHERS)
+and **MT Management** (`mt_management`, short-term rentals). Quotes, invoices,
+projects (jobs), contacts, expenses/bank reconciliation, an encrypted Vault, and
+— from Oct 2026 — an **Inbox** fed by the scheduled email runs.
+
+## Stack
+
+- **Frontend:** Vite + React 19, one file `src/App.jsx` (~5.8k lines). Most
+  components are declared *inside* `BookkeeperApp`, so they remount on every
+  parent render (see the `formDirtyRef` / draft-ref comments). Components that
+  must keep state across renders are module scope: `BusinessSettings`,
+  `VaultPage`, `InboxPage`, `ContactForm`.
+- **Data:** Supabase project `yzndkdlzgegrcotfeqlp` (ap-southeast-2). The
+  browser uses the anon key + RLS (`auth.uid() = user_id`). All rows carry
+  `business_id = 'mworx'` (one tenant); the company is the `division` column.
+- **Backend:** Netlify functions (`netlify/functions/*.mjs`, service-role key,
+  bypass RLS): invoice PDF, Outlook OAuth + send, OneDrive upload, Stripe
+  pay/webhook, scheduled overdue-invoice reminders (`send-reminders.mjs`).
+- **Mobile:** Capacitor iOS shell (`ios/`, `capacitor.config.ts`); API base is
+  `https://bkeeper.netlify.app` on native.
+- **Migrations:** `supabase/migrations/*.sql` are hand-applied (see its README);
+  they document the live schema rather than create it from scratch.
+
+## Tables (public.bk_*)
+
+`bk_profiles` (one row per company: name, ABN, bank, prefixes, OneDrive folder,
+reminder reply-to) · `bk_jobs` (job register: `job_number`, `address`, `status`
+lead/active/finalised/job_lost, `division`) · `bk_job_parties` · `bk_contacts`
+(client/consultant/supplier) · `bk_invoices` (+ `bk_invoice_items`; quotes and
+invoices share the table via `type`) · `bk_quote_templates`, `bk_scope_lines` ·
+`bk_transactions`, `bk_receipts`, `bk_reconciliations`, `bk_category_rules` ·
+`bk_email_connections` (Outlook OAuth tokens), `bk_oauth_states` ·
+`bk_reminder_log` · `bk_vaults`, `bk_vault_items` (zero-knowledge) ·
+`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migration 0027).
+
+## Inbox (Oct 2026)
+
+Two Claude scheduled tasks ("Mworx morning inbox" ~7:12am and "Mworx close-off"
+~4:15pm Sydney, every day) read the three Outlook mailboxes (info@, accounts@,
+energy@mworxgroup.com.au), file attachments from the OneDrive `Attachments`
+staging folder into job folders, draft replies/chases in Outlook, and treat
+**Bookkeeper as the source of truth**: they read `bk_jobs` (job register),
+`bk_invoices` (paid/overdue), `bk_contacts`, and write their findings into
+`bk_inbox_items` via the Supabase MCP connector (service role, `user_id` set
+explicitly). Each run also writes a `bk_inbox_runs` row (status, summary,
+counts) that the page shows as "Last run".
+
+- Kinds: `reply`, `chase`, `deadline`, `money`, `call` (needs Michel's call),
+  `fyi`, `file` (filed), `skipped`. Only the first five count toward the nav
+  badge / dashboard "waiting in Inbox" row (`INBOX_ACTION_KINDS`).
+- `dedupe_key` is unique per user (`reply:<internetMessageId>`,
+  `chase:<conversationId>:<promised_at>`, `file:<OneDrive path>` …). Runs upsert
+  on it and only touch rows still `open`.
+- Status `open` → `done` (ticked) or `dismissed` ("Don't flag again"). The runs
+  skip anything not `open`, so ticking an item in the app is what stops it
+  coming back. Reopen is available under "Show done".
+- `InboxPage` (module scope) loads its own rows; `BookkeeperApp` keeps a light
+  `inboxOpen` list for the badge and dashboard and refreshes it via
+  `refreshInbox` after a change. Rows link to the Outlook draft/email
+  (`draft_link`, `email_link`) and to the job (`job_id` → opens the project).
+
+## Conventions
+
+- Australian English, AUD, Sydney time for anything date-shaped.
+- Prefer reviewable branches/PRs; never push straight to `main`.
+- After a significant change: update this file if architecture/features/
+  integrations changed, update `AI_HANDOFF.md`, commit both with the code.

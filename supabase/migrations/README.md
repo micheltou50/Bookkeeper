@@ -21,6 +21,10 @@ These SQL files document the schema/constraints/RLS the app relies on.
 - `0010_onedrive_receipts_folder.sql` — Adds `onedrive_receipts_folder` on
   `bk_profiles` for a dedicated OneDrive receipts path (separate from project
   folders). **Required before saving the receipts folder setting.**
+- `0027_inbox.sql` — `bk_inbox_items` + `bk_inbox_runs` (owner RLS). The
+  scheduled Claude email runs write here; the Inbox page reads it. Additive and
+  idempotent. **Required for the Inbox page** — without it the page shows a
+  setup notice and the nav badge stays empty.
 
 ## Urgent: apply 0007–0010 to live project
 
