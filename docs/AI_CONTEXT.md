@@ -41,7 +41,7 @@ invoices share the table via `type`) · `bk_quote_templates`, `bk_scope_lines` �
 `bk_transactions`, `bk_receipts`, `bk_reconciliations`, `bk_category_rules` ·
 `bk_email_connections` (Outlook OAuth tokens), `bk_oauth_states` ·
 `bk_reminder_log` · `bk_vaults`, `bk_vault_items` (zero-knowledge) ·
-`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migration 0027).
+`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027, 0028).
 
 ## Inbox (Oct 2026)
 
@@ -55,9 +55,18 @@ staging folder into job folders, draft replies/chases in Outlook, and treat
 explicitly). Each run also writes a `bk_inbox_runs` row (status, summary,
 counts) that the page shows as "Last run".
 
-- Kinds: `reply`, `chase`, `deadline`, `money`, `call` (needs Michel's call),
-  `fyi`, `file` (filed), `skipped`. Only the first five count toward the nav
-  badge / dashboard "waiting in Inbox" row (`INBOX_ACTION_KINDS`).
+- Kinds: `chase`, `reply`, `proposal` (a fee proposal to price and send),
+  `deadline`, `money`, `call` (needs Michel's call), `task` (typed in on the
+  Inbox page), `fyi`, `file` (filed), `skipped`. The first seven are his to-do
+  (`INBOX_ACTION_KINDS`); the rest are the run's record.
+- **Focus** (migration 0028, `focus boolean`, three-valued): the short list on
+  top of the growing record — what he is doing today. `true` = pinned (app or
+  run), `false` = taken out, `null` = the app decides: open and a chase, a
+  proposal, a task, or due today / overdue → in Focus (`inboxInFocus`). The nav
+  badge and the dashboard / mobile rows count Focus, not the whole open list.
+  "Add a task" on the page inserts a `task` row (`dedupe_key task:<uuid>`,
+  `source_run manual`, `focus true`). The runs don't set `focus` yet — their
+  upsert leaves the column alone, so pins survive refreshes.
 - `dedupe_key` is unique per user (`reply:<internetMessageId>`,
   `chase:<conversationId>:<promised_at>`, `file:<OneDrive path>` …). Runs upsert
   on it and only touch rows still `open`.
@@ -65,9 +74,11 @@ counts) that the page shows as "Last run".
   skip anything not `open`, so ticking an item in the app is what stops it
   coming back. Reopen is available under "Show done".
 - `InboxPage` (module scope) loads its own rows; `BookkeeperApp` keeps a light
-  `inboxOpen` list for the badge and dashboard and refreshes it via
+  `inboxOpen` list (`fetchInboxOpen`, which falls back to the 0027 columns
+  until 0028 is applied) for the badge and dashboard and refreshes it via
   `refreshInbox` after a change. Rows link to the Outlook draft/email
-  (`draft_link`, `email_link`) and to the job (`job_id` → opens the project).
+  (`draft_link`, `email_link`), to the job (`job_id` → opens the project) and
+  to the invoice or quote (`invoice_id` → opens the document).
 
 ## Conventions
 

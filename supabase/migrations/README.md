@@ -25,6 +25,11 @@ These SQL files document the schema/constraints/RLS the app relies on.
   scheduled Claude email runs write here; the Inbox page reads it. Additive and
   idempotent. **Required for the Inbox page** — without it the page shows a
   setup notice and the nav badge stays empty.
+- `0028_inbox_focus.sql` — `focus boolean` on `bk_inbox_items` (the Focus list:
+  pinned / taken out / undecided) and widens the `kind` check with `proposal`
+  and `task`. Additive and re-runnable. **Required for pinning and "Add a
+  task"** — without it the page still works on the auto rules, but those two
+  actions show a "needs migration 0028" notice.
 
 ## Urgent: apply 0007–0010 to live project
 

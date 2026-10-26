@@ -684,6 +684,7 @@ const Icons = {
   More: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>,
   Bell: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>,
   Link: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>,
+  Star: ({ filled } = {}) => <svg width="13" height="13" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
   Eye: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
   Cloud: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>,
   Outlook: () => <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M24 7.387v10.478c0 .23-.08.424-.238.576-.16.154-.353.23-.578.23h-8.26V6.58h8.26c.225 0 .418.077.578.23.159.154.238.347.238.577zM13.73 3.088v18.47L0 18.583V6.07l13.73-2.982z"/></svg>,
@@ -1990,29 +1991,74 @@ function VaultPage({ s, accent, session, isMobile }) {
 // file it couldn't place. Ticking a row Done, or "Don't flag again", is what
 // stops the next run raising it: the runs skip anything not 'open'.
 //
+// The list is a record and it grows. Focus (migration 0028) is the short list
+// on top of it — what Michel is actually doing today — see inboxInFocus.
+//
 // Module scope, like VaultPage: nested in App it would remount on every parent
 // render and lose its filters and in-flight state.
 const INBOX_KINDS = [
   { id: "chase", label: "Chase", tone: "#ef4444", blurb: "Promised and overdue, or asked and unanswered" },
   { id: "reply", label: "Needs your reply", tone: "#f59e0b", blurb: "Drafts are in Outlook — fill the [brackets] and send" },
+  { id: "proposal", label: "Fee proposals", tone: "#0ea5e9", blurb: "Quote requests to price and send" },
   { id: "deadline", label: "Deadlines", tone: "#3b82f6", blurb: "Council, Planning Portal and certifier dates" },
   { id: "money", label: "Money", tone: "#10b981", blurb: "Payments to record, remittances, approvals" },
   { id: "call", label: "Needs your call", tone: "#8b5cf6", blurb: "Files the run couldn't place, new jobs with no folder" },
+  { id: "task", label: "Tasks", tone: "#d946ef", blurb: "Added by hand, here" },
   { id: "fyi", label: "FYI", tone: "#64748b", blurb: "" },
   { id: "file", label: "Filed", tone: "#94a3b8", blurb: "Attachments moved into job folders" },
   { id: "skipped", label: "Skipped", tone: "#cbd5e1", blurb: "Signature images, duplicates, unrelated mail" },
 ];
-// Kinds that count towards the nav badge: things Michel must do, not the record of
-// what the run already did for him.
-const INBOX_ACTION_KINDS = new Set(["chase", "reply", "deadline", "money", "call"]);
+// Kinds that are Michel's to do, as opposed to the record of what the run
+// already did for him.
+const INBOX_ACTION_KINDS = new Set(["chase", "reply", "proposal", "deadline", "money", "call", "task"]);
 const inboxKindInfo = (id) => INBOX_KINDS.find((k) => k.id === id) || { id, label: id, tone: "#64748b", blurb: "" };
 const inboxIsActionable = (it) => it && it.status === "open" && INBOX_ACTION_KINDS.has(it.kind);
+// Focus — today's short list. `focus` is three-valued: true is pinned (by
+// Michel here, or by a run), false is taken out and stays out, null is
+// undecided — then an open to-do item is in Focus while it's a chase (overdue
+// by definition), a fee proposal, a hand-added task, or anything due today or
+// overdue. FYI / filed / skipped never qualify. The runs' upsert doesn't touch
+// the column, so a pin or a removal survives a refresh.
+const inboxAutoFocus = (it) => INBOX_ACTION_KINDS.has(it.kind) && (it.kind === "chase" || it.kind === "proposal" || it.kind === "task" || (!!it.due_date && it.due_date <= today()));
+const inboxInFocus = (it) => !!it && it.status === "open" && (it.focus === true || (it.focus == null && inboxAutoFocus(it)));
+// Focus order: overdue / soonest due first, then by kind, then newest.
+const inboxFocusOrder = (a, b) => {
+  if (a.due_date !== b.due_date) { if (!a.due_date) return 1; if (!b.due_date) return -1; return a.due_date.localeCompare(b.due_date); }
+  const ka = INBOX_KINDS.findIndex((k) => k.id === a.kind), kb = INBOX_KINDS.findIndex((k) => k.id === b.kind);
+  if (ka !== kb) return ka - kb;
+  return (b.created_at || "").localeCompare(a.created_at || "");
+};
+// Dashboard / mobile sub-line for a Focus row: kind · job · due.
+const inboxFocusSub = (it, jobs) => {
+  const job = it.job_id ? (jobs || []).find((j) => j.id === it.job_id) : null;
+  const due = it.due_date ? (it.due_date < today() ? `overdue since ${fmtDate(it.due_date)}` : it.due_date === today() ? "due today" : `due ${fmtDate(it.due_date)}`) : null;
+  return [inboxKindInfo(it.kind).label, job ? [job.job_number, job.address || job.name].filter(Boolean).join(" · ") : it.job_address, due].filter(Boolean).join(" · ");
+};
+// Light open rows for the nav badge and the dashboard; the page loads full rows
+// itself. `focus` arrived with 0028: until it's applied that select fails, so
+// fall back to the 0027 columns and let the auto rules carry Focus rather than
+// lose the badge.
+const INBOX_LIGHT_COLS = "id,kind,division,status,due_date,title,job_id,job_address";
+async function fetchInboxOpen(businessId) {
+  let res = await supabase.from("bk_inbox_items").select(INBOX_LIGHT_COLS + ",focus").eq("business_id", businessId).eq("status", "open");
+  if (res.error && /focus/i.test(res.error.message || "")) res = await supabase.from("bk_inbox_items").select(INBOX_LIGHT_COLS).eq("business_id", businessId).eq("status", "open");
+  if (res.error) console.error("inbox load failed", res.error);
+  return res.data || [];
+}
+// The migration a failed Inbox read or write is missing, or null for an ordinary error.
+const inboxMigrationNotice = (error) => {
+  const m = error?.message || "";
+  if (/focus|kind_check/i.test(m)) return "Focus and tasks need migration 0028 — apply supabase/migrations/0028_inbox_focus.sql in Supabase first.";
+  if (/bk_inbox/.test(m) && /not find|does not exist|schema cache/i.test(m)) return "The Inbox tables aren't set up yet — apply supabase/migrations/0027_inbox.sql in Supabase first.";
+  return null;
+};
+const inboxLocalId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
 const MAILBOX_LABEL = { info: "info@", accounts: "accounts@", energy: "energy@" };
 const inboxDays = (iso) => { if (!iso) return null; const ms = Date.now() - new Date(iso).getTime(); return Math.max(0, Math.floor(ms / 86400000)); };
 const inboxRunLabel = { morning: "Morning run", closeoff: "Close-off", manual: "Manual" };
 const fmtSydney = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 
-function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, onChanged }) {
+function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJob, onOpenDoc, onChanged }) {
   const [items, setItems] = useState(null);        // null = loading
   const [runs, setRuns] = useState([]);
   const [err, setErr] = useState(null);
@@ -2020,6 +2066,9 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
   const [showDone, setShowDone] = useState(false);
   const [busy, setBusy] = useState({});
   const [expanded, setExpanded] = useState(null);
+  const [newTask, setNewTask] = useState("");
+  const [newTaskJob, setNewTaskJob] = useState("");
+  const [adding, setAdding] = useState(false);
   const userId = session?.user?.id;
 
   const load = useCallback(async () => {
@@ -2030,8 +2079,7 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
     ]);
     if (error) {
       console.error("inbox load failed", error);
-      const missing = /bk_inbox/.test(error.message || "") && /not find|does not exist|schema cache/i.test(error.message || "");
-      setErr(missing ? "The Inbox tables aren't set up yet — apply supabase/migrations/0027_inbox.sql in Supabase first." : error.message);
+      setErr(inboxMigrationNotice(error) || error.message);
       setItems([]);
       return;
     }
@@ -2043,27 +2091,59 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
   useEffect(() => { load(); }, [load]);
 
   const inDiv = (it) => division === ALL_DIVISIONS || recordDivision(it) === division;
-  const visible = (items || []).filter(inDiv).filter((it) => kind === "all" || it.kind === kind);
-  const openCount = (id) => (items || []).filter(inDiv).filter((it) => it.status === "open" && (id === "all" ? INBOX_ACTION_KINDS.has(it.kind) : it.kind === id)).length;
+  const mine = (items || []).filter(inDiv);
+  const focusRows = mine.filter(inboxInFocus).sort(inboxFocusOrder);
+  const openCount = (id) => (id === "focus" ? focusRows.length : id === "all" ? mine.filter(inboxIsActionable).length : mine.filter((it) => it.status === "open" && it.kind === id).length);
   const jobById = (id) => (id ? (jobs || []).find((j) => j.id === id) : null);
+  const docById = (id) => (id ? (docs || []).find((d) => d.id === id) : null);
 
-  const setStatus = async (it, status, note) => {
+  // One write path for status and focus changes: update the row, then patch it
+  // in place (and drop it if it just left the open list).
+  const write = async (it, upd) => {
     setBusy((b) => ({ ...b, [it.id]: true }));
-    const now = new Date().toISOString();
-    const upd = status === "open"
-      ? { status, resolved_at: null, resolved_note: null, updated_at: now }
-      : { status, resolved_at: now, resolved_note: note || null, updated_at: now };
     const { error } = await supabase.from("bk_inbox_items").update(upd).eq("id", it.id).eq("user_id", userId);
     setBusy((b) => { const n = { ...b }; delete n[it.id]; return n; });
-    if (error) { console.error("inbox update failed", error); setErr(error.message); return; }
+    if (error) { console.error("inbox update failed", error); setErr(inboxMigrationNotice(error) || error.message); return; }
+    setErr(null);
     setItems((prev) => (prev || []).map((x) => (x.id === it.id ? { ...x, ...upd } : x)).filter((x) => showDone || x.status === "open"));
+    onChanged && onChanged();
+  };
+  const setStatus = (it, status, note) => {
+    const now = new Date().toISOString();
+    return write(it, status === "open" ? { status, resolved_at: null, resolved_note: null, updated_at: now } : { status, resolved_at: now, resolved_note: note || null, updated_at: now });
+  };
+  const setFocus = (it, focus) => write(it, { focus, updated_at: new Date().toISOString() });
+
+  // A task typed in here: kind 'task', pinned, keyed so the runs never collide
+  // with it. Division follows the job, else the company being viewed.
+  const addTask = async (e) => {
+    e.preventDefault();
+    const title = newTask.trim();
+    if (!title || !userId || adding) return;
+    setAdding(true);
+    const job = jobById(newTaskJob);
+    const row = {
+      user_id: userId, business_id: COMPANY.id,
+      division: job ? recordDivision(job) : division === ALL_DIVISIONS ? "mworx" : division,
+      job_id: job?.id || null, kind: "task", title, status: "open", focus: true,
+      dedupe_key: "task:" + inboxLocalId(), source_run: "manual",
+    };
+    const { data, error } = await supabase.from("bk_inbox_items").insert(row).select().single();
+    setAdding(false);
+    if (error) { console.error("inbox task insert failed", error); setErr(inboxMigrationNotice(error) || error.message); return; }
+    setErr(null);
+    setItems((prev) => [data, ...(prev || [])]);
+    setNewTask(""); setNewTaskJob("");
     onChanged && onChanged();
   };
 
   const open = (url) => { if (url) window.open(url, "_blank", "noopener"); };
 
+  // In "To do", Focus rows are promoted out of their kind groups; in a kind view
+  // they stay in place with a star, so a filter still shows everything of that kind.
+  const listed = kind === "all" ? mine.filter((it) => !inboxInFocus(it)) : kind === "focus" ? [] : mine.filter((it) => it.kind === kind);
   // Sort inside a group: soonest due first, then newest.
-  const sorted = [...visible].sort((a, b) => {
+  const sorted = [...listed].sort((a, b) => {
     const ka = INBOX_KINDS.findIndex((k) => k.id === a.kind), kb = INBOX_KINDS.findIndex((k) => k.id === b.kind);
     if (ka !== kb) return ka - kb;
     if (a.due_date !== b.due_date) { if (!a.due_date) return 1; if (!b.due_date) return -1; return a.due_date.localeCompare(b.due_date); }
@@ -2106,17 +2186,22 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
     return parts.reduce((acc, p, i) => (i ? [...acc, <span key={"sep" + i} style={{ color: "#cbd5e1" }}> · </span>, p] : [p]), []);
   };
 
-  const row = (it, isLast) => {
+  const row = (it, isLast, inFocusCard) => {
     const k = inboxKindInfo(it.kind);
     const done = it.status !== "open";
+    const inFocus = inboxInFocus(it);
+    const doc = docById(it.invoice_id);
     const isBusy = !!busy[it.id];
     const isOpen = expanded === it.id;
-    const linkBtn = (label, url) => url ? <button type="button" onClick={(e) => { e.stopPropagation(); open(url); }} style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Link /> {label}</button> : null;
+    const actBtn = (label, onClick) => <button type="button" onClick={(e) => { e.stopPropagation(); onClick(); }} style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Link /> {label}</button>;
+    const linkBtn = (label, url) => (url ? actBtn(label, () => open(url)) : null);
     return (
       <div key={it.id} onClick={() => setExpanded(isOpen ? null : it.id)} style={{ display: "flex", gap: 10, padding: isMobile ? "12px 14px" : "10px 12px", borderBottom: isLast ? "none" : "1px solid #f1f5f9", cursor: "pointer", opacity: done ? 0.55 : 1, background: isOpen ? "#f8fafc" : "transparent" }}>
         <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: 4, background: k.tone, marginTop: 6 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: isMobile ? 15 : 13, fontWeight: 600, color: "#0f172a", textDecoration: done ? "line-through" : "none" }}>{it.title}</div>
+          <div style={{ fontSize: isMobile ? 15 : 13, fontWeight: 600, color: "#0f172a", textDecoration: done ? "line-through" : "none" }}>
+            {inFocus && !inFocusCard && <span title="In focus" style={{ color: accent, display: "inline-flex", verticalAlign: -2, marginRight: 5 }}><Icons.Star filled /></span>}{it.title}
+          </div>
           {it.detail && <div style={{ fontSize: isMobile ? 13 : 12, color: "#475569", marginTop: 2, whiteSpace: isOpen ? "pre-wrap" : "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.detail}</div>}
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, display: "flex", flexWrap: "wrap", gap: 2 }}>{metaLine(it)}</div>
           {done && it.resolved_at && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>{it.status === "dismissed" ? "Won't be flagged again" : "Done"} · {fmtSydney(it.resolved_at)}{it.resolved_note ? ` · ${it.resolved_note}` : ""}</div>}
@@ -2124,7 +2209,11 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
               {linkBtn("Open draft", it.draft_link)}
               {linkBtn("Open email", it.email_link)}
+              {doc && onOpenDoc && actBtn(`Open ${doc.type === "quote" ? "quote" : "invoice"}${doc.number ? ` ${doc.number}` : ""}`, () => onOpenDoc(doc))}
               {it.file_path && <span style={{ ...s.badge("#64748b", "outline"), alignSelf: "center" }} title={it.file_path}>{it.file_path.split("/").slice(-2).join(" / ")}</span>}
+              {!done && (
+                <button type="button" disabled={isBusy} onClick={() => setFocus(it, !inFocus)} title={inFocus ? "Take it off today's list" : "Put it on today's list"} style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4, color: inFocus ? accent : "#475569", borderColor: inFocus ? accent + "66" : "#e2e8f0" }}><Icons.Star filled={inFocus} /> {inFocus ? "Remove from focus" : "Focus"}</button>
+              )}
               <span style={{ flex: 1 }} />
               {done
                 ? <button type="button" disabled={isBusy} onClick={() => setStatus(it, "open")} style={{ ...s.btnOutline, padding: "5px 10px" }}>Reopen</button>
@@ -2141,6 +2230,29 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
       </div>
     );
   };
+
+  // The Focus card: today's list on top, and the one place to type a task in.
+  const focusCard = (
+    <div style={{ ...s.card, padding: 0, overflow: "hidden", borderColor: accent + "66" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "10px 12px", borderBottom: "1px solid #f1f5f9", background: "#fafbfb" }}>
+        <span style={{ color: accent, alignSelf: "center", display: "inline-flex" }}><Icons.Star filled /></span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>Focus</span>
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>{focusRows.length}</span>
+        {!isMobile && <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: "auto" }}>Today's list — pinned by you, flagged by the runs, or due now</span>}
+      </div>
+      {focusRows.length === 0
+        ? <div style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>Nothing in focus. Open any item below and press Focus, or add a task.</div>
+        : focusRows.map((it, i) => row(it, i === focusRows.length - 1, true))}
+      <form onSubmit={addTask} style={{ display: "flex", gap: 6, padding: "8px 12px", borderTop: "1px solid #f1f5f9", background: "#fafbfb", flexWrap: isMobile ? "wrap" : "nowrap" }}>
+        <input value={newTask} onChange={(e) => setNewTask(e.target.value)} placeholder="Add a task — e.g. Send fee proposal for 12 Smith St" style={{ ...s.input, flex: "1 1 200px", padding: "7px 10px", fontSize: 12 }} />
+        <select value={newTaskJob} onChange={(e) => setNewTaskJob(e.target.value)} style={{ ...s.select, width: isMobile ? "100%" : 220, padding: "7px 10px", fontSize: 12 }}>
+          <option value="">No job</option>
+          {(jobs || []).map((j) => <option key={j.id} value={j.id}>{j.job_number ? `${j.job_number} · ` : ""}{j.address || j.name}</option>)}
+        </select>
+        <button type="submit" disabled={adding || !newTask.trim()} style={{ ...s.btn(accent, true), opacity: adding || !newTask.trim() ? 0.6 : 1 }}>Add</button>
+      </form>
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 960 }}>
@@ -2177,31 +2289,41 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, onOpenJob, on
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: isMobile ? "nowrap" : "wrap", overflowX: isMobile ? "auto" : "visible", marginBottom: 12, paddingBottom: isMobile ? 4 : 0, scrollbarWidth: "none" }}>
+        {pill("focus", "Focus")}
         {pill("all", "To do")}
         {INBOX_KINDS.map((k) => pill(k.id, k.label))}
       </div>
 
       {items === null ? (
         <div style={{ ...s.card, color: "#64748b" }}>Loading…</div>
-      ) : groups.length === 0 ? (
-        <div style={{ ...s.card, textAlign: "center", padding: 32 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a" }}>{kind === "all" && !showDone ? "Nothing waiting on you" : "Nothing here"}</div>
-          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{kind === "all" && !showDone ? "Everything the runs raised has been dealt with." : "Try another filter, or show done items."}</div>
-        </div>
-      ) : groups.map((g) => {
-        const k = inboxKindInfo(g.kind);
-        return (
-          <div key={g.kind} style={{ ...s.card, padding: 0, overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "10px 12px", borderBottom: "1px solid #f1f5f9", background: "#fafbfb" }}>
-              <span style={{ width: 8, height: 8, borderRadius: 4, background: k.tone, alignSelf: "center" }} />
-              <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{k.label}</span>
-              <span style={{ fontSize: 11, color: "#94a3b8" }}>{g.rows.length}</span>
-              {k.blurb && !isMobile && <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: "auto" }}>{k.blurb}</span>}
-            </div>
-            {g.rows.map((it, i) => row(it, i === g.rows.length - 1))}
-          </div>
-        );
-      })}
+      ) : (
+        <>
+          {(kind === "all" || kind === "focus") && focusCard}
+          {kind !== "focus" && (groups.length === 0 ? (
+            kind === "all" && focusRows.length > 0
+              ? <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: "4px 0 14px" }}>Nothing else waiting on you.</div>
+              : (
+                <div style={{ ...s.card, textAlign: "center", padding: 32 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#0f172a" }}>{kind === "all" && !showDone ? "Nothing waiting on you" : "Nothing here"}</div>
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{kind === "all" && !showDone ? "Everything the runs raised has been dealt with." : "Try another filter, or show done items."}</div>
+                </div>
+              )
+          ) : groups.map((g) => {
+            const k = inboxKindInfo(g.kind);
+            return (
+              <div key={g.kind} style={{ ...s.card, padding: 0, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "10px 12px", borderBottom: "1px solid #f1f5f9", background: "#fafbfb" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: k.tone, alignSelf: "center" }} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{k.label}</span>
+                  <span style={{ fontSize: 11, color: "#94a3b8" }}>{g.rows.length}</span>
+                  {k.blurb && !isMobile && <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: "auto" }}>{k.blurb}</span>}
+                </div>
+                {g.rows.map((it, i) => row(it, i === g.rows.length - 1, false))}
+              </div>
+            );
+          }))}
+        </>
+      )}
     </div>
   );
 }
@@ -2466,9 +2588,9 @@ export default function BookkeeperApp() {
       supabase.from("bk_quote_templates").select("*").eq("business_id", businessId).order("name"),
       supabase.from("bk_scope_lines").select("*").eq("business_id", businessId).eq("archived", false).order("sort_order"),
       // Errors here (table not migrated yet) just mean an empty badge.
-      supabase.from("bk_inbox_items").select("id,kind,division,status").eq("business_id", businessId).eq("status", "open"),
+      fetchInboxOpen(businessId),
     ]);
-    setInboxOpen(ibRes.data || []);
+    setInboxOpen(ibRes);
 
     const loadedInvoices = iRes.data || [];
     if (loadedInvoices.length) {
@@ -3644,13 +3766,10 @@ Are you sure you want it ${verb}?`);
   if (!session) return <LoginScreen />;
   if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f7f9f8", color: "#64748b", fontFamily: "'DM Sans', sans-serif" }}>Loading...</div>;
 
-  // Badge: open items that need Michel, in the company being viewed. Filed /
-  // skipped / FYI rows are the run's record, not his to-do, so they don't count.
-  const inboxBadge = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable).length;
-  const refreshInbox = async () => {
-    const { data } = await supabase.from("bk_inbox_items").select("id,kind,division,status").eq("business_id", biz).eq("status", "open");
-    setInboxOpen(data || []);
-  };
+  // Badge: what's in Focus for the company being viewed — the short list, not
+  // the whole open record (see inboxInFocus). Filed / skipped / FYI never count.
+  const inboxBadge = inboxOpen.filter(inActiveDiv).filter(inboxInFocus).length;
+  const refreshInbox = async () => setInboxOpen(await fetchInboxOpen(biz));
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "inbox", label: "Inbox", icon: Icons.Inbox, badge: inboxBadge },
@@ -4899,10 +5018,13 @@ Are you sure you want it ${verb}?`);
     const draftDocs = fyInvoices.filter((i) => i.status === "draft");
     const recentInvoices = [...fyRealInvoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 6);
     const topProjects = activeProjects.map((p) => ({ p, t: projectTotals(p, divInvoices) })).sort((a, b) => b.t.remaining - a.t.remaining).slice(0, 6);
-    const inboxTodo = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable);
-    const inboxByKind = INBOX_KINDS.filter((k) => INBOX_ACTION_KINDS.has(k.id)).map((k) => ({ k, n: inboxTodo.filter((it) => it.kind === k.id).length })).filter((x) => x.n > 0);
+    // Focus rows first (the short list), then one line for the rest of the open to-do.
+    const inboxFocus = inboxOpen.filter(inActiveDiv).filter(inboxInFocus).sort(inboxFocusOrder);
+    const inboxRest = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable).filter((it) => !inboxInFocus(it));
+    const inboxByKind = INBOX_KINDS.filter((k) => INBOX_ACTION_KINDS.has(k.id)).map((k) => ({ k, n: inboxRest.filter((it) => it.kind === k.id).length })).filter((x) => x.n > 0);
     const attention = [
-      ...(inboxTodo.length ? [{ key: "inbox", tone: "#ef4444", label: `${inboxTodo.length} thing${inboxTodo.length === 1 ? "" : "s"} waiting in Inbox`, sub: inboxByKind.map((x) => `${x.n} ${x.k.label.toLowerCase()}`).join(" · "), amount: null, go: () => setPage("inbox") }] : []),
+      ...inboxFocus.slice(0, 4).map((it) => ({ key: "f" + it.id, tone: inboxKindInfo(it.kind).tone, label: it.title, sub: inboxFocusSub(it, jobs), amount: null, go: () => setPage("inbox") })),
+      ...(inboxRest.length ? [{ key: "inbox", tone: "#ef4444", label: `${inboxRest.length}${inboxFocus.length ? " more" : ""} thing${inboxRest.length === 1 ? "" : "s"} waiting in Inbox`, sub: inboxByKind.map((x) => `${x.n} ${x.k.label.toLowerCase()}`).join(" · "), amount: null, go: () => setPage("inbox") }] : []),
       ...overdueInvoices.slice(0, 4).map((i) => ({ key: "o" + i.id, tone: "#ef4444", label: `${i.number} — ${daysOverdue(i)} day${daysOverdue(i) === 1 ? "" : "s"} overdue`, sub: i.contact_name || i.contact_company || "", amount: i.total, go: () => { setEditItem(i); setModal("invoice"); } })),
       ...leftToInvoice.slice(0, 3).map(({ proj, remaining }) => ({ key: "a" + proj.id, tone: "#0ea5e9", label: `${proj.job_number || "Project"} — left to invoice`, sub: projectLabel(proj), amount: remaining, go: () => { setEditItem(proj); setModal("project"); } })),
       ...draftDocs.slice(0, 3).map((d) => ({ key: "d" + d.id, tone: "#94a3b8", label: `${d.number} still a draft`, sub: d.contact_name || d.contact_company || "", amount: d.total, go: () => { setEditItem(d); setModal("invoice"); } })),
@@ -5507,11 +5629,16 @@ Are you sure you want it ${verb}?`);
           {tile("Paid", paidThisFY.reduce((sum, i) => sum + Number(i.total || 0), 0), `${paidThisFY.length} invoice${paidThisFY.length === 1 ? "" : "s"} · ${fyTag}`)}
           {tile("Projects", projectsRemaining, `${activeProjects.length} active`)}
         </div>
-        {(() => { const todo = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable); return todo.length > 0 && (
-          <MobileSection title="Inbox" onViewAll={() => setPage("inbox")}>
-            <MobileRow primary={`${todo.length} thing${todo.length === 1 ? "" : "s"} waiting on you`} secondary={INBOX_KINDS.filter((k) => INBOX_ACTION_KINDS.has(k.id)).map((k) => ({ k, n: todo.filter((it) => it.kind === k.id).length })).filter((x) => x.n > 0).map((x) => `${x.n} ${x.k.label.toLowerCase()}`).join(" · ")} right="Open" isLast onClick={() => setPage("inbox")} />
-          </MobileSection>
-        ); })()}
+        {(() => {
+          const focus = inboxOpen.filter(inActiveDiv).filter(inboxInFocus).sort(inboxFocusOrder);
+          const rest = inboxOpen.filter(inActiveDiv).filter(inboxIsActionable).filter((it) => !inboxInFocus(it));
+          return (focus.length > 0 || rest.length > 0) && (
+            <MobileSection title={focus.length ? "Focus" : "Inbox"} onViewAll={() => setPage("inbox")}>
+              {focus.slice(0, 3).map((it, i) => <MobileRow key={it.id} primary={it.title} secondary={inboxFocusSub(it, jobs)} right="Open" isLast={rest.length === 0 && i === Math.min(2, focus.length - 1)} onClick={() => setPage("inbox")} />)}
+              {rest.length > 0 && <MobileRow primary={`${rest.length}${focus.length ? " more" : ""} thing${rest.length === 1 ? "" : "s"} waiting on you`} secondary={INBOX_KINDS.filter((k) => INBOX_ACTION_KINDS.has(k.id)).map((k) => ({ k, n: rest.filter((it) => it.kind === k.id).length })).filter((x) => x.n > 0).map((x) => `${x.n} ${x.k.label.toLowerCase()}`).join(" · ")} right="Open" isLast onClick={() => setPage("inbox")} />}
+            </MobileSection>
+          );
+        })()}
         {overdueInvoices.length > 0 && (
           <MobileSection title="Needs attention" onViewAll={() => setPage("invoices")}>
             {overdueInvoices.slice(0, 4).map((inv, i) => (
@@ -5648,7 +5775,7 @@ Are you sure you want it ${verb}?`);
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
-        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /></div>}
+        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /></div>}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
@@ -5778,7 +5905,7 @@ Are you sure you want it ${verb}?`);
           </div>
           {/* VaultPage is module-scope and rendered directly (not via pageMap) so it
               keeps its in-memory data key across App re-renders — see its comment. */}
-          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /> : <PageComponent />}</div>
+          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /> : <PageComponent />}</div>
         </div>
       </div>
       )}
