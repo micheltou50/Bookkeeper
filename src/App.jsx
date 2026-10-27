@@ -196,19 +196,21 @@ function getNextDocumentNumber(invoices, divisionId, type) {
   return `${tag}${String(next).padStart(3, "0")}`;
 }
 
-// Per-division job/project number in the YY### scheme (e.g. 26106 = 6th job of
-// 2026). Continues from the highest existing number for the current year; if
-// there are none yet, starts the year at YY101.
-// Project numbers are a single sequence for the whole business — NOT per
-// division (unlike quote/invoice numbers, which carry a division prefix). A
-// per-division count made each new division restart at YY101 and collide with
-// another division's existing numbers, so we count across all jobs here.
-function getNextJobNumber(jobs) {
+// Project numbers per company. Mworx Energy has its own sequence — YY1###
+// from YY1001 (261001 …), as its OneDrive folders are named — and never shares
+// one with Mworx Group. The other companies keep the single YY### sequence from
+// YY101 (26101 …), counted across their jobs together so a new company never
+// restarts at YY101 and collides with an existing number. Continues from the
+// highest existing number for the current year.
+function getNextJobNumber(jobs, divisionId) {
   const yy = String(new Date().getFullYear()).slice(-2);
+  const energy = divisionId === "mworx_energy";
+  const digits = energy ? 6 : 5;
   const nums = (jobs || [])
-    .map((j) => { const m = String(j.job_number || "").match(/^(\d{4,})$/); return m ? Number(m[1]) : 0; })
-    .filter((n) => n > 0 && String(n).startsWith(yy));
-  const next = nums.length ? Math.max(...nums) + 1 : Number(`${yy}101`);
+    .filter((j) => (recordDivision(j) === "mworx_energy") === energy)
+    .map((j) => { const m = String(j.job_number || "").match(/^(\d+)$/); return m ? Number(m[1]) : 0; })
+    .filter((n) => n > 0 && String(n).startsWith(yy) && String(n).length === digits);
+  const next = nums.length ? Math.max(...nums) + 1 : Number(energy ? `${yy}1001` : `${yy}101`);
   return String(next);
 }
 
@@ -2987,7 +2989,7 @@ export default function BookkeeperApp() {
       setJobs((prev) => prev.map((j) => j.id === existing.id ? { ...j, ...upd } : j));
     } else {
       const contact = contactName ? contacts.find((c) => (c.name || c.company) === contactName) : null;
-      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs) };
+      const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: trimmed, contact_id: contact?.id || null, job_number: getNextJobNumber(jobs, insertDivision) };
       const { data: inserted } = await sbInsert("bk_jobs", row, "save job");
       if (inserted) setJobs((prev) => [inserted, ...prev]);
     }
@@ -2997,7 +2999,7 @@ export default function BookkeeperApp() {
 
   const createProject = async (p) => {
     const contact = p.contact_name ? contacts.find((c) => (c.name || c.company) === p.contact_name) : null;
-    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", application_type: p.application_type || null, job_number: (p.job_number || "").trim() || getNextJobNumber(jobs) };
+    const row = { user_id: session.user.id, business_id: biz, division: insertDivision, name: (p.name || "").trim(), contact_id: contact?.id || null, address: p.address || null, notes: p.notes || null, contract_value: Number(p.contract_value) || 0, status: p.status || "active", application_type: p.application_type || null, job_number: (p.job_number || "").trim() || getNextJobNumber(jobs, insertDivision) };
     const { ok, data: inserted } = await sbInsert("bk_jobs", row, "create project");
     if (!ok) return null;
     if (inserted) {
@@ -4677,7 +4679,7 @@ Are you sure you want it ${verb}?`);
   const ProjectForm = ({ existing }) => {
     const init = existing
       ? { name: existing.name || "", address: existing.address || "", notes: existing.notes || "", status: existing.status || "active", application_type: existing.application_type || "", job_number: existing.job_number || "" }
-      : { name: "", address: "", notes: "", status: "active", application_type: "", job_number: getNextJobNumber(jobs) };
+      : { name: "", address: "", notes: "", status: "active", application_type: "", job_number: getNextJobNumber(jobs, insertDivision) };
     // Draft survival across a remount (see projectDraftRef), keyed to this
     // project so a draft can't bleed into another one. This also covers the
     // saved-project edit path: attaching/removing a contact there remounts the

@@ -107,6 +107,18 @@ give, and the 27 Oct close-off wrote nothing because of it.
   (`draft_link`, `email_link`), to the job (`job_id` → opens the project) and
   to the invoice or quote (`invoice_id` → opens the document).
 
+## Numbering
+
+- Quotes and invoices: `<company prefix><YY><seq>` from `bk_profiles`
+  (`QMWX26017`, `ME26001` …), per company (`getNextDocumentNumber`).
+- Projects: **Mworx Energy has its own sequence**, `YY1###` from `YY1001`
+  (`261001` …), as its OneDrive folders are named. The other companies share
+  the single `YY###` sequence from `YY101` (`26101` …). `getNextJobNumber(jobs,
+  divisionId)` in the app and `bk_draft_quote_from_proposal` follow the same
+  rule. A company's jobs must be in `bk_jobs` for the count to continue from
+  them — Energy's two OneDrive folders (261001, 261002) were not in Bookkeeper
+  on 27 Oct.
+
 ## Conventions
 
 - Australian English, AUD, Sydney time for anything date-shaped.

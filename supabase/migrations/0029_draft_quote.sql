@@ -125,11 +125,20 @@ begin
     if v_address is null then
       return jsonb_build_object('ok', false, 'error', 'no job and no address on the item');
     end if;
-    -- Job numbers are one YY### sequence across the whole business (see
-    -- getNextJobNumber in the app).
-    select coalesce(max(job_number::bigint), (v_yy || '100')::bigint) + 1 into v_seq
-      from bk_jobs
-      where business_id = v_item.business_id and job_number ~ '^\d{4,}$' and job_number like v_yy || '%';
+    -- Job numbers, as getNextJobNumber in the app: Mworx Energy has its own
+    -- sequence, YY1### from YY1001 (261001 …, matching its OneDrive folders);
+    -- the other companies share YY### from YY101 (26101 …).
+    if v_div = 'mworx_energy' then
+      select coalesce(max(job_number::bigint), (v_yy || '1000')::bigint) + 1 into v_seq
+        from bk_jobs
+        where business_id = v_item.business_id and division = 'mworx_energy'
+          and job_number ~ '^\d{6}$' and job_number like v_yy || '%';
+    else
+      select coalesce(max(job_number::bigint), (v_yy || '100')::bigint) + 1 into v_seq
+        from bk_jobs
+        where business_id = v_item.business_id and division <> 'mworx_energy'
+          and job_number ~ '^\d{5}$' and job_number like v_yy || '%';
+    end if;
     insert into bk_jobs (user_id, business_id, division, name, address, status, application_type, job_number, contact_id, contract_value)
       values (v_item.user_id, v_item.business_id, v_div,
               left(coalesce(v_app_type || ' - ', '') || coalesce(v_works, 'Enquiry'), 80),

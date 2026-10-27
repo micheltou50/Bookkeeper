@@ -35,6 +35,12 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   `BASIX` as the application type. There is no BASIX quote type (Michel's
   call), so a BASIX proposal drafts with one scope line to fill in, no fee
   suggestion and no terms to copy; numbered `QME26nnn`.
+- Project numbers (27 Oct): Mworx Energy now has its own `YY1###` sequence
+  from 261001 in the app and in the draft-quote function. OneDrive already
+  holds Energy folders 261001 and 261002 that are not in `bk_jobs`; until
+  they are added as projects, the next Energy lead would be numbered 261001
+  and the run would find that folder already there. Michel to decide whether
+  to add the two existing Energy jobs to Bookkeeper.
 
 ## In progress — Inbox
 
