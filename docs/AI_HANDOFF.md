@@ -14,6 +14,9 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   (`0029_draft_quote.sql`: `bk_draft_quote_from_proposal`, "Draft quote" on
   proposal rows).
 - Live database: 0027, 0028 and 0029 are applied (27 Oct 2026).
+  `0030_inbox_follow_invoice.sql` (Inbox follows quote / invoice status) is
+  written but NOT yet applied — the Supabase connector's confirmation prompt
+  timed out; apply it next.
 - Scheduled runs ("Mworx morning inbox" ~7:12am, "Mworx close-off" ~4:16pm
   Sydney) updated 27 Oct: they set `focus`, raise `proposal` items with a
   holding reply, and call `bk_draft_quote_from_proposal` for each open

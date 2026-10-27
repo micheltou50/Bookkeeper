@@ -35,6 +35,11 @@ These SQL files document the schema/constraints/RLS the app relies on.
   into a draft quote the way the app does (next number, quote-type scope, client
   and lead job linked or created) and links it on the item. Called by the runs
   and by the Inbox page's "Draft quote". Re-runnable.
+- `0030_inbox_follow_invoice.sql` — trigger on `bk_invoices`: a quote sent /
+  accepted marks its `proposal` item done (declined → dismissed); an invoice
+  sent / paid marks its `money` item done (superseded / cancelled →
+  dismissed). Status changes only, open items linked by `invoice_id` only.
+  Re-runnable.
 
 ## Urgent: apply 0007–0010 to live project
 
