@@ -41,7 +41,7 @@ invoices share the table via `type`) · `bk_quote_templates`, `bk_scope_lines` �
 `bk_transactions`, `bk_receipts`, `bk_reconciliations`, `bk_category_rules` ·
 `bk_email_connections` (Outlook OAuth tokens), `bk_oauth_states` ·
 `bk_reminder_log` · `bk_vaults`, `bk_vault_items` (zero-knowledge) ·
-`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027, 0028).
+`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0029).
 
 ## Inbox (Oct 2026)
 
@@ -65,8 +65,22 @@ counts) that the page shows as "Last run".
   proposal, a task, or due today / overdue → in Focus (`inboxInFocus`). The nav
   badge and the dashboard / mobile rows count Focus, not the whole open list.
   "Add a task" on the page inserts a `task` row (`dedupe_key task:<uuid>`,
-  `source_run manual`, `focus true`). The runs don't set `focus` yet — their
-  upsert leaves the column alone, so pins survive refreshes.
+  `source_run manual`, `focus true`). The runs set `focus = true` on what he
+  must do today (chases, proposals, stale replies, deadlines due, money);
+  their upsert leaves the column alone on refresh, so pins and removals
+  survive.
+- **Fee proposals** (migration 0029): a quote request becomes a `proposal`
+  item (`dedupe_key proposal:<conversationId>`) plus a holding-reply draft in
+  Outlook; the run then calls `bk_draft_quote_from_proposal(item_id,
+  application_type, works, suggested_fee, template_id, client_company)`,
+  which does what the app's quote form does server-side — next quote number
+  for the division, the quote type's scope lines with `[address]` and the
+  works filled in, notes, payment plan, terms copied from the last quote,
+  the client linked or created, a `lead` job created when the address has
+  none — saves it as a draft and sets the item's `invoice_id`. The Inbox row
+  then shows "Open quote"; "Draft quote" on the row calls the same function
+  (rpc) by hand. The fee is a suggestion from comparable quotes (no quote
+  type carries a `lump_amount` yet); nothing is sent without Michel.
 - `dedupe_key` is unique per user (`reply:<internetMessageId>`,
   `chase:<conversationId>:<promised_at>`, `file:<OneDrive path>` …). Runs upsert
   on it and only touch rows still `open`.

@@ -30,6 +30,11 @@ These SQL files document the schema/constraints/RLS the app relies on.
   and `task`. Additive and re-runnable. **Required for pinning and "Add a
   task"** — without it the page still works on the auto rules, but those two
   actions show a "needs migration 0028" notice.
+- `0029_draft_quote.sql` — `bk_draft_quote_from_proposal(item_id, application_type,
+  works, amount, template_id, client_company)`: turns a `proposal` Inbox item
+  into a draft quote the way the app does (next number, quote-type scope, client
+  and lead job linked or created) and links it on the item. Called by the runs
+  and by the Inbox page's "Draft quote". Re-runnable.
 
 ## Urgent: apply 0007–0010 to live project
 

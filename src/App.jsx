@@ -1999,7 +1999,7 @@ function VaultPage({ s, accent, session, isMobile }) {
 const INBOX_KINDS = [
   { id: "chase", label: "Chase", tone: "#ef4444", blurb: "Promised and overdue, or asked and unanswered" },
   { id: "reply", label: "Needs your reply", tone: "#f59e0b", blurb: "Drafts are in Outlook — fill the [brackets] and send" },
-  { id: "proposal", label: "Fee proposals", tone: "#0ea5e9", blurb: "Quote requests to price and send" },
+  { id: "proposal", label: "Fee proposals", tone: "#0ea5e9", blurb: "Quote requests — draft the quote, check the fee, send" },
   { id: "deadline", label: "Deadlines", tone: "#3b82f6", blurb: "Council, Planning Portal and certifier dates" },
   { id: "money", label: "Money", tone: "#10b981", blurb: "Payments to record, remittances, approvals" },
   { id: "call", label: "Needs your call", tone: "#8b5cf6", blurb: "Files the run couldn't place, new jobs with no folder" },
@@ -2048,6 +2048,7 @@ async function fetchInboxOpen(businessId) {
 // The migration a failed Inbox read or write is missing, or null for an ordinary error.
 const inboxMigrationNotice = (error) => {
   const m = error?.message || "";
+  if (/bk_draft_quote_from_proposal/i.test(m)) return "Drafting quotes needs migration 0029 — apply supabase/migrations/0029_draft_quote.sql in Supabase first.";
   if (/focus|kind_check/i.test(m)) return "Focus and tasks need migration 0028 — apply supabase/migrations/0028_inbox_focus.sql in Supabase first.";
   if (/bk_inbox/.test(m) && /not find|does not exist|schema cache/i.test(m)) return "The Inbox tables aren't set up yet — apply supabase/migrations/0027_inbox.sql in Supabase first.";
   return null;
@@ -2058,7 +2059,7 @@ const inboxDays = (iso) => { if (!iso) return null; const ms = Date.now() - new 
 const inboxRunLabel = { morning: "Morning run", closeoff: "Close-off", manual: "Manual" };
 const fmtSydney = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 
-function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJob, onOpenDoc, onChanged }) {
+function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJob, onOpenDoc, onQuoteDrafted, onChanged }) {
   const [items, setItems] = useState(null);        // null = loading
   const [runs, setRuns] = useState([]);
   const [err, setErr] = useState(null);
@@ -2113,6 +2114,21 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
     return write(it, status === "open" ? { status, resolved_at: null, resolved_note: null, updated_at: now } : { status, resolved_at: now, resolved_note: note || null, updated_at: now });
   };
   const setFocus = (it, focus) => write(it, { focus, updated_at: new Date().toISOString() });
+
+  // Fee proposal → draft quote, done server-side (bk_draft_quote_from_proposal,
+  // migration 0029) exactly as the runs do it. The app then pulls the new quote
+  // and any lead job / contact into its state so "Open quote" works at once.
+  const draftQuote = async (it) => {
+    setBusy((b) => ({ ...b, [it.id]: true }));
+    const { data, error } = await supabase.rpc("bk_draft_quote_from_proposal", { p_item_id: it.id });
+    setBusy((b) => { const n = { ...b }; delete n[it.id]; return n; });
+    if (error) { console.error("draft quote failed", error); setErr(inboxMigrationNotice(error) || error.message); return; }
+    if (!data?.ok) { setErr(data?.error || "Couldn't draft the quote."); return; }
+    setErr(null);
+    if (onQuoteDrafted) await onQuoteDrafted(data);
+    await load();
+    onChanged && onChanged();
+  };
 
   // A task typed in here: kind 'task', pinned, keyed so the runs never collide
   // with it. Division follows the job, else the company being viewed.
@@ -2210,6 +2226,7 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
               {linkBtn("Open draft", it.draft_link)}
               {linkBtn("Open email", it.email_link)}
               {doc && onOpenDoc && actBtn(`Open ${doc.type === "quote" ? "quote" : "invoice"}${doc.number ? ` ${doc.number}` : ""}`, () => onOpenDoc(doc))}
+              {it.kind === "proposal" && !it.invoice_id && !done && <button type="button" disabled={isBusy} onClick={() => draftQuote(it)} title="Create the draft quote in Bookkeeper from the job's quote type" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Plus /> {isBusy ? "Drafting…" : "Draft quote"}</button>}
               {it.file_path && <span style={{ ...s.badge("#64748b", "outline"), alignSelf: "center" }} title={it.file_path}>{it.file_path.split("/").slice(-2).join(" / ")}</span>}
               {!done && (
                 <button type="button" disabled={isBusy} onClick={() => setFocus(it, !inFocus)} title={inFocus ? "Take it off today's list" : "Put it on today's list"} style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4, color: inFocus ? accent : "#475569", borderColor: inFocus ? accent + "66" : "#e2e8f0" }}><Icons.Star filled={inFocus} /> {inFocus ? "Remove from focus" : "Focus"}</button>
@@ -3770,6 +3787,26 @@ Are you sure you want it ${verb}?`);
   // the whole open record (see inboxInFocus). Filed / skipped / FYI never count.
   const inboxBadge = inboxOpen.filter(inActiveDiv).filter(inboxInFocus).length;
   const refreshInbox = async () => setInboxOpen(await fetchInboxOpen(biz));
+  // After the Inbox drafts a quote (bk_draft_quote_from_proposal): pull the new
+  // quote, and the lead job / client it may have created, into state so the
+  // row's "Open quote" and the Projects page see them without a reload.
+  const pullDraftedQuote = async (r) => {
+    if (r?.quote_id) {
+      const [{ data: q }, { data: its }] = await Promise.all([
+        supabase.from("bk_invoices").select("*").eq("id", r.quote_id).maybeSingle(),
+        supabase.from("bk_invoice_items").select("*").eq("invoice_id", r.quote_id).order("sort_order"),
+      ]);
+      if (q) setInvoices((prev) => [{ ...q, items: its || [] }, ...prev.filter((x) => x.id !== q.id)]);
+    }
+    if (r?.job_created && r.job_id) {
+      const { data: j } = await supabase.from("bk_jobs").select("*").eq("id", r.job_id).maybeSingle();
+      if (j) setJobs((prev) => [j, ...prev.filter((x) => x.id !== j.id)]);
+    }
+    if (r?.contact_created && r.contact_id) {
+      const { data: c } = await supabase.from("bk_contacts").select("*").eq("id", r.contact_id).maybeSingle();
+      if (c) setContacts((prev) => [...prev.filter((x) => x.id !== c.id), c].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
+    }
+  };
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.Dashboard },
     { id: "inbox", label: "Inbox", icon: Icons.Inbox, badge: inboxBadge },
@@ -5775,7 +5812,7 @@ Are you sure you want it ${verb}?`);
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
-        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /></div>}
+        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onQuoteDrafted={pullDraftedQuote} onChanged={refreshInbox} /></div>}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
@@ -5905,7 +5942,7 @@ Are you sure you want it ${verb}?`);
           </div>
           {/* VaultPage is module-scope and rendered directly (not via pageMap) so it
               keeps its in-memory data key across App re-renders — see its comment. */}
-          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onChanged={refreshInbox} /> : <PageComponent />}</div>
+          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onQuoteDrafted={pullDraftedQuote} onChanged={refreshInbox} /> : <PageComponent />}</div>
         </div>
       </div>
       )}
