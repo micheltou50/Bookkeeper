@@ -30,13 +30,11 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   call the functions with SELECT; the run row was corrected to status
   "error" with the explanation. The 28 Oct 7:12am morning run is the first
   on the new write path — check its run row has a summary and counts.
-- BASIX test (27 Oct evening): the runs now route BASIX / NatHERS mail to
-  `mworx_energy` by subject matter, not only by mailbox, and pass `BASIX` as
-  the application type. A starter quote type "BASIX — Certificate & NatHERS
-  Assessment" (application type `BASIX`, lump sum, no fee) was added so a
-  BASIX proposal gets a scope; Michel should edit its wording and set a fee.
-  An Energy quote is numbered `QME26nnn`, gets no terms (none to copy yet)
-  and no fee suggestion (no Energy quote history).
+- BASIX (27 Oct evening): the runs route BASIX / NatHERS mail to
+  `mworx_energy` by subject matter, matching the filing rule, and pass
+  `BASIX` as the application type. There is no BASIX quote type (Michel's
+  call), so a BASIX proposal drafts with one scope line to fill in, no fee
+  suggestion and no terms to copy; numbered `QME26nnn`.
 
 ## In progress — Inbox
 
