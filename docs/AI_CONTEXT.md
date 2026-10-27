@@ -41,7 +41,7 @@ invoices share the table via `type`) · `bk_quote_templates`, `bk_scope_lines` �
 `bk_transactions`, `bk_receipts`, `bk_reconciliations`, `bk_category_rules` ·
 `bk_email_connections` (Outlook OAuth tokens), `bk_oauth_states` ·
 `bk_reminder_log` · `bk_vaults`, `bk_vault_items` (zero-knowledge) ·
-`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0030).
+`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0031).
 
 ## Inbox (Oct 2026)
 
@@ -53,7 +53,11 @@ staging folder into job folders, draft replies/chases in Outlook, and treat
 `bk_invoices` (paid/overdue), `bk_contacts`, and write their findings into
 `bk_inbox_items` via the Supabase MCP connector (service role, `user_id` set
 explicitly). Each run also writes a `bk_inbox_runs` row (status, summary,
-counts) that the page shows as "Last run".
+counts) that the page shows as "Last run". **All run writes go through the
+`bk_inbox_*` functions** (migration 0031: `open_run`, `write_items`,
+`mark_done`, `close_run`) called with SELECT: the connector stops a raw
+UPDATE / upsert statement for a confirmation that a scheduled run cannot
+give, and the 27 Oct close-off wrote nothing because of it.
 
 - Kinds: `chase`, `reply`, `proposal` (a fee proposal to price and send),
   `deadline`, `money`, `call` (needs Michel's call), `task` (typed in on the

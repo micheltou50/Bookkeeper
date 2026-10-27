@@ -15,12 +15,21 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   proposal rows); then **items follow their documents** (`0030`: trigger on
   `bk_invoices`, "Mark paid" on money rows, lead folders from the Draft quote
   button).
-- Live database: 0027, 0028, 0029 and 0030 are applied (27 Oct 2026).
+- Live database: 0027 to 0031 are applied (27 Oct 2026).
 - Scheduled runs ("Mworx morning inbox" ~7:12am, "Mworx close-off" ~4:16pm
   Sydney) updated 27 Oct: they set `focus`, raise `proposal` items with a
   holding reply, call `bk_draft_quote_from_proposal` for each open proposal
   without a quote, copy the master folder for a lead it created, and close a
-  reply / chase item once info@ Sent Items shows it was sent.
+  reply / chase item once info@ Sent Items shows it was sent. Since the
+  evening of 27 Oct they write only through the `bk_inbox_*` functions.
+- Diagnosis 27 Oct: the 4:16pm close-off ran, found a quiet day, then its
+  write (item upsert + run update in one statement) stalled on the
+  connector's confirmation prompt and nothing was saved; its run row sat as
+  "ok" with no summary. Root cause: the connector questions any statement
+  that looks like an UPDATE. Fix: migration 0031 + both prompts rewritten to
+  call the functions with SELECT; the run row was corrected to status
+  "error" with the explanation. The 28 Oct 7:12am morning run is the first
+  on the new write path — check its run row has a summary and counts.
 
 ## In progress — Inbox
 

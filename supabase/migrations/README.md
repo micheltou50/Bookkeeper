@@ -40,6 +40,11 @@ These SQL files document the schema/constraints/RLS the app relies on.
   sent / paid marks its `money` item done (superseded / cancelled →
   dismissed). Status changes only, open items linked by `invoice_id` only.
   Re-runnable.
+- `0031_inbox_run_writes.sql` — `bk_inbox_open_run`, `bk_inbox_write_items`,
+  `bk_inbox_mark_done`, `bk_inbox_close_run`: every write the scheduled runs
+  make, as functions called with SELECT. The Supabase connector stops raw
+  UPDATE / upsert statements for a confirmation a scheduled run cannot give
+  (the 27 Oct close-off wrote nothing because of it). Re-runnable.
 
 ## Urgent: apply 0007–0010 to live project
 
