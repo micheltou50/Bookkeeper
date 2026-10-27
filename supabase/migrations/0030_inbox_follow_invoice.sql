@@ -41,9 +41,15 @@ begin
     end if;
   end if;
 
-  update bk_inbox_items
-     set status = v_status, resolved_at = now(), resolved_note = v_note, updated_at = now()
-   where invoice_id = new.id and status = 'open' and kind = v_kind;
+  -- Never let the Inbox fail an invoice: whatever goes wrong here is logged,
+  -- the quote / invoice update itself always goes through.
+  begin
+    update bk_inbox_items
+       set status = v_status, resolved_at = now(), resolved_note = v_note, updated_at = now()
+     where invoice_id = new.id and status = 'open' and kind = v_kind;
+  exception when others then
+    raise warning 'bk_inbox_follow_invoice: % (invoice %)', sqlerrm, new.id;
+  end;
   return new;
 end
 $$;
