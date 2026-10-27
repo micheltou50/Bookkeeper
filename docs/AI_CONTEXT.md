@@ -41,7 +41,7 @@ invoices share the table via `type`) · `bk_quote_templates`, `bk_scope_lines` �
 `bk_transactions`, `bk_receipts`, `bk_reconciliations`, `bk_category_rules` ·
 `bk_email_connections` (Outlook OAuth tokens), `bk_oauth_states` ·
 `bk_reminder_log` · `bk_vaults`, `bk_vault_items` (zero-knowledge) ·
-`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0029).
+`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0030).
 
 ## Inbox (Oct 2026)
 
@@ -79,8 +79,17 @@ counts) that the page shows as "Last run".
   the client linked or created, a `lead` job created when the address has
   none — saves it as a draft and sets the item's `invoice_id`. The Inbox row
   then shows "Open quote"; "Draft quote" on the row calls the same function
-  (rpc) by hand. The fee is a suggestion from comparable quotes (no quote
-  type carries a `lump_amount` yet); nothing is sent without Michel.
+  (rpc) by hand, and gives a new lead its OneDrive folder the way
+  `createProject` does (`saveToOneDrive("project")`); the runs copy the master
+  folder for a lead the function created — the one folder they may create.
+  The fee is a suggestion from comparable quotes (no quote type carries a
+  `lump_amount` yet); nothing is sent without Michel.
+- **Items follow their documents** (migration 0030, trigger on `bk_invoices`):
+  a quote sent / accepted marks its `proposal` item done (declined →
+  dismissed); an invoice sent / paid marks its `money` item done (superseded /
+  cancelled → dismissed). "Mark paid" on a money row uses it. The runs close a
+  `reply` / `chase` item only when info@ Sent Items shows a message in that
+  conversation after the item was raised (a vanished draft is not evidence).
 - `dedupe_key` is unique per user (`reply:<internetMessageId>`,
   `chase:<conversationId>:<promised_at>`, `file:<OneDrive path>` …). Runs upsert
   on it and only touch rows still `open`.

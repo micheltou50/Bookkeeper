@@ -48,7 +48,6 @@ begin
 end
 $$;
 
-drop trigger if exists bk_inbox_follow_invoice on public.bk_invoices;
-create trigger bk_inbox_follow_invoice
+create or replace trigger bk_inbox_follow_invoice
   after update of status on public.bk_invoices
   for each row execute function public.bk_inbox_follow_invoice();

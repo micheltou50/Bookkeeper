@@ -2059,7 +2059,7 @@ const inboxDays = (iso) => { if (!iso) return null; const ms = Date.now() - new 
 const inboxRunLabel = { morning: "Morning run", closeoff: "Close-off", manual: "Manual" };
 const fmtSydney = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 
-function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJob, onOpenDoc, onQuoteDrafted, onChanged }) {
+function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJob, onOpenDoc, onQuoteDrafted, onMarkPaid, onChanged }) {
   const [items, setItems] = useState(null);        // null = loading
   const [runs, setRuns] = useState([]);
   const [err, setErr] = useState(null);
@@ -2153,6 +2153,15 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
     onChanged && onChanged();
   };
 
+  // Money row → mark the invoice paid in Bookkeeper. The database trigger
+  // (migration 0030) then closes the item, so reload rather than patch it.
+  const markPaid = async (it, doc) => {
+    setBusy((b) => ({ ...b, [it.id]: true }));
+    try { await onMarkPaid(doc); } finally { setBusy((b) => { const n = { ...b }; delete n[it.id]; return n; }); }
+    await load();
+    onChanged && onChanged();
+  };
+
   const open = (url) => { if (url) window.open(url, "_blank", "noopener"); };
 
   // In "To do", Focus rows are promoted out of their kind groups; in a kind view
@@ -2226,6 +2235,7 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
               {linkBtn("Open draft", it.draft_link)}
               {linkBtn("Open email", it.email_link)}
               {doc && onOpenDoc && actBtn(`Open ${doc.type === "quote" ? "quote" : "invoice"}${doc.number ? ` ${doc.number}` : ""}`, () => onOpenDoc(doc))}
+              {it.kind === "money" && !done && onMarkPaid && doc && doc.type !== "quote" && !["paid", "cancelled", "superseded"].includes(doc.status) && <button type="button" disabled={isBusy} onClick={() => markPaid(it, doc)} title="Mark the invoice paid in Bookkeeper — the row closes itself" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4, color: "#059669", borderColor: "#a7f3d0" }}><Icons.Check /> Mark paid</button>}
               {it.kind === "proposal" && !it.invoice_id && !done && <button type="button" disabled={isBusy} onClick={() => draftQuote(it)} title="Create the draft quote in Bookkeeper from the job's quote type" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Plus /> {isBusy ? "Drafting…" : "Draft quote"}</button>}
               {it.file_path && <span style={{ ...s.badge("#64748b", "outline"), alignSelf: "center" }} title={it.file_path}>{it.file_path.split("/").slice(-2).join(" / ")}</span>}
               {!done && (
@@ -3801,6 +3811,9 @@ Are you sure you want it ${verb}?`);
     if (r?.job_created && r.job_id) {
       const { data: j } = await supabase.from("bk_jobs").select("*").eq("id", r.job_id).maybeSingle();
       if (j) setJobs((prev) => [j, ...prev.filter((x) => x.id !== j.id)]);
+      // Same rule as createProject: a new job gets its OneDrive folder (a copy
+      // of the master). Best-effort, never blocks.
+      if (hasMicrosoft) saveToOneDrive("project", r.job_id, { silent: true });
     }
     if (r?.contact_created && r.contact_id) {
       const { data: c } = await supabase.from("bk_contacts").select("*").eq("id", r.contact_id).maybeSingle();
@@ -5812,7 +5825,7 @@ Are you sure you want it ${verb}?`);
       <MobileHeader />
       <div style={{ flex: 1, overflow: "auto" }}>
         {page === "dashboard" && <MobileDashboard />}
-        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onQuoteDrafted={pullDraftedQuote} onChanged={refreshInbox} /></div>}
+        {page === "inbox" && <div style={{ padding: 12 }}><InboxPage s={s} accent={accent} session={session} isMobile division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onQuoteDrafted={pullDraftedQuote} onMarkPaid={markPaidQuiet} onChanged={refreshInbox} /></div>}
         {page === "quotes" && <MobileQuotes />}
         {page === "invoices" && <MobileInvoices />}
         {page === "projects" && <MobileProjects />}
@@ -5942,7 +5955,7 @@ Are you sure you want it ${verb}?`);
           </div>
           {/* VaultPage is module-scope and rendered directly (not via pageMap) so it
               keeps its in-memory data key across App re-renders — see its comment. */}
-          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onQuoteDrafted={pullDraftedQuote} onChanged={refreshInbox} /> : <PageComponent />}</div>
+          <div style={s.content}>{page === "vault" ? <VaultPage s={s} accent={accent} session={session} isMobile={false} /> : page === "inbox" ? <InboxPage s={s} accent={accent} session={session} isMobile={false} division={division} jobs={divJobs} docs={divInvoices} onOpenDoc={(d) => { setEditItem(d); setModal("invoice"); }} onOpenJob={(j) => { setEditItem(j); setModal("project"); }} onQuoteDrafted={pullDraftedQuote} onMarkPaid={markPaidQuiet} onChanged={refreshInbox} /> : <PageComponent />}</div>
         </div>
       </div>
       )}

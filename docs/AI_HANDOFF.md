@@ -12,15 +12,15 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   `proposal` and `task`, badge and dashboard / mobile rows counting Focus,
   "Open invoice / quote" on rows with an `invoice_id`); then **fee proposals**
   (`0029_draft_quote.sql`: `bk_draft_quote_from_proposal`, "Draft quote" on
-  proposal rows).
-- Live database: 0027, 0028 and 0029 are applied (27 Oct 2026).
-  `0030_inbox_follow_invoice.sql` (Inbox follows quote / invoice status) is
-  written but NOT yet applied — the Supabase connector's confirmation prompt
-  timed out; apply it next.
+  proposal rows); then **items follow their documents** (`0030`: trigger on
+  `bk_invoices`, "Mark paid" on money rows, lead folders from the Draft quote
+  button).
+- Live database: 0027, 0028, 0029 and 0030 are applied (27 Oct 2026).
 - Scheduled runs ("Mworx morning inbox" ~7:12am, "Mworx close-off" ~4:16pm
   Sydney) updated 27 Oct: they set `focus`, raise `proposal` items with a
-  holding reply, and call `bk_draft_quote_from_proposal` for each open
-  proposal without a quote.
+  holding reply, call `bk_draft_quote_from_proposal` for each open proposal
+  without a quote, copy the master folder for a lead it created, and close a
+  reply / chase item once info@ Sent Items shows it was sent.
 
 ## In progress — Inbox
 
@@ -53,12 +53,7 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
 
 ## Next tasks (ideas, not committed)
 
-- Inbox: "Mark paid" shortcut on `money` items (the row already opens the invoice).
 - Inbox: per-job view (list a project's open items inside the project modal).
 - Inbox: snooze (hide until a date) for deadlines.
-- Runs: when a chase/reply draft is sent from Outlook, auto-mark the item done
-  (needs the close-off run to check Sent Items against open items).
-- Runs: when a drafted quote is sent from Bookkeeper, mark its proposal item
-  done (the quote's `sent_at` is enough to tell).
 - Proposals: attach the quote PDF to the holding reply once Michel has
   approved the fee (needs a "fee approved" step; deliberately not automatic).
