@@ -88,6 +88,13 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   on `main`). The build passes.
 - Inline components inside `BookkeeperApp` remount on every parent render (see
   `ANALYSIS-BookKeeper.md` §1.4). New stateful pages must be module scope.
+  `InboxPage` is module scope but sits under the inline `MobileLayout`, so on
+  the phone it is still remounted on every parent render; it keeps its rows,
+  filter, "Show done" and open row in a module memo (`inboxPageMemo`) so a
+  tick does not reset the view (Codex finding, fixed 28 Oct). The page loads
+  in three slices (open to-do kinds, newest 500 record rows, newest 500 closed
+  rows under "Show done") so filed rows can never push an open item out of
+  the fetched set (Codex finding, fixed 28 Oct).
 - `bk_inbox_items.division` is set by the runs from the matched job (or the
   mailbox); items whose job sits in another company are shown under
   "All companies" only.

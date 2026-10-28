@@ -2041,9 +2041,12 @@ const inboxFocusSub = (it, jobs) => {
 // fall back to the 0027 columns and let the auto rules carry Focus rather than
 // lose the badge.
 const INBOX_LIGHT_COLS = "id,kind,division,status,due_date,title,job_id,job_address";
+// Only the to-do kinds: the badge, Focus and the dashboard never look at the
+// record rows (FYI, filed, skipped), and those are the ones that pile up.
 async function fetchInboxOpen(businessId) {
-  let res = await supabase.from("bk_inbox_items").select(INBOX_LIGHT_COLS + ",focus").eq("business_id", businessId).eq("status", "open");
-  if (res.error && /focus/i.test(res.error.message || "")) res = await supabase.from("bk_inbox_items").select(INBOX_LIGHT_COLS).eq("business_id", businessId).eq("status", "open");
+  const kinds = [...INBOX_ACTION_KINDS];
+  let res = await supabase.from("bk_inbox_items").select(INBOX_LIGHT_COLS + ",focus").eq("business_id", businessId).eq("status", "open").in("kind", kinds);
+  if (res.error && /focus/i.test(res.error.message || "")) res = await supabase.from("bk_inbox_items").select(INBOX_LIGHT_COLS).eq("business_id", businessId).eq("status", "open").in("kind", kinds);
   if (res.error) console.error("inbox load failed", res.error);
   return res.data || [];
 }
@@ -2061,36 +2064,59 @@ const inboxDays = (iso) => { if (!iso) return null; const ms = Date.now() - new 
 const inboxRunLabel = { morning: "Morning run", closeoff: "Close-off", manual: "Manual" };
 const fmtSydney = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 
+// What the Inbox page remembers across a remount. On the phone the whole
+// layout subtree is replaced on every parent render (MobileLayout is declared
+// inside BookkeeperApp), so without this, ticking one item reset the filter,
+// "Show done", the open row and the list itself to "Loading…".
+const inboxPageMemo = { business: null, items: null, runs: [], kind: "all", showDone: false, expanded: null };
+const inboxRemember = (patch) => Object.assign(inboxPageMemo, { business: COMPANY.id }, patch);
+
 function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJob, onOpenDoc, onQuoteDrafted, onMarkPaid, onChanged }) {
-  const [items, setItems] = useState(null);        // null = loading
-  const [runs, setRuns] = useState([]);
+  const memo = inboxPageMemo.business === COMPANY.id ? inboxPageMemo : null;
+  const [items, setItemsState] = useState(memo ? memo.items : null);        // null = loading
+  const [runs, setRunsState] = useState(memo ? memo.runs : []);
   const [err, setErr] = useState(null);
-  const [kind, setKind] = useState("all");
-  const [showDone, setShowDone] = useState(false);
+  const [kind, setKindState] = useState(memo ? memo.kind : "all");
+  const [showDone, setShowDoneState] = useState(memo ? memo.showDone : false);
   const [busy, setBusy] = useState({});
-  const [expanded, setExpanded] = useState(null);
+  const [expanded, setExpandedState] = useState(memo ? memo.expanded : null);
+  const setItems = useCallback((v) => setItemsState((prev) => { const next = typeof v === "function" ? v(prev) : v; inboxRemember({ items: next }); return next; }), []);
+  const setRuns = useCallback((v) => { inboxRemember({ runs: v }); setRunsState(v); }, []);
+  const setKind = useCallback((v) => { inboxRemember({ kind: v }); setKindState(v); }, []);
+  const setShowDone = useCallback((v) => { inboxRemember({ showDone: v }); setShowDoneState(v); }, []);
+  const setExpanded = useCallback((v) => { inboxRemember({ expanded: v }); setExpandedState(v); }, []);
   const [newTask, setNewTask] = useState("");
   const [newTaskJob, setNewTaskJob] = useState("");
   const [adding, setAdding] = useState(false);
   const userId = session?.user?.id;
 
   const load = useCallback(async () => {
-    const statuses = showDone ? ["open", "done", "dismissed"] : ["open"];
-    const [{ data, error }, { data: rs, error: e2 }] = await Promise.all([
-      supabase.from("bk_inbox_items").select("*").eq("business_id", COMPANY.id).in("status", statuses).order("created_at", { ascending: false }).limit(500),
+    // Three slices, so the to-do can never be pushed out of reach by the
+    // record: every open action item; the newest record rows (FYI, filed,
+    // skipped); and, under "Show done", the newest closed rows. One capped
+    // query over everything let filed rows crowd out an open reply once the
+    // table passed 500 rows.
+    const base = () => supabase.from("bk_inbox_items").select("*").eq("business_id", COMPANY.id).order("created_at", { ascending: false });
+    const actionKinds = [...INBOX_ACTION_KINDS];
+    const recordKinds = INBOX_KINDS.map((k) => k.id).filter((id) => !INBOX_ACTION_KINDS.has(id));
+    const [act, rec, rs, closed] = await Promise.all([
+      base().eq("status", "open").in("kind", actionKinds).limit(1000),
+      base().eq("status", "open").in("kind", recordKinds).limit(500),
       supabase.from("bk_inbox_runs").select("*").eq("business_id", COMPANY.id).order("ran_at", { ascending: false }).limit(3),
+      showDone ? base().in("status", ["done", "dismissed"]).limit(500) : Promise.resolve({ data: [], error: null }),
     ]);
+    const error = act.error || rec.error || closed.error;
     if (error) {
       console.error("inbox load failed", error);
       setErr(inboxMigrationNotice(error) || error.message);
       setItems([]);
       return;
     }
-    if (e2) console.error("inbox runs load failed", e2);
+    if (rs.error) console.error("inbox runs load failed", rs.error);
     setErr(null);
-    setItems(data || []);
-    setRuns(rs || []);
-  }, [showDone]);
+    setItems([...(act.data || []), ...(rec.data || []), ...(closed.data || [])]);
+    setRuns(rs.data || []);
+  }, [showDone, setItems, setRuns]);
   useEffect(() => { load(); }, [load]);
 
   const inDiv = (it) => division === ALL_DIVISIONS || recordDivision(it) === division;
