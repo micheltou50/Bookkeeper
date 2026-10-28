@@ -175,13 +175,15 @@ const recipients = (list) => (list || []).map((r) => ({ name: r.emailAddress?.na
 const idOk = (s) => typeof s === "string" && s.length > 0 && s.length <= 1024 && /^[A-Za-z0-9+/=_\-%.!]+$/.test(s);
 const emailOk = (s) => typeof s === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const odataQuote = (s) => String(s).replace(/'/g, "''");
+// Outlook ids can end in '=' and carry '+' or '/', so they are always encoded in a path.
+const enc = (s) => encodeURIComponent(String(s));
 
 const MESSAGE_SELECT = "id,subject,isDraft,conversationId,from,sender,toRecipients,ccRecipients,webLink,hasAttachments,parentFolderId,createdDateTime,receivedDateTime";
 
 async function readDraft(session, box, draftId) {
   const batch = await session.call("POST", `${GRAPH}/$batch`, { body: { requests: [
-    { id: "m", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${draftId}?$select=${MESSAGE_SELECT},body` },
-    { id: "a", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${draftId}/attachments?$select=id,name,size,isInline,contentId,contentType` },
+    { id: "m", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${enc(draftId)}?$select=${MESSAGE_SELECT},body` },
+    { id: "a", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${enc(draftId)}/attachments?$select=id,name,size,isInline,contentId,contentType` },
   ] } });
   const res = Object.fromEntries((batch?.responses || []).map((r) => [r.id, r]));
   if (!res.m || res.m.status >= 400) throw new GraphError(res.m?.status || 500, res.m?.body, "read draft");
@@ -233,12 +235,12 @@ async function downloadDriveItem(session, driveId, itemId) {
 
 async function attachFile(session, box, draftId, file) {
   if (file.size <= SMALL_ATTACHMENT_BYTES) {
-    await session.call("POST", `${box.base}/messages/${draftId}/attachments`, { body: {
+    await session.call("POST", `${box.base}/messages/${enc(draftId)}/attachments`, { body: {
       "@odata.type": "#microsoft.graph.fileAttachment", name: file.name, contentBytes: file.bytes.toString("base64"),
     } });
     return;
   }
-  const sess = await session.call("POST", `${box.base}/messages/${draftId}/attachments/createUploadSession`, { body: {
+  const sess = await session.call("POST", `${box.base}/messages/${enc(draftId)}/attachments/createUploadSession`, { body: {
     AttachmentItem: { attachmentType: "file", name: file.name, size: file.size },
   } });
   const uploadUrl = sess?.uploadUrl;
@@ -278,8 +280,8 @@ async function opMessageRead(auth, p) {
   const s = await graphSession(auth.user_id);
   if (s.error) return fail(401, s.error, s.detail);
   if (box.shared && !s.sharedOk) return fail(403, "shared_mailbox_scope_missing", `Reconnect Outlook in Bookkeeper to grant ${SHARED_SCOPE}`);
-  const msg = await s.call("GET", `${box.base}/messages/${p.message_id}?$select=${MESSAGE_SELECT},body`);
-  const atts = await s.call("GET", `${box.base}/messages/${p.message_id}/attachments?$select=id,name,size,isInline,contentId,contentType`);
+  const msg = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=${MESSAGE_SELECT},body`);
+  const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentId,contentType`);
   const body = String(msg.body?.content || "");
   return json({ ok: true, message: { id: msg.id, subject: msg.subject, is_draft: msg.isDraft, conversation_id: msg.conversationId, from: recipients([msg.from])[0], to: recipients(msg.toRecipients), cc: recipients(msg.ccRecipients), received: msg.receivedDateTime, web_link: msg.webLink }, body_html: body.slice(0, MAX_BODY_BYTES), body_truncated: body.length > MAX_BODY_BYTES, attachments: (atts?.value || []).map((a) => ({ id: a.id, name: a.name, size: a.size, inline: !!a.isInline, content_id: a.contentId || null, content_type: a.contentType })) });
 }
@@ -325,7 +327,7 @@ async function opDraft(auth, p) {
   let original = null;
   try {
     if (mode !== "new") {
-      original = await s.call("GET", `${box.base}/messages/${p.message_id}?$select=${MESSAGE_SELECT}`);
+      original = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=${MESSAGE_SELECT}`);
       if (original.isDraft) return fail(400, "cannot_reply_to_draft", "message_id points at a draft, not a received email");
     }
     // One draft per thread: unless told to allow it, refuse when the
@@ -360,7 +362,7 @@ async function opDraft(auth, p) {
       body: { contentType: "HTML", content: composeNewPart(p.html) },
     } });
   } else {
-    draft = await s.call("POST", `${box.base}/messages/${p.message_id}/${mode === "reply_all" ? "createReplyAll" : "createReply"}`, { body: {} });
+    draft = await s.call("POST", `${box.base}/messages/${enc(p.message_id)}/${mode === "reply_all" ? "createReplyAll" : "createReply"}`, { body: {} });
   }
   const draftId = draft.id;
   const basePath = box.base.replace(GRAPH, "");
@@ -370,8 +372,8 @@ async function opDraft(auth, p) {
     // signature images, in one round trip.
     // Chained with dependsOn so Graph runs them in order on the one message.
     const requests = [];
-    if (mode !== "new") requests.push({ id: "body", method: "PATCH", url: `${basePath}/messages/${draftId}`, headers: { "Content-Type": "application/json" }, body: { body: { contentType: "HTML", content: injectAbove(draft.body?.content || "", composeNewPart(p.html)) } } });
-    signatureAttachments().forEach((att, i) => requests.push({ id: `sig${i}`, method: "POST", url: `${basePath}/messages/${draftId}/attachments`, headers: { "Content-Type": "application/json" }, body: att, ...(requests.length ? { dependsOn: [requests[requests.length - 1].id] } : {}) }));
+    if (mode !== "new") requests.push({ id: "body", method: "PATCH", url: `${basePath}/messages/${enc(draftId)}`, headers: { "Content-Type": "application/json" }, body: { body: { contentType: "HTML", content: injectAbove(draft.body?.content || "", composeNewPart(p.html)) } } });
+    signatureAttachments().forEach((att, i) => requests.push({ id: `sig${i}`, method: "POST", url: `${basePath}/messages/${enc(draftId)}/attachments`, headers: { "Content-Type": "application/json" }, body: att, ...(requests.length ? { dependsOn: [requests[requests.length - 1].id] } : {}) }));
     const batch = await s.call("POST", `${GRAPH}/$batch`, { body: { requests } });
     const bad = (batch?.responses || []).find((r) => r.status >= 400);
     if (bad) throw new GraphError(bad.status, bad.body, `batch ${bad.id}`);
@@ -382,18 +384,21 @@ async function opDraft(auth, p) {
     const { msg, atts, verify } = await readDraft(s, box, draftId);
     const out = describe(box, msg, atts, verify, original);
     const got = fileAttachmentsOf(atts);
-    const missing = files.filter((f) => !got.some((g) => g.name === f.name && Number(g.size) === f.size)).map((f) => f.name);
+    // Present by name; Graph's reported size can include encoding overhead, so
+    // the sizes are returned for the record rather than compared.
+    const missing = files.filter((f) => !got.some((g) => g.name === f.name)).map((f) => f.name);
     out.checks.attachments_ok = missing.length === 0;
     out.checks.attachments_missing = missing;
+    out.attachments = got.map((g) => ({ ...g, size_sent: files.find((f) => f.name === g.name)?.size ?? null }));
     const ok = Object.entries(out.checks).every(([k, v]) => k === "attachments_missing" || v === true);
     if (!ok) {
-      await s.call("DELETE", `${box.base}/messages/${draftId}`).catch(() => {});
+      await s.call("DELETE", `${box.base}/messages/${enc(draftId)}`).catch(() => {});
       return json({ ok: false, error: "draft_failed_checks", detail: "the saved draft did not pass its checks and has been deleted", deleted: true, ...out }, 502);
     }
     return json({ ok: true, ...out, note: box.shared ? "Saved in the shared mailbox's Drafts; sending it as that mailbox needs Send As on it." : null });
   } catch (e) {
     // Never leave a half-built draft behind.
-    await s.call("DELETE", `${box.base}/messages/${draftId}`).catch(() => {});
+    await s.call("DELETE", `${box.base}/messages/${enc(draftId)}`).catch(() => {});
     throw e;
   }
 }
@@ -423,10 +428,10 @@ async function opDraftDelete(auth, p) {
   if (s.error) return fail(401, s.error, s.detail);
   if (box.shared && !s.sharedOk) return fail(403, "shared_mailbox_scope_missing");
   let msg;
-  try { msg = await s.call("GET", `${box.base}/messages/${p.draft_id}?$select=id,isDraft,subject`); }
+  try { msg = await s.call("GET", `${box.base}/messages/${enc(p.draft_id)}?$select=id,isDraft,subject`); }
   catch (e) { if (e instanceof GraphError && e.status === 404) return json({ ok: true, deleted: false, detail: "already gone" }); throw e; }
   if (!msg.isDraft) return fail(400, "not_a_draft", "only drafts can be deleted here");
-  await s.call("DELETE", `${box.base}/messages/${p.draft_id}`);
+  await s.call("DELETE", `${box.base}/messages/${enc(p.draft_id)}`);
   return json({ ok: true, deleted: true, subject: msg.subject });
 }
 
