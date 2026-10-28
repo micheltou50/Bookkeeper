@@ -69,6 +69,7 @@ declare
   v_qty      numeric;
   v_rate     numeric;
   v_s        text;
+  v_jobname  text;
 begin
   v_today := v_now_syd::date;
   v_yy := to_char(v_now_syd, 'YY');
@@ -139,9 +140,17 @@ begin
         where business_id = v_item.business_id and division <> 'mworx_energy'
           and job_number ~ '^\d{5}$' and job_number like v_yy || '%';
     end if;
+    -- Job names are unique per business (idx_bk_jobs_unique_name): fall back
+    -- to the address, then the number, until the name is free.
+    v_jobname := left(coalesce(v_app_type || ' - ', '') || coalesce(v_works, 'Enquiry'), 80);
+    if exists (select 1 from bk_jobs where user_id = v_item.user_id and business_id = v_item.business_id and lower(trim(name)) = lower(trim(v_jobname))) then
+      v_jobname := left(v_jobname || ' — ' || v_address, 140);
+    end if;
+    if exists (select 1 from bk_jobs where user_id = v_item.user_id and business_id = v_item.business_id and lower(trim(name)) = lower(trim(v_jobname))) then
+      v_jobname := left(v_jobname || ' (' || v_seq::text || ')', 160);
+    end if;
     insert into bk_jobs (user_id, business_id, division, name, address, status, application_type, job_number, contact_id, contract_value)
-      values (v_item.user_id, v_item.business_id, v_div,
-              left(coalesce(v_app_type || ' - ', '') || coalesce(v_works, 'Enquiry'), 80),
+      values (v_item.user_id, v_item.business_id, v_div, v_jobname,
               v_address, 'lead', v_app_type, v_seq::text, v_contact.id, 0)
       returning * into v_job;
     v_job_created := true;

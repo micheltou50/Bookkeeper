@@ -39,8 +39,12 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   from 261001 in the app and in the draft-quote function. OneDrive already
   holds Energy folders 261001 and 261002 that are not in `bk_jobs`; until
   they are added as projects, the next Energy lead would be numbered 261001
-  and the run would find that folder already there. Michel to decide whether
-  to add the two existing Energy jobs to Bookkeeper.
+  and the run would find that folder already there. 28 Oct: the two Energy
+  jobs were added (261001 Prospect Road, 261002 Stephanie Street, both
+  "active" / BASIX), the test lead was renumbered 261003 and the clash item
+  closed. `bk_jobs` has unique indexes on (business_id, job_number) and on
+  the lower-cased name per business; the draft-quote function now falls back
+  to the address, then the number, when a lead name is taken.
 
 ## In progress — Inbox
 
