@@ -198,16 +198,18 @@ source has no sending call.
   `quote_draft`, which call the `bk_inbox_*` / `bk_draft_quote_from_proposal`
   functions with the service role after an ownership check. The runs no
   longer write to the database with SELECTs that call functions.
-- Read state (28 Oct): nothing in the API sets `isRead` to true — the offline
-  test asserts the source writes `isRead` in one place and writes `false`.
-  `message_read`, `links_scan`, `attachment_fetch` and `draft` record the
-  message's `isRead` before, read it again after, put an unread message back
-  if a step flipped it, and return `read_state` (`before`, `after_operation`,
-  `restored`, `now`, `unchanged`); `draft` counts `read_state_unchanged`
-  among the checks a draft must pass. `read_state` reads one message's flag
-  and, with `restore_unread: true`, sets it back to unread — never to read.
-  Graph `GET`s and `createReply` do not change `isRead`; the check is there
-  so the promise is read back, not assumed.
+- Read state (29 Oct): the API never writes `isRead`, in either direction —
+  the offline test asserts no object literal or request body in the source
+  carries it, and no received message is patched. `message_read`,
+  `links_scan`, `links_fetch` (when given the email), `attachment_fetch` and
+  `draft` record the message's `isRead` before, read it again after, and
+  return `read_state` (`before`, `after`, `unchanged`, `written_by_api:
+  false`). A change is Michel's own (he read it while the run was on) and is
+  left as he set it — his rule: preserve his read / unread decisions, never
+  overwrite them, so there is no automatic "put it back to unread". The
+  `read_state` op is read-only and refuses any `restore_unread` / `set`
+  argument. Graph `GET`s and `createReply` do not change `isRead`; the
+  before / after check is there so the promise is read back, not assumed.
 - Linked documents (`lib/inbox-links.mjs`): `links_scan` lists a message's
   attachments (file / inline image / signature noise) and the download links
   in its HTML — iCloud Mail Drop (file name, size and expiry read from the
@@ -223,13 +225,26 @@ source has no sending call.
   refused), Michel's duplicate rule at the destination (same name with or
   without the date prefix and the same size → nothing uploaded; same name,
   other size → " (2)"), the `yyMMdd_` prefix from the Sydney received date,
-  a Graph upload session fed in 2.5 MB parts across calls (the private URL
-  and the upload URL travel only inside an encrypted `transfer` token —
-  AES-GCM under `TOKEN_ENCRYPTION_KEY`, one-hour life — so a large file
-  spans several 10 s invocations), and the item read back (size, folder)
-  before `filed: true`. `attachment_fetch` does the same for one message
-  attachment (up to 8 MB, inline images included). No downloaded byte is
-  ever opened, run or rendered.
+  a Graph upload session fed in 2.5 MB parts across calls (the private URL,
+  the upload URL and the running hash travel only inside an encrypted
+  `transfer` token — AES-GCM under `TOKEN_ENCRYPTION_KEY`, one-hour life —
+  so a large file spans several 10 s invocations; `cancel: true` discards a
+  partial upload; a lost upload session answers `upload_session_lost` and
+  the transfer starts again), and the item read back before `filed: true`:
+  a file, in the folder, the expected size, and OneDrive's own
+  `quickXorHash` equal to the hash computed over the bytes moved
+  (`QuickXorHash` in `lib/inbox-links.mjs`, Microsoft's algorithm, state
+  serialisable). `file_verify` reads a stored item back as a file would be
+  opened: metadata, first bytes (type), last bytes (PDF `%%EOF`, ZIP
+  end-of-central-directory inside the file, PNG `IEND`, JPEG `FF D9`), and
+  for a file up to one part the whole content hashed again against
+  OneDrive's hash. The result of `links_fetch` records the original file
+  name, the source link and the email (mailbox, message id, subject,
+  received) for the Inbox item. `attachment_fetch` does the same for one
+  message attachment (up to 8 MB, inline images included). No downloaded
+  byte is ever opened, run or rendered. `scripts/inbox-api-live.mjs` runs
+  the live sequence (scan, smallest PDF, duplicate, largest ZIP with
+  interrupt / tamper / cancel / resume, unread test emails, drafts).
 - Tests: `node scripts/inbox-api-test.mjs --offline` (template, composition,
   checks, no-send, the read-state promise, link classification with
   Mail-Drop-shaped fixtures, private-address and redirect refusals with a

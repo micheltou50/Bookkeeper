@@ -295,3 +295,76 @@ export function filingName(original, receivedIso) {
   const clean = sanitizeFilename(original);
   return /^\d{6}_/.test(clean) ? clean : sydneyDatePrefix(receivedIso) + clean;
 }
+
+// ------------------------------------------------------------ QuickXorHash
+// OneDrive for Business reports each file's QuickXorHash (driveItem.file.hashes).
+// Computing the same hash over the bytes as they are moved — the state is tiny
+// and survives in the transfer token between calls — lets the stored copy be
+// proven identical to the source without downloading it again. Microsoft's
+// reference algorithm: 160-bit vector, 11-bit shift per byte, length XORed in.
+const QX_WIDTH = 160, QX_SHIFT = 11, QX_BITS_LAST = 32, QX_CELLS = 3, QX_MASK = (1n << 64n) - 1n;
+export class QuickXorHash {
+  constructor(state) {
+    this.data = state ? state.data.map((h) => BigInt("0x" + h)) : [0n, 0n, 0n];
+    this.length = state ? BigInt(state.length) : 0n;
+    this.shift = state ? Number(state.shift) : 0;
+  }
+  update(buf) {
+    const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    const cb = b.length;
+    let cell = Math.floor(this.shift / 64), offset = this.shift % 64;
+    const iterations = Math.min(cb, QX_WIDTH);
+    for (let i = 0; i < iterations; i++) {
+      const isLast = cell === QX_CELLS - 1;
+      const bitsInCell = isLast ? QX_BITS_LAST : 64;
+      let x = 0;
+      for (let j = i; j < cb; j += QX_WIDTH) x ^= b[j];
+      if (offset <= bitsInCell - 8) {
+        this.data[cell] = (this.data[cell] ^ (BigInt(x) << BigInt(offset))) & QX_MASK;
+      } else {
+        const next = isLast ? 0 : cell + 1;
+        const low = bitsInCell - offset;
+        this.data[cell] = (this.data[cell] ^ (BigInt(x) << BigInt(offset))) & QX_MASK;
+        this.data[next] = (this.data[next] ^ (BigInt(x) >> BigInt(low))) & QX_MASK;
+      }
+      offset += QX_SHIFT;
+      while (offset >= bitsInCell) { cell = isLast ? 0 : cell + 1; offset -= bitsInCell; }
+    }
+    this.shift = (this.shift + QX_SHIFT * (cb % QX_WIDTH)) % QX_WIDTH;
+    this.length += BigInt(cb);
+    return this;
+  }
+  digest() {
+    const out = Buffer.alloc(20);
+    out.writeBigUInt64LE(this.data[0], 0);
+    out.writeBigUInt64LE(this.data[1], 8);
+    out.writeUInt32LE(Number(this.data[2] & 0xffffffffn), 16);
+    const len = Buffer.alloc(8); len.writeBigUInt64LE(this.length);
+    for (let i = 0; i < 8; i++) out[12 + i] ^= len[i];
+    return out.toString("base64");
+  }
+  state() { return { data: this.data.map((d) => d.toString(16)), length: this.length.toString(), shift: this.shift }; }
+}
+export const quickXorHashOf = (buf) => new QuickXorHash().update(buf).digest();
+
+/**
+ * Does the end of the file say it is complete? PDF closes with %%EOF, a ZIP
+ * (and .docx / .xlsx) with an end-of-central-directory record whose
+ * directory lies inside the file, PNG with IEND, JPEG with FF D9. `tail` is
+ * the last bytes of the file (up to 64 KiB + 22 for ZIP), `total` its size.
+ */
+export function tailCheck(type, tail, total) {
+  const t = Buffer.isBuffer(tail) ? tail : Buffer.from(tail || []);
+  if (type === "pdf") { const s = t.subarray(-2048).toString("latin1"); return { ok: s.includes("%%EOF"), detail: s.includes("%%EOF") ? "%%EOF present" : "no %%EOF in the last 2 KB" }; }
+  if (type === "zip" || type === "ooxml") {
+    const win = t.subarray(-65557);
+    const idx = win.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    if (idx < 0 || idx + 22 > win.length) return { ok: false, detail: "no end-of-central-directory record in the last 64 KB" };
+    const entries = win.readUInt16LE(idx + 10), cdSize = win.readUInt32LE(idx + 12), cdOffset = win.readUInt32LE(idx + 16);
+    const ok = total == null || cdOffset + cdSize <= total;
+    return { ok, detail: `${entries} entr${entries === 1 ? "y" : "ies"}, central directory at ${cdOffset} (${cdSize} bytes)`, entries };
+  }
+  if (type === "png") { const ok = t.subarray(-8).equals(Buffer.from("49454e44ae426082", "hex")); return { ok, detail: ok ? "IEND present" : "no IEND chunk" }; }
+  if (type === "jpeg") { const ok = t.subarray(-2).equals(Buffer.from([0xff, 0xd9])); return { ok, detail: ok ? "EOI marker present" : "no EOI marker" }; }
+  return { ok: null, detail: "no end-of-file check for this type" };
+}

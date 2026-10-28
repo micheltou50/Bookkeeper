@@ -91,12 +91,16 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   `lib/signature-images.mjs`, `lib/inbox-links.mjs` (linked documents),
   migration 0033 (applied live; a key issued into Vault, never printed), the
   OAuth consent now asks for `Mail.ReadWrite.Shared`, and
-  `scripts/inbox-api-test.mjs` (16 offline tests pass). Added 28 Oct evening:
-  the read-state promise (nothing sets `isRead` true; every op that touches a
-  message reads the flag before and after and restores unread; `read_state`
-  op) and the linked-document ops `links_scan`, `links_fetch` (chunked
-  through an encrypted transfer token, verified at the destination) and
-  `attachment_fetch` — see AI_CONTEXT. None of it has run against Microsoft
+  `scripts/inbox-api-test.mjs` (18 offline tests pass). Added 28–29 Oct:
+  the read-state promise (the API never writes `isRead`; every op that
+  touches a message reads the flag before and after and reports it — no
+  automatic "back to unread", Michel's rule of 29 Oct: his read / unread
+  decisions stand), the linked-document ops `links_scan`, `links_fetch`
+  (chunked through an encrypted transfer token carrying a running
+  QuickXorHash, cancel and session-lost handling, verified at the
+  destination against OneDrive's hash), `attachment_fetch` and
+  `file_verify`, and `scripts/inbox-api-live.mjs` for the live sequence —
+  see AI_CONTEXT. None of it has run against Microsoft
   Graph: this environment's network policy refuses `bkeeper.netlify.app`,
   `deploy-preview-29--bkeeper.netlify.app` and `graph.microsoft.com`; Michel
   is to allow them under the environment's Network access (the scheduled
@@ -156,7 +160,26 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
       every message in info@ was already read on 28 Oct, so the promise is
       verified by construction (Graph GETs do not change isRead; the API
       restores) but not yet by a live before/after.
-- [ ] Migration 0035 (not applied): apply only with Michel's approval.
+- [ ] Migration 0035 (not applied): apply only with Michel's approval. Tested
+      29 Oct in a rolled-back block against the live project, side by side
+      with the live function: a quote type with `lump_amount` 5000 gives a
+      $5,000 draft under 0034 ("ready at $5,000 (quote type amount — check
+      it)") and a $0 draft under 0035; an itemised type with rates 1500 +
+      3500 gives $5,000 under 0034 and $0 under 0035 (the rates stay on the
+      lines for him to see); BASIX $0 with the six lines either way;
+      `p_amount` 1234 ignored; leads, contacts and quotes rolled back —
+      residue check zero, function still 0034.
+- [ ] Live Inbox API tests: blocked until `deploy-preview-29--bkeeper.netlify.app`
+      is allowed in the Claude environment's Network access (Limited level,
+      Allowed domains); then `scripts/inbox-api-live.mjs` with the key moved
+      into the sandbox encrypted (never printed), Seda's email as the
+      linked-document case (job 26102, 12 Cobbler Crescent Minchinbury,
+      status job_lost), and three unread test emails Michel sends to info@,
+      accounts@ and energy@.
+- [ ] After the live tests pass: both run prompts switch linked documents
+      from a 'call' item to `links_fetch` (flag only expired / sign-in /
+      uncertain job / unsafe / failed), with the key read by the run from an
+      environment variable, never from Vault into its transcript.
 
 ## Known issues / debt
 
@@ -212,8 +235,11 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   ranges as expected is untested until the network allowance is granted.
 - The connector's `read_resource` is a Graph GET and should not change
   `isRead`, but no unread message existed in info@ to prove it on 28 Oct;
-  the prompts now compare before/after and the API restores unread. Until
-  that first live check, a flip would be reported, not silently absorbed.
+  the prompts compare before/after and report a flip, and the API reports
+  `read_state` on every op. Nothing restores or sets `isRead`: a change is
+  Michel's and stays (his rule, 29 Oct). The prompts' READ STATE paragraph
+  still says the API "restores unread" — to be corrected in the next prompt
+  update (the API switch), since it describes a path not yet in use.
 - WeTransfer, OneDrive / SharePoint share links and portals are not fetched
   (a browser or sign-in is needed); they become 'call' items with the link.
 

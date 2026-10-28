@@ -19,7 +19,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { signatureHtml, signatureAttachments, signatureHtmlForPreview, SIGNATURE_PHONE, LOGO_CID, LINE_CID } from "../netlify/functions/lib/signature.mjs";
 import { checkOutgoingHtml, composeNewPart, injectAbove, newPartOf, verifyDraftBody, fileAttachmentsOf } from "../netlify/functions/lib/inbox-draft.mjs";
-import { extractLinks, classifyLink, classifyAttachment, icloudMailDrop, unwrapSafeLink, isPrivateIp, assertPublicUrl, sniffType, fetchRange, parseContentRange, sanitizeFilename, filingName, sydneyDatePrefix, LinkError, MAX_DOWNLOAD_BYTES } from "../netlify/functions/lib/inbox-links.mjs";
+import { extractLinks, classifyLink, classifyAttachment, icloudMailDrop, unwrapSafeLink, isPrivateIp, assertPublicUrl, sniffType, tailCheck, fetchRange, parseContentRange, sanitizeFilename, filingName, sydneyDatePrefix, LinkError, MAX_DOWNLOAD_BYTES, QuickXorHash, quickXorHashOf } from "../netlify/functions/lib/inbox-links.mjs";
+import crypto from "node:crypto";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const results = [];
@@ -75,12 +76,37 @@ function offline() {
     assert(!verifyDraftBody(composeNewPart("<p>Hi [day]</p>"), atts).checks.no_placeholders, "placeholder");
     eq(fileAttachmentsOf([...atts, { id: "1", name: "plan.pdf", size: 10, isInline: false }]).map((f) => f.name), ["plan.pdf"]);
   });
-  test("the function has no path that sends mail, and never sets a message read", () => {
+  test("the function has no path that sends mail, and never writes a message's read flag", () => {
     const src = fs.readFileSync(path.join(here, "../netlify/functions/inbox-api.mjs"), "utf8");
     for (const s of ["/send", "sendMail", "microsoft.graph.send", "/reply\"", "/forward"]) assert(!src.includes(s), `source contains ${s}`);
     assert(src.includes("never_sends: true"), "ping reports never_sends");
-    assert(!/isRead:\s*true/.test(src) && !/"isRead":\s*true/.test(src), "source sets isRead to true somewhere");
-    assert((src.match(/isRead: false/g) || []).length === 1, "exactly one place writes isRead, and it writes false");
+    // isRead is only ever read ($select) and reported; no object literal or
+    // JSON body carries it as a key, in either direction.
+    assert(!/isRead\s*:/.test(src) && !/"isRead"\s*:/.test(src), "source writes isRead somewhere");
+    assert(!/PATCH[^\n]*messages\/\$\{enc\((messageId|p\.message_id)\)\}`/.test(src), "source patches a received message");
+  });
+  test("QuickXorHash: empty vector, chunked with state round-trips equals one-shot, order-sensitive", () => {
+    eq(quickXorHashOf(Buffer.alloc(0)), "AAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    const buf = crypto.randomBytes(700001);
+    const one = quickXorHashOf(buf);
+    let h = new QuickXorHash(); let off = 0;
+    while (off < buf.length) { const n = Math.min(327680 + (off % 13), buf.length - off); h = new QuickXorHash(JSON.parse(JSON.stringify(h.state()))).update(buf.subarray(off, off + n)); off += n; }
+    eq(h.digest(), one, "chunked != one-shot");
+    assert(quickXorHashOf(Buffer.from("ab")) !== quickXorHashOf(Buffer.from("ba")), "order matters");
+    assert(quickXorHashOf(Buffer.from("a")) !== quickXorHashOf(Buffer.from("a\0")), "length matters");
+    eq(quickXorHashOf(Buffer.from("a")).length, 28, "20 bytes in base64");
+  });
+  test("end of file: PDF %%EOF, ZIP central directory, PNG IEND, JPEG EOI; a truncated file fails", () => {
+    eq(tailCheck("pdf", Buffer.from("...startxref\n1234\n%%EOF\n"), 1000).ok, true);
+    eq(tailCheck("pdf", Buffer.from("...startxref\n1234\n%%EO"), 1000).ok, false);
+    // A one-entry ZIP end record: signature, disk fields, 1 entry, directory of 46 bytes at offset 100, in a 168-byte file.
+    const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10); eocd.writeUInt32LE(46, 12); eocd.writeUInt32LE(100, 16);
+    const zipOk = tailCheck("zip", Buffer.concat([Buffer.alloc(146), eocd]), 168); eq(zipOk.ok, true); eq(zipOk.entries, 1);
+    eq(tailCheck("zip", Buffer.concat([Buffer.alloc(146), eocd]), 120).ok, false, "directory past the end of a shorter file");
+    eq(tailCheck("zip", Buffer.alloc(100), 100).ok, false, "no end record");
+    eq(tailCheck("png", Buffer.from("00000000" + "49454e44ae426082", "hex"), 12).ok, true);
+    eq(tailCheck("jpeg", Buffer.from([0x00, 0xff, 0xd9]), 3).ok, true);
+    eq(tailCheck("dwg", Buffer.alloc(10), 10).ok, null, "no check for other types");
   });
 
   // --- linked documents (the lib is pure; network parts take a fake fetch) ---
