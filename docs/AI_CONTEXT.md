@@ -86,12 +86,29 @@ give, and the 27 Oct close-off wrote nothing because of it.
   (rpc) by hand, and gives a new lead its OneDrive folder the way
   `createProject` does (`saveToOneDrive("project")`); the runs copy the master
   folder for a lead the function created — the one folder they may create.
-  The fee is a suggestion from comparable quotes (no quote type carries a
-  `lump_amount` yet); nothing is sent without Michel.
+  Since 28 Oct (migration 0034): every proposal item gets its own draft — a
+  draft already on the same job is never linked, because a previous quote
+  for a property says nothing about a new enquiry's scope (an item that
+  already has a quote keeps it) — and no fee is assumed: the amount is the
+  quote type's lump amount if it has one, else 0, a BASIX quote always starts
+  at 0 until the pricing rules are approved, and the runs pass `null` for the
+  fee. Mworx Energy BASIX enquiries use the one quote type "BASIX —
+  Certificate" (standard scope with `[address]` and `[proposed works]` filled
+  in; the run adds "Non-standard BASIX scope — review" to the item when the
+  enquiry is out of the ordinary). Mworx Group design enquiries get the
+  client and contact details, the address, the job or a new lead, the
+  application type and the proposed works in the email's own words, and a
+  quote type only when the match is clear; Michel writes the scope,
+  inclusions, exclusions and fee. A second thread from the same sender about
+  the same works within 14 days refreshes the existing item rather than
+  raising a second one. Nothing is sent without Michel.
 - **Items follow their documents** (migration 0030, trigger on `bk_invoices`):
   a quote sent / accepted marks its `proposal` item done (declined →
   dismissed); an invoice sent / paid marks its `money` item done (superseded /
-  cancelled → dismissed). "Mark paid" on a money row uses it. The runs close a
+  cancelled → dismissed). "Mark paid" on a money row uses it: only for an
+  issued, unpaid invoice (sent / overdue — never a quote or a draft), after a
+  confirmation naming the number, client and amount, and the row is read
+  back as paid before anything closes. The runs close a
   `reply` item only when info@ Sent Items shows a message in that conversation
   after the item was raised (a vanished draft is not evidence); a `chase` stays
   open until what was chased arrives — a chase Michel has sent refreshes the
@@ -192,11 +209,20 @@ source has no sending call.
   (`QMWX26017`, `ME26001` …), per company (`getNextDocumentNumber`).
 - Projects: **Mworx Energy has its own sequence**, `YY1###` from `YY1001`
   (`261001` …), as its OneDrive folders are named. The other companies share
-  the single `YY###` sequence from `YY101` (`26101` …). `getNextJobNumber(jobs,
-  divisionId)` in the app and `bk_draft_quote_from_proposal` follow the same
-  rule. A company's jobs must be in `bk_jobs` for the count to continue from
-  them — Energy's two OneDrive folders (261001, 261002) were not in Bookkeeper
-  on 27 Oct.
+  the single `YY###` sequence from `YY101` (`26101` …). The rule lives in the
+  database as `bk_next_job_number(business, division)` (migration 0034) and
+  is mirrored by `getNextJobNumber(jobs, divisionId)` in the app on this
+  branch. A `before insert` trigger on `bk_jobs` (`bk_jobs_number_guard`)
+  assigns the next number when none is given, replaces a purely numeric
+  number of the wrong length for its company (the production app on `main`
+  takes the highest number across all companies and would hand a Mworx Group
+  project `261004` until this branch deploys; its form shows that number
+  until the save returns the corrected row), and refuses a number already in
+  use with a plain message. Hand-typed numbers that fit, or are not purely
+  numeric, are kept. Existing rows are untouched; the unique index on
+  `(business_id, job_number)` stays the last line against duplicates. The
+  OneDrive folder is named from the stored row, so it follows the corrected
+  number. Verified 28 Oct: next Mworx Group 26119, next Mworx Energy 261004.
 
 ## Conventions
 

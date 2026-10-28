@@ -2194,11 +2194,17 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
       setErr("Only issued, unpaid invoices can be marked paid from Inbox.");
       return;
     }
-    if (!window.confirm(`Mark invoice ${doc.number || ""} as PAID in Bookkeeper?\n\nThis changes its status and paid date, and stops further unpaid-invoice reminders. Check that the payment was actually received.`)) return;
+    // The confirmation names what is about to change: number, client, amount.
+    const client = doc.contact_name || doc.contact_company || "no client on the invoice";
+    const amount = new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(Number(doc.total) || 0);
+    if (!window.confirm(`Mark invoice ${doc.number || ""} as PAID in Bookkeeper?\n\nClient: ${client}\nAmount: ${amount}\n\nThis changes its status and paid date, and stops further unpaid-invoice reminders. Check that the payment was actually received.`)) return;
     setBusy((b) => ({ ...b, [it.id]: true }));
     try {
       const saved = await onMarkPaid(doc);
       if (!saved) { setErr("Could not mark the invoice paid. No confirmation was recorded."); return; }
+      // Read the row back: the update only counts once the database shows it.
+      const { data: fresh, error: readErr } = await supabase.from("bk_invoices").select("id,status,paid_date").eq("id", doc.id).single();
+      if (readErr || fresh?.status !== "paid") { setErr(`The invoice was not confirmed as paid in Bookkeeper${fresh?.status ? ` (its status is ${fresh.status})` : ""}. Nothing was closed.`); return; }
       setErr(null);
       await load();
       if (onChanged) onChanged();

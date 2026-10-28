@@ -15,7 +15,25 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   proposal rows); then **items follow their documents** (`0030`: trigger on
   `bk_invoices`, "Mark paid" on money rows, lead folders from the Draft quote
   button).
-- Live database: 0027 to 0032 are applied (0032 on 28 Oct 2026).
+- Live database: 0027 to 0034 are applied (0032 to 0034 on 28 Oct 2026), plus
+  the data the runs rely on: the "BASIX — Certificate" quote type (6 standard
+  scope lines, no fee) and the Inbox API key in Vault.
+- Review fixes (28 Oct, from Michel's independent review of PR #29): (1) job
+  numbers — `bk_next_job_number` and the `bk_jobs_number_guard` trigger
+  (0034) keep production right before this branch deploys (verified in a
+  rolled-back test: a Mworx Group insert with 261004 becomes 26119, an Energy
+  insert with no number becomes 261004, MT Management continues the 5-digit
+  sequence, a hand-typed "26118A" is kept, a duplicate is refused); (2) Mark
+  paid from the Inbox — Michel's edit (only sent / overdue invoices, never
+  quotes, a confirmation, the result checked) kept and extended with the
+  client and amount in the confirmation and a read-back of the row as paid
+  before the item closes; the 0030 trigger closing the money item verified
+  in the same rolled-back test; (3) quotes — each proposal item gets its own
+  draft, no fee is ever assumed, the BASIX quote type carries the standard
+  scope, both run prompts carry the new rules; (4) Sydney calendar dates for
+  Focus, due and overdue — Michel's `inboxSydneyDate()` kept and tested at
+  midnight in both regimes and across both daylight-saving changeovers (13
+  cases, all pass).
 - Scheduled runs ("Mworx morning inbox" ~7:12am, "Mworx close-off" ~4:16pm
   Sydney) updated 27 Oct: they set `focus`, raise `proposal` items with a
   holding reply, call `bk_draft_quote_from_proposal` for each open proposal
@@ -112,8 +130,11 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
 - `bk_inbox_items.division` is set by the runs from the matched job (or the
   mailbox); items whose job sits in another company are shown under
   "All companies" only.
-- `today()` is the UTC date (app-wide convention), so Focus's "due today"
-  flips at 10–11am Sydney rather than at midnight.
+- `today()` is the UTC date (app-wide convention: invoice dates, paid dates,
+  reminders). The Inbox no longer uses it — `inboxSydneyDate()` gives the
+  Sydney calendar date for Focus, due and overdue — but a paid date set from
+  the app is still the UTC date, which is yesterday's date before 10–11am
+  Sydney.
 - `bk_draft_quote_from_proposal` copies `terms` from the last quote in the
   division because the app's default quote terms live in the front end
   (`DEFAULT_QUOTE_TERMS`). If those defaults change, the first quote created

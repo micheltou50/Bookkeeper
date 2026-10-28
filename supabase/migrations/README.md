@@ -56,6 +56,14 @@ These SQL files document the schema/constraints/RLS the app relies on.
   policies, service role only) and `bk_inbox_api_key_issue(user, label)`,
   which makes a key, stores its hash here and the key in Vault as
   `inbox_api_key`, revokes earlier keys and prints nothing. Re-runnable.
+- `0034_job_numbers_and_quotes.sql` — `bk_next_job_number(business, division)`
+  (Mworx Energy `YY1###` from `YY1001`, every other company `YY###` from
+  `YY101`), the `bk_jobs_number_guard` before-insert trigger (assigns a
+  missing number, corrects a purely numeric number of the wrong length for
+  its company, refuses a duplicate with a plain message) and
+  `bk_draft_quote_from_proposal` re-created so every proposal item gets its
+  own draft and no fee is assumed (BASIX always 0; `p_amount` ignored).
+  Re-runnable, no drops.
 
 ## Urgent: apply 0007–0010 to live project
 
