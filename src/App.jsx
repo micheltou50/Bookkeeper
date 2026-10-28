@@ -2021,7 +2021,13 @@ const inboxIsActionable = (it) => it && it.status === "open" && INBOX_ACTION_KIN
 // by definition), a fee proposal, a hand-added task, or anything due today or
 // overdue. FYI / filed / skipped never qualify. The runs' upsert doesn't touch
 // the column, so a pin or a removal survives a refresh.
-const inboxAutoFocus = (it) => INBOX_ACTION_KINDS.has(it.kind) && (it.kind === "chase" || it.kind === "proposal" || it.kind === "task" || (!!it.due_date && it.due_date <= today()));
+// Deadline decisions must use Sydney's calendar date, not UTC (which is often yesterday at 7am).
+const inboxSydneyDate = () => {
+  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => parts.find((p) => p.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
+};
+const inboxAutoFocus = (it) => INBOX_ACTION_KINDS.has(it.kind) && (it.kind === "chase" || it.kind === "proposal" || it.kind === "task" || (!!it.due_date && it.due_date <= inboxSydneyDate()));
 const inboxInFocus = (it) => !!it && it.status === "open" && (it.focus === true || (it.focus == null && inboxAutoFocus(it)));
 // Focus order: overdue / soonest due first, then by kind, then newest.
 const inboxFocusOrder = (a, b) => {
@@ -2033,7 +2039,7 @@ const inboxFocusOrder = (a, b) => {
 // Dashboard / mobile sub-line for a Focus row: kind · job · due.
 const inboxFocusSub = (it, jobs) => {
   const job = it.job_id ? (jobs || []).find((j) => j.id === it.job_id) : null;
-  const due = it.due_date ? (it.due_date < today() ? `overdue since ${fmtDate(it.due_date)}` : it.due_date === today() ? "due today" : `due ${fmtDate(it.due_date)}`) : null;
+  const due = it.due_date ? (it.due_date < inboxSydneyDate() ? `overdue since ${fmtDate(it.due_date)}` : it.due_date === inboxSydneyDate() ? "due today" : `due ${fmtDate(it.due_date)}`) : null;
   return [inboxKindInfo(it.kind).label, job ? [job.job_number, job.address || job.name].filter(Boolean).join(" · ") : it.job_address, due].filter(Boolean).join(" · ");
 };
 // Light open rows for the nav badge and the dashboard; the page loads full rows
@@ -2184,10 +2190,24 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
   // Money row → mark the invoice paid in Bookkeeper. The database trigger
   // (migration 0030) then closes the item, so reload rather than patch it.
   const markPaid = async (it, doc) => {
+    if (!doc || doc.type === "quote" || !["sent", "overdue"].includes(doc.status)) {
+      setErr("Only issued, unpaid invoices can be marked paid from Inbox.");
+      return;
+    }
+    if (!window.confirm(`Mark invoice ${doc.number || ""} as PAID in Bookkeeper?\n\nThis changes its status and paid date, and stops further unpaid-invoice reminders. Check that the payment was actually received.`)) return;
     setBusy((b) => ({ ...b, [it.id]: true }));
-    try { await onMarkPaid(doc); } finally { setBusy((b) => { const n = { ...b }; delete n[it.id]; return n; }); }
-    await load();
-    onChanged && onChanged();
+    try {
+      const saved = await onMarkPaid(doc);
+      if (!saved) { setErr("Could not mark the invoice paid. No confirmation was recorded."); return; }
+      setErr(null);
+      await load();
+      if (onChanged) onChanged();
+    } catch (error) {
+      console.error("mark paid failed", error);
+      setErr("Could not verify the invoice status update.");
+    } finally {
+      setBusy((b) => { const n = { ...b }; delete n[it.id]; return n; });
+    }
   };
 
   const open = (url) => { if (url) window.open(url, "_blank", "noopener"); };
@@ -2235,7 +2255,7 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
     else if (it.job_address) parts.push(<span key="addr">{it.job_address}</span>);
     if (it.due_date) {
       const d = inboxDays(it.due_date);
-      const past = it.due_date < today();
+      const past = it.due_date < inboxSydneyDate();
       parts.push(<span key="due" style={{ color: past && it.status === "open" ? "#b91c1c" : "#64748b", fontWeight: past ? 600 : 400 }}>{past ? `due ${fmtDate(it.due_date)} · ${d} day${d === 1 ? "" : "s"} ago` : `due ${fmtDate(it.due_date)}`}</span>);
     } else if (it.promised_at) {
       parts.push(<span key="prom">promised {fmtDate(it.promised_at)}</span>);
@@ -2270,7 +2290,7 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
               {linkBtn("Open email", it.email_link)}
               {linkBtn("Open file", it.file_link)}
               {doc && onOpenDoc && actBtn(`Open ${doc.type === "quote" ? "quote" : "invoice"}${doc.number ? ` ${doc.number}` : ""}`, () => onOpenDoc(doc))}
-              {it.kind === "money" && !done && onMarkPaid && doc && doc.type !== "quote" && !["paid", "cancelled", "superseded"].includes(doc.status) && <button type="button" disabled={isBusy} onClick={() => markPaid(it, doc)} title="Mark the invoice paid in Bookkeeper — the row closes itself" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4, color: "#059669", borderColor: "#a7f3d0" }}><Icons.Check /> Mark paid</button>}
+              {it.kind === "money" && !done && onMarkPaid && doc && doc.type !== "quote" && ["sent", "overdue"].includes(doc.status) && <button type="button" disabled={isBusy} onClick={() => markPaid(it, doc)} title="Mark the invoice paid in Bookkeeper — the row closes itself" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4, color: "#059669", borderColor: "#a7f3d0" }}><Icons.Check /> Mark paid</button>}
               {it.kind === "proposal" && !it.invoice_id && !done && <button type="button" disabled={isBusy} onClick={() => draftQuote(it)} title="Create the draft quote in Bookkeeper from the job's quote type" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Plus /> {isBusy ? "Drafting…" : "Draft quote"}</button>}
               {it.file_path && <span style={{ ...s.badge("#64748b", "outline"), alignSelf: "center" }} title={it.file_path}>{it.file_path.split("/").slice(-2).join(" / ")}</span>}
               {!done && (
@@ -3725,9 +3745,10 @@ Are you sure you want it ${verb}?`);
   const markPaidQuiet = async (inv) => {
     const upd = { status: "paid", paid_date: today() };
     const { ok } = await sbWrite(supabase.from("bk_invoices").update(upd).eq("id", inv.id), "mark paid");
-    if (!ok) return;
+    if (!ok) return false;
     setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, ...upd } : i)));
     fileIssuedToOneDrive(inv.id);
+    return true;
   };
 
   // Save an invoice PDF or expense receipt to OneDrive via the Netlify function
