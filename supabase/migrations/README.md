@@ -51,6 +51,11 @@ These SQL files document the schema/constraints/RLS the app relies on.
   action; moves an `ok` run to `partial` when anything is not completed), and
   `bk_inbox_write_items` clearing a link passed as JSON null. Re-runnable, no
   drops.
+- `0033_inbox_api.sql` — `bk_inbox_api_keys` (sha256 of the bearer keys the
+  scheduled runs present to `netlify/functions/inbox-api.mjs`; RLS with no
+  policies, service role only) and `bk_inbox_api_key_issue(user, label)`,
+  which makes a key, stores its hash here and the key in Vault as
+  `inbox_api_key`, revokes earlier keys and prints nothing. Re-runnable.
 
 ## Urgent: apply 0007–0010 to live project
 

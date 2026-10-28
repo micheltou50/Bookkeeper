@@ -137,6 +137,55 @@ give, and the 27 Oct close-off wrote nothing because of it.
   carries a "Checked:" line from the same numbers. `bk_inbox_write_items`
   now clears a link passed as JSON null (omitted or empty keeps it).
 
+## Outlook drafting — the Inbox API (28 Oct 2026)
+
+`netlify/functions/inbox-api.mjs` is the one door the scheduled runs use to
+change anything: Outlook drafts and the Inbox rows. Reading stays on the
+Microsoft 365 and Supabase connectors; every write goes through this
+function, which authenticates a bearer key (sha256 in `bk_inbox_api_keys`,
+the key itself in Supabase Vault as `inbox_api_key`, migration 0033 — issued
+and rotated by `bk_inbox_api_key_issue()`, which never prints it), uses the
+app's own Outlook connection (`bk_email_connections`, the one that sends
+invoices, refreshed with the scopes it already holds and never more) and the
+service role, and never sends: `scripts/inbox-api-test.mjs` asserts the
+source has no sending call.
+
+- `draft` creates a reply / reply-all / new draft in info@, accounts@ or
+  energy@. The shared mailboxes need the delegated scope
+  `Mail.ReadWrite.Shared`, which the OAuth start / callback request since
+  28 Oct and which is granted when Outlook is reconnected in Settings →
+  Email Sending; until then the API refuses them with
+  `shared_mailbox_scope_missing`. Graph builds the reply (history quoted,
+  thread and recipients kept); the run's paragraphs go above it in his
+  compose font, then the full signature from `lib/signature.mjs` — the table
+  from his own sent mail, the green bar, Calibri, the link, the disclaimer,
+  and the logo and divider line as inline attachments (`lib/assets/*.png`,
+  embedded in `lib/signature-images.mjs`, referenced by `cid:`). OneDrive
+  files (`attachments: [{drive_id, item_id}]`, up to 5, 8 MB each; over 3 MB
+  through an upload session) are attached. The draft is then read back and
+  checked: it is a draft, same conversation, the signature once, both images
+  attached, no placeholders, every file present with its size; one that
+  fails is deleted and reported. One draft per conversation unless
+  `allow_existing`.
+- The text is refused before anything is created when it carries a
+  `[placeholder]`, its own sign-off, an image, a script, or mentions an
+  attachment while no file is given (`lib/inbox-draft.mjs`,
+  `checkOutgoingHtml`).
+- Also: `draft_read`, `draft_delete` (drafts only), `drafts_find`,
+  `message_read` (raw HTML and attachment list, for checks), and the Inbox
+  writes `run_open`, `run_items`, `run_done`, `run_close`, `run_qa`,
+  `quote_draft`, which call the `bk_inbox_*` / `bk_draft_quote_from_proposal`
+  functions with the service role after an ownership check. The runs no
+  longer write to the database with SELECTs that call functions.
+- Tests: `node scripts/inbox-api-test.mjs --offline` (template, composition,
+  checks, no-send); with `INBOX_API_URL`, `INBOX_API_KEY` and
+  `TEST_MESSAGE_ID` the online run (ping, a reply draft with signature and
+  attachment, read-back, duplicate refusal, error paths, shared-mailbox gate,
+  clean-up; `KEEP=1` leaves the drafts for a look in Outlook). The offline
+  run also writes `lib/assets/signature-preview.html` for a browser preview.
+- `docs/email-signature.html` remains the text fallback for drafts made
+  through the connector; drafts made through the API carry the full one.
+
 ## Numbering
 
 - Quotes and invoices: `<company prefix><YY><seq>` from `bk_profiles`

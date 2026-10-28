@@ -67,6 +67,20 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   for Michel to view in Outlook and delete. The NKD draft of 26 Oct ("$[fee]
   + GST … [Fee proposal attached.]") belongs to an item he dismissed, so it
   was left for him.
+- Outlook drafting through Bookkeeper (28 Oct, in progress): `inbox-api.mjs`,
+  `lib/signature.mjs` (the real signature: logo, green bar, Calibri, link,
+  divider, disclaimer), `lib/inbox-draft.mjs`, `lib/signature-images.mjs`,
+  migration 0033 (applied live; a key issued into Vault, never printed), the
+  OAuth consent now asks for `Mail.ReadWrite.Shared`, and
+  `scripts/inbox-api-test.mjs`. The offline tests pass. The online tests have
+  not run: this environment's network policy refuses `bkeeper.netlify.app`,
+  `deploy-preview-29--bkeeper.netlify.app` and `graph.microsoft.com`; Michel
+  is to allow them under the environment's Network access (the scheduled
+  runs need the same before they can use the API). Then: run the online
+  tests against the deploy preview, compare the logo and line display sizes
+  with the raw HTML of a sent email (`message_read`), screenshot, reconnect
+  Outlook for the shared mailboxes, switch both run prompts to the API,
+  rotate the key.
 
 ## In progress — Inbox
 
@@ -119,8 +133,14 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   `inbox-draft` function could create the draft with the inline logo and
   attach the quote PDF from OneDrive, and the runs would call it over HTTPS
   with a secret. Sending as accounts@ / energy@ also needs "Send As" on each
-  shared mailbox from the Microsoft 365 admin centre. Neither is done:
-  Michel's approval needed.
+  shared mailbox from the Microsoft 365 admin centre. The Bookkeeper-side
+  function now exists (`inbox-api.mjs`, above); Send As on the shared
+  mailboxes is still unknown and unchanged, so a draft the API saves in
+  accounts@ or energy@ may not send as that mailbox until the admin grants
+  it.
+- Netlify synchronous functions stop at 10 s on this plan, which is the real
+  limit on attachments the API can carry (a few MB; `MAX_ATTACHMENT_BYTES`
+  is 8 MB). Larger documents stay an item telling Michel what to attach.
 
 ## Next tasks (ideas, not committed)
 
