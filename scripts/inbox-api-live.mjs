@@ -8,6 +8,8 @@
 //   INBOX_API_URL=https://deploy-preview-29--bkeeper.netlify.app/.netlify/functions/inbox-api
 //   INBOX_API_KEY_FILE=/path/to/key          (the key is never printed)
 //   TEST_DRIVE_ID=…  TEST_FOLDER_ID=…         (destination for the linked documents)
+//   TEST_PDF_NAME=…  TEST_DUP_NAME=…           (which PDF to file, which one the folder already holds)
+//   TEST_ZIP_NAME=…  TEST_ZIP_FOLDER_ID=…      (the large ZIP, and a test folder for its copy)
 //   TEST_LINKS_MESSAGE_ID=…                   (Seda's email, info@)
 //   TEST_UNREAD_INFO=… TEST_UNREAD_ACCOUNTS=… TEST_UNREAD_ENERGY=…   (unread test emails)
 //   TEST_SKIPPED_FOLDER_ID=…                  (where a test email's attachment is filed)
@@ -63,17 +65,20 @@ if (want("scan") || want("pdf") || want("zip")) {
   }
 }
 
-const pickPdf = () => scan?.downloads?.filter((d) => /\.pdf$/i.test(d.filename || "") && d.size).sort((a, b) => a.size - b.size)[0];
-const pickZip = () => scan?.downloads?.filter((d) => /\.zip$/i.test(d.filename || "") && d.size).sort((a, b) => b.size - a.size)[0];
+const byName = (name) => scan?.downloads?.find((d) => d.filename === name);
+const pickPdf = () => (process.env.TEST_PDF_NAME ? byName(process.env.TEST_PDF_NAME) : scan?.downloads?.filter((d) => /\.pdf$/i.test(d.filename || "") && d.size).sort((a, b) => a.size - b.size)[0]);
+const pickZip = () => (process.env.TEST_ZIP_NAME ? byName(process.env.TEST_ZIP_NAME) : scan?.downloads?.filter((d) => /\.zip$/i.test(d.filename || "") && d.size).sort((a, b) => b.size - a.size)[0]);
+const zipFolder = process.env.TEST_ZIP_FOLDER_ID || folder;
 
 async function fetchAll(d, opts = {}) {
   // Runs links_fetch until done, the way a scheduled run would.
-  let r = await call({ op: "links_fetch", href: d.href, text: d.text, drive_id: drive, folder_id: folder, mailbox: "info", message_id: process.env.TEST_LINKS_MESSAGE_ID, ...opts });
+  const into = opts.folder || folder;
+  let r = await call({ op: "links_fetch", href: d.href, text: d.text, drive_id: drive, folder_id: into, mailbox: "info", message_id: process.env.TEST_LINKS_MESSAGE_ID });
   const calls = [{ status: r.status, ms: r.ms, done: r.done, progress: r.progress, error: r.error }];
   let hops = 0;
   while (r.ok && r.done === false && hops++ < 200) {
     if (opts.interruptAt != null && r.progress?.offset >= opts.interruptAt && !opts._interrupted) { opts._interrupted = true; return { r, calls, interrupted: true }; }
-    r = await call({ op: "links_fetch", transfer: r.transfer, drive_id: drive, folder_id: folder });
+    r = await call({ op: "links_fetch", transfer: r.transfer, drive_id: drive, folder_id: into });
     calls.push({ status: r.status, ms: r.ms, done: r.done, progress: r.progress, error: r.error });
   }
   return { r, calls };
@@ -93,6 +98,11 @@ if (want("pdf") && scan?.ok) {
       record("pdf: second run is a duplicate, nothing uploaded", again.r.ok && again.r.duplicate === true && again.r.filed === false, { existing: again.r.existing?.name, note: again.r.note });
     }
   }
+  const dup = process.env.TEST_DUP_NAME ? byName(process.env.TEST_DUP_NAME) : null;
+  if (dup) {
+    const r = await call({ op: "links_fetch", href: dup.href, text: dup.text, drive_id: drive, folder_id: folder, mailbox: "info", message_id: process.env.TEST_LINKS_MESSAGE_ID });
+    record("pdf: a file Michel filed by hand (same name without the date prefix, same size) is a duplicate, nothing uploaded", r.ok && r.duplicate === true && r.filed === false, { existing: r.existing?.name, existing_size: r.existing?.size, link_size: dup.size, read_state: r.read_state, error: r.error });
+  }
 }
 
 if (want("zip") && scan?.ok) {
@@ -102,22 +112,22 @@ if (want("zip") && scan?.ok) {
     log(`  largest ZIP: ${d.filename} (${d.size} bytes)`);
     // 1. Start, stop after the first part, then resume from the token: the way
     //    a run resumes after a 10 s invocation ends.
-    const first = await fetchAll(d, { interruptAt: 1 });
+    const first = await fetchAll(d, { interruptAt: 1, folder: zipFolder });
     record("zip: first call moved a part and handed back a transfer", first.r.ok && first.r.done === false && !!first.r.transfer && first.r.progress?.offset > 0, { progress: first.r.progress, ms: first.calls[0].ms });
     // 2. Failure recovery: a corrupted token is refused; a cancelled transfer discards the partial upload.
-    const bad = await call({ op: "links_fetch", transfer: (first.r.transfer || "").slice(0, -12) + "AAAAAAAAAAAA", drive_id: drive, folder_id: folder });
+    const bad = await call({ op: "links_fetch", transfer: (first.r.transfer || "").slice(0, -12) + "AAAAAAAAAAAA", drive_id: drive, folder_id: zipFolder });
     record("zip: a tampered transfer token is refused", bad.ok === false && bad.error === "bad_transfer", { error: bad.error });
-    const cancelled = await call({ op: "links_fetch", transfer: first.r.transfer, drive_id: drive, folder_id: folder, cancel: true });
+    const cancelled = await call({ op: "links_fetch", transfer: first.r.transfer, drive_id: drive, folder_id: zipFolder, cancel: true });
     record("zip: cancel discards the partial upload", cancelled.ok && cancelled.cancelled === true, { progress: cancelled.progress });
-    const afterCancel = await call({ op: "links_fetch", transfer: first.r.transfer, drive_id: drive, folder_id: folder });
+    const afterCancel = await call({ op: "links_fetch", transfer: first.r.transfer, drive_id: drive, folder_id: zipFolder });
     record("zip: resuming a cancelled transfer is refused (session gone)", afterCancel.ok === false && ["upload_session_lost", "upload_out_of_step", "graph_error"].includes(afterCancel.error), { error: afterCancel.error, status: afterCancel.status });
     // 3. The real transfer: start again, resume until done.
-    const full = await fetchAll(d);
+    const full = await fetchAll(d, { folder: zipFolder });
     record("zip: fetched in parts and filed", full.r.ok && full.r.done && full.r.filed, { calls: full.calls.length, per_call_ms: full.calls.map((c) => c.ms), name: full.r.name, size: full.r.size, checks: full.r.checks, hash_from_graph: full.r.item?.graph_hash, hash_computed: full.r.quick_xor_hash, read_state: full.r.read_state, error: full.r.error, detail: full.r.detail });
     if (full.r.ok && full.r.item?.id) {
-      const v = await call({ op: "file_verify", drive_id: drive, item_id: full.r.item.id, expect_size: d.size, expect_hash: full.r.quick_xor_hash, folder_id: folder });
+      const v = await call({ op: "file_verify", drive_id: drive, item_id: full.r.item.id, expect_size: d.size, expect_hash: full.r.quick_xor_hash, folder_id: zipFolder });
       record("zip: file_verify — size, OneDrive hash, PK head, central directory at the end", v.ok, { checks: v.checks, type: v.type, end_of_file: v.end_of_file, path: v.item?.path });
-      const again = await fetchAll(d);
+      const again = await fetchAll(d, { folder: zipFolder });
       record("zip: second run is a duplicate", again.r.ok && again.r.duplicate === true, { existing: again.r.existing?.name });
     }
   }
