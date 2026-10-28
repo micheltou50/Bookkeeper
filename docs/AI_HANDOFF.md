@@ -85,20 +85,55 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
   for Michel to view in Outlook and delete. The NKD draft of 26 Oct ("$[fee]
   + GST … [Fee proposal attached.]") belongs to an item he dismissed, so it
   was left for him.
-- Outlook drafting through Bookkeeper (28 Oct, in progress): `inbox-api.mjs`,
-  `lib/signature.mjs` (the real signature: logo, green bar, Calibri, link,
-  divider, disclaimer), `lib/inbox-draft.mjs`, `lib/signature-images.mjs`,
+- Outlook drafting through Bookkeeper (28 Oct, built, not yet live):
+  `inbox-api.mjs`, `lib/signature.mjs` (the real signature: logo, green bar,
+  Calibri, link, divider, disclaimer), `lib/inbox-draft.mjs`,
+  `lib/signature-images.mjs`, `lib/inbox-links.mjs` (linked documents),
   migration 0033 (applied live; a key issued into Vault, never printed), the
   OAuth consent now asks for `Mail.ReadWrite.Shared`, and
-  `scripts/inbox-api-test.mjs`. The offline tests pass. The online tests have
-  not run: this environment's network policy refuses `bkeeper.netlify.app`,
+  `scripts/inbox-api-test.mjs` (16 offline tests pass). Added 28 Oct evening:
+  the read-state promise (nothing sets `isRead` true; every op that touches a
+  message reads the flag before and after and restores unread; `read_state`
+  op) and the linked-document ops `links_scan`, `links_fetch` (chunked
+  through an encrypted transfer token, verified at the destination) and
+  `attachment_fetch` — see AI_CONTEXT. None of it has run against Microsoft
+  Graph: this environment's network policy refuses `bkeeper.netlify.app`,
   `deploy-preview-29--bkeeper.netlify.app` and `graph.microsoft.com`; Michel
   is to allow them under the environment's Network access (the scheduled
   runs need the same before they can use the API). Then: run the online
   tests against the deploy preview, compare the logo and line display sizes
-  with the raw HTML of a sent email (`message_read`), screenshot, reconnect
+  with the raw HTML of a sent email (`message_read`), screenshot, test
+  `links_fetch` on Seda's Mail Drop links into a test folder, reconnect
   Outlook for the shared mailboxes, switch both run prompts to the API,
   rotate the key.
+- Verification before merge (28 Oct evening, all against isolated data —
+  nothing live was written): (1) `scripts/regression/pure-functions.mjs`:
+  18 helper cases pass on the branch, 15 identical to main, the 3 job-number
+  cases intentionally different; (2) `scripts/regression/ui-flows.mjs`
+  (Playwright + in-process Supabase stand-in, see AI_CONTEXT): branch 17/17
+  at desktop and phone size, main 15/15 at both; every write the original
+  flows make (contact insert/update, project insert per company, quote
+  insert with the DA quote type's scope, accept + 30 % deposit invoice,
+  invoice insert with its line, mark paid, the Outlook send calls, the
+  OneDrive refile calls) is identical on branch and main except the project
+  number the form shows and sends — main shows/sends `261004` for a Mworx
+  Group project and the database guard (0034) corrects it to `26119`; the
+  branch shows and sends `26119`; (3) the Inbox page on the branch: Mark
+  paid asks with client and amount, patches, reads the row back
+  (`select=id,status,paid_date`) and the item closes through the 0030
+  trigger; Draft quote calls `bk_draft_quote_from_proposal` once and links
+  the draft; (4) RLS as the `authenticated` role (rolled back) and a review
+  of every trigger, policy and function on the live project: only the
+  expected 0030 / 0034 additions; (5) lint: the pre-existing `_d` error on
+  main only; build passes.
+- Prompts (28 Oct evening): both runs carry READ STATE (record isRead from
+  the search before read_resource, never run anything that marks read,
+  re-search afterwards and report any flip in QA and the message) and
+  JOB 1b (linked documents: list and classify every download link in the
+  body; today a 'call' item carrying the original links, never "downloaded";
+  with the API, `links_fetch` and a verified 'file' item). Stored prompts
+  verified byte-identical to `scratchpad/prompts/morning.txt` /
+  `closeoff.txt` (derived by `derive.py`).
 
 ## In progress — Inbox
 
@@ -112,7 +147,16 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
 - [ ] First runs on the 28 Oct prompts (morning 29 Oct, close-off 29 Oct):
       the run row has `qa` entries and the message a "Checked:" line; every
       new draft ends with the signature once and has no brackets; a filed
-      file has "Open file"; nothing was reported that was not read back.
+      file has "Open file"; nothing was reported that was not read back; the
+      Checked line says "Read state: unchanged" (or lists the flips); Seda's
+      email (12 Cobbler Crescent) produces one "Linked documents to download"
+      call item listing its 15 Mail Drop files.
+- [ ] Michel: an unread test email to info@ (and one each to accounts@ /
+      energy@) so the read-state check can be proven on an unread message —
+      every message in info@ was already read on 28 Oct, so the promise is
+      verified by construction (Graph GETs do not change isRead; the API
+      restores) but not yet by a live before/after.
+- [ ] Migration 0035 (not applied): apply only with Michel's approval.
 
 ## Known issues / debt
 
@@ -162,6 +206,16 @@ sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
 - Netlify synchronous functions stop at 10 s on this plan, which is the real
   limit on attachments the API can carry (a few MB; `MAX_ATTACHMENT_BYTES`
   is 8 MB). Larger documents stay an item telling Michel what to attach.
+  `links_fetch` works around the limit for downloads by moving 2.5 MB per
+  call and carrying its state in an encrypted transfer token (a 10 MB file
+  is about five calls); whether Apple's and Dropbox's CDNs honour byte
+  ranges as expected is untested until the network allowance is granted.
+- The connector's `read_resource` is a Graph GET and should not change
+  `isRead`, but no unread message existed in info@ to prove it on 28 Oct;
+  the prompts now compare before/after and the API restores unread. Until
+  that first live check, a flip would be reported, not silently absorbed.
+- WeTransfer, OneDrive / SharePoint share links and portals are not fetched
+  (a browser or sign-in is needed); they become 'call' items with the link.
 
 ## Next tasks (ideas, not committed)
 

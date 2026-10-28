@@ -92,7 +92,11 @@ give, and the 27 Oct close-off wrote nothing because of it.
   already has a quote keeps it) — and no fee is assumed: the amount is the
   quote type's lump amount if it has one, else 0, a BASIX quote always starts
   at 0 until the pricing rules are approved, and the runs pass `null` for the
-  fee. Mworx Energy BASIX enquiries use the one quote type "BASIX —
+  fee. Migration `0035_no_template_fee.sql` (written 28 Oct, **not applied**,
+  needs Michel's approval) closes the remaining gap: with it a run-made draft
+  always starts at 0 even when a non-BASIX quote type carries a lump amount
+  or line rates. Today no quote type carries either, so the live function
+  and 0035 give the same result. Mworx Energy BASIX enquiries use the one quote type "BASIX —
   Certificate" (standard scope with `[address]` and `[proposed works]` filled
   in; the run adds "Non-standard BASIX scope — review" to the item when the
   enquiry is out of the ordinary). Mworx Group design enquiries get the
@@ -194,14 +198,66 @@ source has no sending call.
   `quote_draft`, which call the `bk_inbox_*` / `bk_draft_quote_from_proposal`
   functions with the service role after an ownership check. The runs no
   longer write to the database with SELECTs that call functions.
+- Read state (28 Oct): nothing in the API sets `isRead` to true — the offline
+  test asserts the source writes `isRead` in one place and writes `false`.
+  `message_read`, `links_scan`, `attachment_fetch` and `draft` record the
+  message's `isRead` before, read it again after, put an unread message back
+  if a step flipped it, and return `read_state` (`before`, `after_operation`,
+  `restored`, `now`, `unchanged`); `draft` counts `read_state_unchanged`
+  among the checks a draft must pass. `read_state` reads one message's flag
+  and, with `restore_unread: true`, sets it back to unread — never to read.
+  Graph `GET`s and `createReply` do not change `isRead`; the check is there
+  so the promise is read back, not assumed.
+- Linked documents (`lib/inbox-links.mjs`): `links_scan` lists a message's
+  attachments (file / inline image / signature noise) and the download links
+  in its HTML — iCloud Mail Drop (file name, size and expiry read from the
+  link; the direct CDN address rebuilt from the `${f}` / `${uk}` placeholders
+  and never returned to the caller), Dropbox and Google Drive file links
+  (made direct), direct https document links — and marks WeTransfer,
+  OneDrive / SharePoint shares and portals as needing a browser, website /
+  social / tracking links as ignored. `links_fetch` moves one document into
+  a OneDrive folder: https only, no IP literals, internal names or our own
+  hosts, every host resolved and refused when private, redirects followed
+  for at most 5 hops with every hop re-checked, a 120 MB cap, the first
+  bytes checked (an HTML page — expired link, sign-in, download page — is
+  refused), Michel's duplicate rule at the destination (same name with or
+  without the date prefix and the same size → nothing uploaded; same name,
+  other size → " (2)"), the `yyMMdd_` prefix from the Sydney received date,
+  a Graph upload session fed in 2.5 MB parts across calls (the private URL
+  and the upload URL travel only inside an encrypted `transfer` token —
+  AES-GCM under `TOKEN_ENCRYPTION_KEY`, one-hour life — so a large file
+  spans several 10 s invocations), and the item read back (size, folder)
+  before `filed: true`. `attachment_fetch` does the same for one message
+  attachment (up to 8 MB, inline images included). No downloaded byte is
+  ever opened, run or rendered.
 - Tests: `node scripts/inbox-api-test.mjs --offline` (template, composition,
-  checks, no-send); with `INBOX_API_URL`, `INBOX_API_KEY` and
+  checks, no-send, the read-state promise, link classification with
+  Mail-Drop-shaped fixtures, private-address and redirect refusals with a
+  fake fetch, type sniffing, file naming); with `INBOX_API_URL`, `INBOX_API_KEY` and
   `TEST_MESSAGE_ID` the online run (ping, a reply draft with signature and
   attachment, read-back, duplicate refusal, error paths, shared-mailbox gate,
   clean-up; `KEEP=1` leaves the drafts for a look in Outlook). The offline
   run also writes `lib/assets/signature-preview.html` for a browser preview.
 - `docs/email-signature.html` remains the text fallback for drafts made
   through the connector; drafts made through the API carry the full one.
+
+## Regression harness (`scripts/regression`, 28 Oct 2026)
+
+- `pure-functions.mjs [path to another App.jsx]` — the numbering, date and
+  division helpers extracted from `src/App.jsx` and run on fixtures; with a
+  second path, compared helper by helper against that revision (main).
+- `mock-supabase.mjs` + `fixtures.mjs` + `ui-flows.mjs <dist> <label>
+  [--mobile] [--out dir]` — Playwright drives a built bundle (build it with
+  `VITE_SUPABASE_URL=https://mock-supabase.test VITE_SUPABASE_ANON_KEY=mock`
+  so the real project cannot be reached) against an in-process GoTrue +
+  PostgREST stand-in holding invented data; every other host is blocked.
+  Login, contacts, projects in each company, quote start and save, accept
+  with the deposit invoice, invoices, mark paid, the Outlook send path, the
+  OneDrive refile calls and the Inbox page, at 1366×900 and 390×844. Every
+  write, function call and dialog is recorded in
+  `<out>/<label>-<layout>.json` with screenshots. The stand-in applies the
+  live database's own rules (the 0034 job-number guard, the 0030 item
+  trigger) so the browser sees what production would.
 
 ## Numbering
 

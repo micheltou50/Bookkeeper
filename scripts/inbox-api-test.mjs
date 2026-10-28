@@ -19,11 +19,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { signatureHtml, signatureAttachments, signatureHtmlForPreview, SIGNATURE_PHONE, LOGO_CID, LINE_CID } from "../netlify/functions/lib/signature.mjs";
 import { checkOutgoingHtml, composeNewPart, injectAbove, newPartOf, verifyDraftBody, fileAttachmentsOf } from "../netlify/functions/lib/inbox-draft.mjs";
+import { extractLinks, classifyLink, classifyAttachment, icloudMailDrop, unwrapSafeLink, isPrivateIp, assertPublicUrl, sniffType, fetchRange, parseContentRange, sanitizeFilename, filingName, sydneyDatePrefix, LinkError, MAX_DOWNLOAD_BYTES } from "../netlify/functions/lib/inbox-links.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const results = [];
+const pending = [];
 const test = (name, fn) => {
-  try { const r = fn(); if (r && typeof r.then === "function") return r.then(() => results.push([name, "pass"]), (e) => results.push([name, "FAIL", String(e?.message || e)])); results.push([name, "pass"]); }
+  try { const r = fn(); if (r && typeof r.then === "function") { const pr = r.then(() => results.push([name, "pass"]), (e) => results.push([name, "FAIL", String(e?.message || e)])); pending.push(pr); return pr; } results.push([name, "pass"]); }
   catch (e) { results.push([name, "FAIL", String(e?.message || e)]); }
 };
 const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
@@ -73,10 +75,134 @@ function offline() {
     assert(!verifyDraftBody(composeNewPart("<p>Hi [day]</p>"), atts).checks.no_placeholders, "placeholder");
     eq(fileAttachmentsOf([...atts, { id: "1", name: "plan.pdf", size: 10, isInline: false }]).map((f) => f.name), ["plan.pdf"]);
   });
-  test("the function has no path that sends mail", () => {
+  test("the function has no path that sends mail, and never sets a message read", () => {
     const src = fs.readFileSync(path.join(here, "../netlify/functions/inbox-api.mjs"), "utf8");
     for (const s of ["/send", "sendMail", "microsoft.graph.send", "/reply\"", "/forward"]) assert(!src.includes(s), `source contains ${s}`);
     assert(src.includes("never_sends: true"), "ping reports never_sends");
+    assert(!/isRead:\s*true/.test(src) && !/"isRead":\s*true/.test(src), "source sets isRead to true somewhere");
+    assert((src.match(/isRead: false/g) || []).length === 1, "exactly one place writes isRead, and it writes false");
+  });
+
+  // --- linked documents (the lib is pure; network parts take a fake fetch) ---
+  // The shape of Seda's email (28 Oct): iCloud Mail Drop links whose u= carries
+  // the CDN address with ${f} / ${uk} placeholders. Invented keys and names.
+  const cdn = "https://cvws.icloud-content.com/B/AbCdEf/${f}?o=AtEst&v=1&x=3&a=XYZ&e=1795735013&k=${uk}&fl=&r=abc&ckc=com.apple.largeattachment&ckz=mail&p=99&s=sig";
+  const maildrop = (f, sz) => `https://www.icloud.com/attachment/?u=${encodeURIComponent(cdn)}&uk=KEY123&f=${encodeURIComponent(f)}&sz=${sz}`;
+  const sedaBody = `<html><body><p>Hi Michael,</p><p>Please find the documents:</p>
+    <a href="${maildrop("Site Plan.pdf", 1200345)}">Site Plan.pdf</a><br>
+    <a href="${maildrop("Images.zip", 18874368)}">Download full resolution images</a><br>
+    <a href="https://www.dropbox.com/scl/fi/abc123/Floor%20Plan.dwg?rlkey=zzz&dl=0">Floor Plan.dwg</a>
+    <a href="https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view?usp=sharing">Council letter</a>
+    <a href="https://we.tl/t-AbCdEf1234">WeTransfer</a>
+    <a href="https://mycouncil.nsw.gov.au/documents/DA-2026-123/Notice.pdf">Notice of determination</a>
+    <a href="https://portal.planning.nsw.gov.au/da/12345">View on the Planning Portal</a>
+    <a href="https://www.facebook.com/skinclinic">Facebook</a> <a href="mailto:seda@example.test">email me</a>
+    <a href="https://aus01.safelinks.protection.outlook.com/?url=${encodeURIComponent("https://files.example.test/Survey.pdf")}&data=05">Survey (safe link)</a>
+    <a href="http://plain.example.test/old.pdf">old link</a>
+    <a href="https://www.example-studio.com.au/">Our website</a>
+    <img src="cid:image001.png@01D"></body></html>`;
+  test("links: anchors are found once each, with their text", () => {
+    const links = extractLinks(sedaBody);
+    eq(links.length, 12);
+    eq(links[1].text, "Download full resolution images");
+  });
+  test("links: iCloud Mail Drop → filename, size, expiry, direct url rebuilt from the placeholders; the href stays the public one", () => {
+    const c = classifyLink(maildrop("Site Plan.pdf", 1200345), "Site Plan.pdf");
+    eq(c.kind, "download"); eq(c.service, "icloud_maildrop"); eq(c.filename, "Site Plan.pdf"); eq(c.size, 1200345);
+    assert(c.expires && c.expires.startsWith("2026-11-2"), "expiry from e=" + c.expires);
+    assert(c.direct_url.startsWith("https://cvws.icloud-content.com/B/AbCdEf/Site%20Plan.pdf?") && c.direct_url.includes("k=KEY123"), "direct url rebuilt");
+    assert(!c.direct_url.includes("${"), "no placeholders left");
+    assert(c.href.startsWith("https://www.icloud.com/attachment/"), "href is the public page");
+    const expired = icloudMailDrop(maildrop("x.pdf", 1).replace("e%3D1795735013", "e%3D1600000000"));
+    eq(expired.kind, "expired");
+  });
+  test("links: Dropbox and Google Drive become direct downloads; WeTransfer, OneDrive share, portals need a browser; social, mailto, http, websites are ignored", () => {
+    const by = Object.fromEntries(extractLinks(sedaBody).map((l) => [l.text, classifyLink(l.href, l.text)]));
+    eq(by["Floor Plan.dwg"].kind, "download"); assert(by["Floor Plan.dwg"].direct_url.includes("dl=1"), "dropbox dl=1"); eq(by["Floor Plan.dwg"].filename, "Floor Plan.dwg");
+    eq(by["Council letter"].kind, "download"); assert(by["Council letter"].direct_url.startsWith("https://drive.usercontent.google.com/download?id=1AbCdEfGhIjKlMnOpQrStUv"), "drive direct");
+    eq(by["WeTransfer"].kind, "portal");
+    eq(by["Notice of determination"].kind, "download"); eq(by["Notice of determination"].service, "direct"); eq(by["Notice of determination"].filename, "Notice.pdf");
+    eq(by["View on the Planning Portal"].kind, "portal");
+    eq(by["Facebook"].kind, "ignored"); eq(by["email me"].kind, "ignored"); eq(by["Our website"].kind, "ignored");
+    eq(by["old link"].kind, "portal", "http is not fetched");
+    eq(by["Survey (safe link)"].href, "https://files.example.test/Survey.pdf"); eq(by["Survey (safe link)"].kind, "download");
+    eq(classifyLink("https://1drv.ms/b/s!AbC").kind, "portal"); eq(classifyLink("https://contoso.sharepoint.com/:b:/g/x").kind, "portal");
+    eq(unwrapSafeLink("https://x.test/a"), "https://x.test/a");
+  });
+  test("attachments: signature images are noise, inline photos are images, files are attachments", () => {
+    eq(classifyAttachment({ id: "1", name: "image001.png", size: 4000, isInline: true, contentType: "image/png" }).kind, "image");
+    assert(classifyAttachment({ id: "1", name: "image001.png", size: 4000, isInline: true, contentType: "image/png" }).note.includes("signature"));
+    eq(classifyAttachment({ id: "2", name: "IMG_2041.jpeg", size: 2400000, isInline: true, contentType: "image/jpeg" }).kind, "image");
+    eq(classifyAttachment({ id: "3", name: "Survey Plan.pdf", size: 240000, isInline: false, contentType: "application/pdf" }).kind, "attachment");
+    eq(classifyAttachment({ id: "4", name: "invite.ics", size: 2000, isInline: false, contentType: "text/calendar" }).kind, "ignored");
+  });
+  test("safety: private addresses, IP literals, internal names, http and our own hosts are refused; a public host passes", async () => {
+    for (const ip of ["10.0.0.1", "127.0.0.1", "169.254.169.254", "172.16.5.5", "192.168.1.1", "100.64.0.1", "0.0.0.0", "::1", "fe80::1", "fd00::1", "::ffff:10.0.0.1"]) assert(isPrivateIp(ip), `${ip} should be private`);
+    for (const ip of ["8.8.8.8", "17.253.1.1", "2606:4700::1111"]) assert(!isPrivateIp(ip), `${ip} should be public`);
+    const refuse = async (url, lookup, code) => { try { await assertPublicUrl(url, lookup); throw new Error("should refuse " + url); } catch (e) { assert(e instanceof LinkError && e.code === code, `${url}: ${e.code || e.message} (wanted ${code})`); } };
+    const pub = async () => [{ address: "17.253.1.1" }];
+    await refuse("http://files.example.test/a.pdf", pub, "not_https");
+    await refuse("https://10.0.0.5/a.pdf", pub, "bad_host");
+    await refuse("https://[::1]/a.pdf", pub, "bad_host");
+    await refuse("https://intranet.local/a.pdf", pub, "bad_host");
+    await refuse("https://bkeeper.netlify.app/.netlify/functions/inbox-api", pub, "bad_host");
+    await refuse("https://yzndkdlzgegrcotfeqlp.supabase.co/rest/v1/bk_invoices", pub, "bad_host");
+    await refuse("https://user:pw@files.example.test/a.pdf", pub, "bad_url");
+    await refuse("https://evil.example.test/a.pdf", async () => [{ address: "192.168.0.10" }], "private_address");
+    await refuse("https://evil.example.test/a.pdf", async () => [{ address: "8.8.8.8" }, { address: "10.1.1.1" }], "private_address");
+    await refuse("https://nowhere.example.test/a.pdf", async () => { throw new Error("ENOTFOUND"); }, "dns_failed");
+    eq((await assertPublicUrl("https://files.example.test/a.pdf", pub)).host, "files.example.test");
+  });
+  test("sniff: PDF, ZIP, PNG, JPEG, DWG, DOCX are documents; an HTML page never is", () => {
+    eq(sniffType(Buffer.from("%PDF-1.7\n%âãÏÓ"), "a.pdf").type, "pdf");
+    eq(sniffType(Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0]), "Images.zip").type, "zip");
+    eq(sniffType(Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0]), "Plans.docx").type, "ooxml");
+    eq(sniffType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), "x.png").type, "png");
+    eq(sniffType(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), "x.jpg").type, "jpeg");
+    eq(sniffType(Buffer.from("AC1032xxxx"), "x.dwg").type, "dwg");
+    const html = sniffType(Buffer.from("<!DOCTYPE html><html><head><title>Sign in</title></head>"), "Notice.pdf");
+    eq(html.type, "html"); eq(html.html, true); eq(html.ok, false);
+    const html2 = sniffType(Buffer.from("\n\n<html lang=en><body>Download expired</body></html>"), "x.pdf");
+    eq(html2.html, true);
+    eq(sniffType(Buffer.from("0\r\nSECTION\r\n2\r\nHEADER"), "x.dxf").type, "dxf");
+  });
+  test("fetch: redirects are followed hop by hop with every host checked, ranges honoured, sizes read, HTML refused by the caller", async () => {
+    const calls = [];
+    const mk = (status, headers, body) => ({ status, ok: status >= 200 && status < 300, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, arrayBuffer: async () => Buffer.from(body || ""), body: null });
+    const fetchImpl = async (url, opts) => {
+      calls.push([url, opts.headers.Range]);
+      if (url.startsWith("https://www.icloud.com/")) return mk(302, { location: "https://cvws.icloud-content.com/B/x/Site%20Plan.pdf?e=1" });
+      if (url.startsWith("https://cvws.icloud-content.com/")) return mk(206, { "content-range": "bytes 0-9/1200345", "content-type": "application/pdf", "content-disposition": "attachment; filename=\"Site Plan.pdf\"" }, "%PDF-1.7\n%x");
+      if (url.startsWith("https://loop.example.test/")) return mk(302, { location: "https://loop.example.test/again" });
+      if (url.startsWith("https://inside.example.test/")) return mk(302, { location: "https://169.254.169.254/latest/meta-data" });
+      if (url.startsWith("https://gone.example.test/")) return mk(404, {});
+      if (url.startsWith("https://login.example.test/")) return mk(401, {});
+      if (url.startsWith("https://big.example.test/")) return mk(206, { "content-range": `bytes 0-9/${MAX_DOWNLOAD_BYTES + 1}` }, "0123456789");
+      if (url.startsWith("https://norange.example.test/")) return mk(200, { "content-length": "20", "content-type": "application/octet-stream" }, "01234567890123456789");
+      return mk(500, {});
+    };
+    const lookup = async (h) => (h === "www.icloud.com" || h === "cvws.icloud-content.com" || /example\.test$/.test(h)) ? [{ address: "17.253.1.1" }] : (() => { throw new Error("ENOTFOUND"); })();
+    const r = await fetchRange("https://www.icloud.com/attachment/x", { offset: 0, length: 10, fetchImpl, lookup });
+    eq(r.total, 1200345); eq(r.partial, true); eq(r.contentType, "application/pdf"); eq(r.filename, "Site Plan.pdf"); eq(r.hops, ["www.icloud.com", "cvws.icloud-content.com"]); eq(r.bytes.toString().slice(0, 4), "%PDF");
+    eq(calls[0][1], "bytes=0-9");
+    const err = async (url, code, opts = {}) => { try { await fetchRange(url, { fetchImpl, lookup, ...opts }); throw new Error("should fail " + url); } catch (e) { assert(e instanceof LinkError && e.code === code, `${url}: ${e.code || e.message} (wanted ${code})`); } };
+    await err("https://loop.example.test/a", "too_many_redirects");
+    await err("https://inside.example.test/a", "bad_host");
+    await err("https://gone.example.test/a.pdf", "gone");
+    await err("https://login.example.test/a.pdf", "access_denied");
+    await err("https://big.example.test/a.zip", "too_large");
+    await err("https://norange.example.test/a.pdf", "no_range_support", { offset: 10, length: 10 });
+    const whole = await fetchRange("https://norange.example.test/a.pdf", { offset: 0, length: 10, fetchImpl, lookup });
+    eq(whole.bytes.length, 10); eq(whole.total, 20); eq(whole.complete, false);
+    eq(parseContentRange("bytes 100-199/5000"), { start: 100, end: 199, total: 5000 });
+  });
+  test("names: Michel's yyMMdd_ prefix from the Sydney received date, kept when present, unsafe characters removed", () => {
+    eq(sydneyDatePrefix("2026-10-27T14:30:00Z"), "261028_", "after midnight Sydney");
+    eq(sydneyDatePrefix("2026-10-27T12:30:00Z"), "261027_", "still the 27th in Sydney");
+    eq(filingName("Site Plan.pdf", "2026-10-27T14:30:00Z"), "261028_Site Plan.pdf");
+    eq(filingName("261026_Survey.pdf", "2026-10-27T14:30:00Z"), "261026_Survey.pdf");
+    eq(sanitizeFilename("../../etc/passwd"), "..-..-etc-passwd".replace(/^\.+/, ""));
+    eq(sanitizeFilename("Plan: rev <A>?.pdf"), "Plan- rev -A--.pdf");
   });
   const previewPath = path.join(here, "../netlify/functions/lib/assets/signature-preview.html");
   fs.writeFileSync(previewPath, `<!doctype html><html><head><meta charset="utf-8"><title>Signature preview</title></head><body style="margin:24px;background:#fff">` +
@@ -170,5 +296,5 @@ function finish() {
   process.exitCode = failed.length ? 1 : 0;
 }
 
-if (process.argv.includes("--offline")) { offline(); finish(); }
-else { offline(); await online(); }
+if (process.argv.includes("--offline")) { offline(); await Promise.all(pending); finish(); }
+else { offline(); await Promise.all(pending); await online(); }

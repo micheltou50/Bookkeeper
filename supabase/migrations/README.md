@@ -64,6 +64,11 @@ These SQL files document the schema/constraints/RLS the app relies on.
   `bk_draft_quote_from_proposal` re-created so every proposal item gets its
   own draft and no fee is assumed (BASIX always 0; `p_amount` ignored).
   Re-runnable, no drops.
+- `0035_no_template_fee.sql` — **NOT APPLIED (needs Michel's approval).**
+  `bk_draft_quote_from_proposal` re-created from 0034 with one change: a
+  run-made draft quote always starts at 0, whatever a quote type's
+  `lump_amount` or line rates say (0034 still copies a non-BASIX type's lump
+  amount; no type carries one today). Re-runnable, no drops.
 
 ## Urgent: apply 0007–0010 to live project
 

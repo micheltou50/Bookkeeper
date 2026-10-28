@@ -27,6 +27,19 @@
 //   draft_delete  — delete a draft (refused for anything that is not a draft)
 //   run_open, run_items, run_done, run_close, run_qa, quote_draft
 //                 — the Inbox writes, through the restricted bk_* functions
+//   read_state    — a message's isRead; with restore_unread it puts a message
+//                   back to unread (never the other way)
+//   links_scan    — a message's attachments and the download links in its
+//                   body, classified: attachment / download / image / portal
+//   links_fetch   — fetch one linked document into a OneDrive folder, in
+//                   parts across calls (an encrypted transfer token carries
+//                   the state), verified at the destination before it is
+//                   reported
+//   attachment_fetch — copy one message attachment into a OneDrive folder
+//
+// Read state: nothing here ever sets isRead to true. Every operation that
+// touches a message records isRead before and after and restores unread when
+// it was unread; the result carries read_state so the run can report it.
 //
 // Keys: sha256 hashes in bk_inbox_api_keys (migration 0033); the key itself
 // sits in Supabase Vault as 'inbox_api_key', issued by bk_inbox_api_key_issue().
@@ -36,6 +49,7 @@ import { createClient } from "@supabase/supabase-js";
 import { encryptToken, decryptToken } from "./lib/token-crypto.mjs";
 import { signatureAttachments } from "./lib/signature.mjs";
 import { checkOutgoingHtml, composeNewPart, injectAbove, verifyDraftBody, fileAttachmentsOf, textOf } from "./lib/inbox-draft.mjs";
+import { extractLinks, classifyLink, classifyAttachment, fetchRange, sniffType, sanitizeFilename, filingName, LinkError, CHUNK_BYTES, MAX_DOWNLOAD_BYTES } from "./lib/inbox-links.mjs";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
@@ -178,7 +192,29 @@ const odataQuote = (s) => String(s).replace(/'/g, "''");
 // Outlook ids can end in '=' and carry '+' or '/', so they are always encoded in a path.
 const enc = (s) => encodeURIComponent(String(s));
 
-const MESSAGE_SELECT = "id,subject,isDraft,conversationId,from,sender,toRecipients,ccRecipients,webLink,hasAttachments,parentFolderId,createdDateTime,receivedDateTime";
+const MESSAGE_SELECT = "id,subject,isDraft,isRead,conversationId,from,sender,toRecipients,ccRecipients,webLink,hasAttachments,parentFolderId,createdDateTime,receivedDateTime";
+
+// ---------------------------------------------------------- read state
+// Graph reads never change isRead, and createReply does not either, but the
+// promise is checked, not assumed: the state is read before and after, and a
+// message that was unread and is found read is put back. Nothing here can set
+// isRead to true.
+async function readState(session, box, messageId) {
+  const m = await session.call("GET", `${box.base}/messages/${enc(messageId)}?$select=id,isRead`);
+  return !!m.isRead;
+}
+async function restoreUnread(session, box, messageId) {
+  await session.call("PATCH", `${box.base}/messages/${enc(messageId)}`, { body: { isRead: false } });
+  return readState(session, box, messageId);
+}
+async function settleReadState(session, box, messageId, before) {
+  const after = await readState(session, box, messageId);
+  if (before === false && after === true) {
+    const now = await restoreUnread(session, box, messageId);
+    return { before, after_operation: after, restored: true, now, unchanged: now === before };
+  }
+  return { before, after_operation: after, restored: false, now: after, unchanged: after === before };
+}
 
 async function readDraft(session, box, draftId) {
   const batch = await session.call("POST", `${GRAPH}/$batch`, { body: { requests: [
@@ -283,7 +319,27 @@ async function opMessageRead(auth, p) {
   const msg = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=${MESSAGE_SELECT},body`);
   const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentId,contentType`);
   const body = String(msg.body?.content || "");
-  return json({ ok: true, message: { id: msg.id, subject: msg.subject, is_draft: msg.isDraft, conversation_id: msg.conversationId, from: recipients([msg.from])[0], to: recipients(msg.toRecipients), cc: recipients(msg.ccRecipients), received: msg.receivedDateTime, web_link: msg.webLink }, body_html: body.slice(0, MAX_BODY_BYTES), body_truncated: body.length > MAX_BODY_BYTES, attachments: (atts?.value || []).map((a) => ({ id: a.id, name: a.name, size: a.size, inline: !!a.isInline, content_id: a.contentId || null, content_type: a.contentType })) });
+  const read_state = await settleReadState(s, box, p.message_id, !!msg.isRead);
+  return json({ ok: true, message: { id: msg.id, subject: msg.subject, is_draft: msg.isDraft, is_read: !!msg.isRead, conversation_id: msg.conversationId, from: recipients([msg.from])[0], to: recipients(msg.toRecipients), cc: recipients(msg.ccRecipients), received: msg.receivedDateTime, web_link: msg.webLink }, body_html: body.slice(0, MAX_BODY_BYTES), body_truncated: body.length > MAX_BODY_BYTES, attachments: (atts?.value || []).map((a) => ({ id: a.id, name: a.name, size: a.size, inline: !!a.isInline, content_id: a.contentId || null, content_type: a.contentType })), read_state });
+}
+
+async function opReadState(auth, p) {
+  const box = mailboxOf(p.mailbox || "info");
+  if (!box) return fail(400, "bad_mailbox", "mailbox must be info, accounts or energy");
+  if (!idOk(p.message_id)) return fail(400, "bad_message_id");
+  const s = await graphSession(auth.user_id);
+  if (s.error) return fail(401, s.error, s.detail);
+  if (box.shared && !s.sharedOk) return fail(403, "shared_mailbox_scope_missing", `Reconnect Outlook in Bookkeeper to grant ${SHARED_SCOPE}`);
+  let isRead;
+  try { isRead = await readState(s, box, p.message_id); }
+  catch (e) { if (e instanceof GraphError && e.status === 404) return fail(404, "message_not_found"); throw e; }
+  // restore_unread: the run saw the message unread in its search results and
+  // a connector read may have flipped it. Only ever back to unread.
+  if (p.restore_unread === true && isRead) {
+    const now = await restoreUnread(s, box, p.message_id);
+    return json({ ok: now === false, message_id: p.message_id, was_read: true, is_read: now, restored: now === false });
+  }
+  return json({ ok: true, message_id: p.message_id, is_read: isRead, restored: false });
 }
 
 async function findDrafts(s, box, { conversationId, subject }) {
@@ -390,6 +446,9 @@ async function opDraft(auth, p) {
     out.checks.attachments_ok = missing.length === 0;
     out.checks.attachments_missing = missing;
     out.attachments = got.map((g) => ({ ...g, size_sent: files.find((f) => f.name === g.name)?.size ?? null }));
+    // The original must be exactly as read-or-unread as it was found.
+    if (original) out.read_state = await settleReadState(s, box, p.message_id, !!original.isRead);
+    out.checks.read_state_unchanged = original ? out.read_state.unchanged : true;
     const ok = Object.entries(out.checks).every(([k, v]) => k === "attachments_missing" || v === true);
     if (!ok) {
       await s.call("DELETE", `${box.base}/messages/${enc(draftId)}`).catch(() => {});
@@ -505,10 +564,223 @@ async function opQuoteDraft(auth, p) {
   return json({ ok: !!result?.ok, result });
 }
 
+// ------------------------------------------------- linked documents
+
+const BUDGET_MS = 6500;            // leave room inside Netlify's 10 s wall clock
+const TRANSFER_VERSION = 1;
+const TRANSFER_TTL_MS = 60 * 60 * 1000;
+
+async function messageBox(auth, p) {
+  const box = mailboxOf(p.mailbox || "info");
+  if (!box) return { err: fail(400, "bad_mailbox", "mailbox must be info, accounts or energy") };
+  if (!idOk(p.message_id)) return { err: fail(400, "bad_message_id") };
+  const s = await graphSession(auth.user_id);
+  if (s.error) return { err: fail(401, s.error, s.detail) };
+  if (box.shared && !s.sharedOk) return { err: fail(403, "shared_mailbox_scope_missing", `Reconnect Outlook in Bookkeeper to grant ${SHARED_SCOPE}`) };
+  return { box, s };
+}
+
+const publicLink = (c) => { const { direct_url, ...rest } = c; return { ...rest, fetchable: c.kind === "download" }; };
+
+async function opLinksScan(auth, p) {
+  const { box, s, err } = await messageBox(auth, p);
+  if (err) return err;
+  let msg;
+  try { msg = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=${MESSAGE_SELECT},body`); }
+  catch (e) { if (e instanceof GraphError && e.status === 404) return fail(404, "message_not_found"); throw e; }
+  const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentId,contentType`);
+  const body = String(msg.body?.content || "");
+  const links = extractLinks(body).map((l) => publicLink(classifyLink(l.href, l.text)));
+  const attachments = (atts?.value || []).map(classifyAttachment);
+  const received = msg.receivedDateTime || null;
+  const read_state = await settleReadState(s, box, p.message_id, !!msg.isRead);
+  return json({
+    ok: true,
+    message: { id: msg.id, subject: msg.subject, from: recipients([msg.from])[0], received, is_read: !!msg.isRead, web_link: msg.webLink },
+    attachments: attachments.filter((a) => a.kind === "attachment").map((a) => ({ ...a, filing_name: filingName(a.name, received) })),
+    images: attachments.filter((a) => a.kind === "image"),
+    downloads: links.filter((l) => l.kind === "download").map((l) => ({ ...l, filing_name: l.filename ? filingName(l.filename, received) : null })),
+    portals: links.filter((l) => l.kind === "portal" || l.kind === "expired"),
+    ignored: links.filter((l) => l.kind === "ignored").length,
+    read_state,
+  });
+}
+
+// --- OneDrive side -------------------------------------------------------
+
+async function existingAt(s, driveId, folderId, name) {
+  try {
+    const it = await s.call("GET", `${GRAPH}/drives/${enc(driveId)}/items/${enc(folderId)}:/${encodeURIComponent(name)}?$select=id,name,size,webUrl`);
+    return it ? { id: it.id, name: it.name, size: it.size, web_url: it.webUrl } : null;
+  } catch (e) { if (e instanceof GraphError && e.status === 404) return null; throw e; }
+}
+
+/**
+ * Michel's duplicate rule: the same file (same name with or without the date
+ * prefix, same size) already in the folder is a duplicate — nothing is
+ * uploaded. The same name with a different size gets " (2)", " (3)" … .
+ */
+async function settleName(s, driveId, folderId, name, size) {
+  const bare = name.replace(/^\d{6}_/, "");
+  for (const candidate of new Set([name, bare])) {
+    const hit = await existingAt(s, driveId, folderId, candidate);
+    if (hit && size != null && hit.size === size) return { duplicate: hit };
+  }
+  let final = name;
+  for (let n = 2; n < 10; n++) {
+    const hit = await existingAt(s, driveId, folderId, final);
+    if (!hit) return { name: final };
+    const m = /^(.*?)(\.[^.]+)?$/.exec(name);
+    final = `${m[1]} (${n})${m[2] || ""}`;
+  }
+  throw new LinkError("name_taken", `${name} and nine variants already exist in the folder`);
+}
+
+async function createUploadSession(s, driveId, folderId, name, total) {
+  const sess = await s.call("POST", `${GRAPH}/drives/${enc(driveId)}/items/${enc(folderId)}:/${encodeURIComponent(name)}:/createUploadSession`, { body: { item: { "@microsoft.graph.conflictBehavior": "fail", name } } });
+  if (!sess?.uploadUrl) throw new GraphError(502, sess, "createUploadSession");
+  return sess.uploadUrl;
+}
+
+async function putChunk(uploadUrl, bytes, start, total) {
+  const end = start + bytes.length - 1;
+  const r = await fetchWithTimeout(uploadUrl, { method: "PUT", headers: { "Content-Length": String(bytes.length), "Content-Range": `bytes ${start}-${end}/${total}` }, body: bytes }, 20000);
+  let body = null; try { body = await r.json(); } catch {}
+  if (r.status === 202) return { done: false, next: Number((body?.nextExpectedRanges?.[0] || "").split("-")[0]) || end + 1 };
+  if (r.status === 200 || r.status === 201) return { done: true, item: body };
+  throw new GraphError(r.status, body, "upload chunk");
+}
+
+async function verifyItem(s, driveId, itemId, { folderId, size }) {
+  const it = await s.call("GET", `${GRAPH}/drives/${enc(driveId)}/items/${enc(itemId)}?$select=id,name,size,webUrl,parentReference,file`);
+  const checks = { is_file: !!it.file, in_folder: !folderId || it.parentReference?.id === folderId, size_matches: size == null || it.size === size };
+  return { item: { id: it.id, name: it.name, size: it.size, web_url: it.webUrl, path: it.parentReference?.path ? `${it.parentReference.path}/${it.name}`.replace(/^\/drive\/root:/, "") : null }, checks, verified: Object.values(checks).every(Boolean) };
+}
+
+const sealTransfer = (t) => encryptToken(JSON.stringify({ v: TRANSFER_VERSION, ...t }));
+function openTransfer(token) {
+  let t;
+  try { t = JSON.parse(decryptToken(token)); } catch { throw new LinkError("bad_transfer", "the transfer token cannot be read"); }
+  if (t?.v !== TRANSFER_VERSION || !t.url || !t.upload_url || typeof t.offset !== "number" || typeof t.total !== "number") throw new LinkError("bad_transfer", "the transfer token is incomplete");
+  if (Date.now() - (t.started || 0) > TRANSFER_TTL_MS) throw new LinkError("transfer_expired", "the transfer started more than an hour ago; start it again");
+  return t;
+}
+
+const DOC_CONTENT_TYPES = /^(application\/(pdf|zip|x-zip-compressed|octet-stream|msword|vnd\.|x-7z|x-rar|rtf|acad|x-dwg|dxf|x-dxf)|image\/|text\/(plain|csv))/i;
+
+/**
+ * links_fetch: one linked document into one OneDrive folder, verified. A file
+ * bigger than a chunk is moved in parts across calls: the first call fetches
+ * the first bytes (checking they are a document, not a web page), settles the
+ * name, opens the upload session and moves what it can inside the time
+ * budget; each later call continues from the encrypted transfer token. The
+ * private direct URL and the upload URL live only inside that token.
+ */
+async function opLinksFetch(auth, p) {
+  if (!idOk(p.drive_id) || !idOk(p.folder_id)) return fail(400, "bad_folder", "drive_id and folder_id are required");
+  const s = await graphSession(auth.user_id);
+  if (s.error) return fail(401, s.error, s.detail);
+  const started = Date.now();
+  let t;
+  try {
+    if (p.transfer) {
+      t = openTransfer(p.transfer);
+      if (t.drive_id !== p.drive_id || t.folder_id !== p.folder_id) return fail(400, "bad_transfer", "the transfer belongs to another folder");
+    } else {
+      if (typeof p.href !== "string" || p.href.length > 4096) return fail(400, "bad_href");
+      const cls = classifyLink(p.href, p.text || "");
+      if (cls.kind !== "download" || !cls.direct_url) return fail(400, "not_downloadable", cls.kind === "expired" ? "the link has expired" : cls.kind === "portal" ? "this link needs a browser, a sign-in or a decision — raise a task with the link" : "not a document link", { classification: publicLink(cls) });
+      // First bytes: what it is, how big, and the name the server gives it.
+      const first = await fetchRange(cls.direct_url, { offset: 0, length: CHUNK_BYTES });
+      const baseName = sanitizeFilename(p.name || cls.filename || first.filename || "document");
+      const sniff = sniffType(first.bytes, baseName);
+      if (sniff.html || first.contentType === "text/html") return fail(422, "html_page", "the link answers with a web page, not a file (expired, sign-in, or a download page that needs a browser)", { content_type: first.contentType, final_host: first.hops.at(-1) });
+      if (!sniff.ok && !DOC_CONTENT_TYPES.test(first.contentType)) return fail(422, "not_a_document", `the first bytes are not a known document type (${sniff.type}; content-type ${first.contentType || "none"})`);
+      const total = first.total ?? (first.complete ? first.bytes.length : null);
+      if (total == null) return fail(422, "unknown_size", "the server does not say how big the file is, so it cannot be moved in parts");
+      if (cls.size != null && cls.size !== total) return fail(422, "size_mismatch", `the link says ${cls.size} bytes, the server ${total}`);
+      const name = filingName(baseName, p.received || null);
+      const settled = await settleName(s, p.drive_id, p.folder_id, name, total);
+      if (settled.duplicate) return json({ ok: true, done: true, filed: false, duplicate: true, existing: settled.duplicate, name: settled.duplicate.name, size: total, note: "the folder already holds this file (same name and size); nothing uploaded" });
+      const uploadUrl = await createUploadSession(s, p.drive_id, p.folder_id, settled.name, total);
+      t = { url: cls.direct_url, href: p.href, name: settled.name, drive_id: p.drive_id, folder_id: p.folder_id, upload_url: uploadUrl, total, offset: 0, started, type: sniff.type, first: first.bytes.toString("base64") };
+    }
+    // Move bytes while the budget lasts.
+    let itemFromPut = null;
+    while (t.offset < t.total) {
+      let bytes;
+      if (t.first) { bytes = Buffer.from(t.first, "base64"); delete t.first; }
+      else {
+        if (Date.now() - started > BUDGET_MS) break;
+        const part = await fetchRange(t.url, { offset: t.offset, length: Math.min(CHUNK_BYTES, t.total - t.offset) });
+        bytes = part.bytes;
+        if (!bytes.length) throw new LinkError("fetch_failed", `no bytes at offset ${t.offset}`);
+      }
+      bytes = bytes.subarray(0, t.total - t.offset);
+      const r = await putChunk(t.upload_url, bytes, t.offset, t.total);
+      t.offset += bytes.length;
+      if (r.done) { itemFromPut = r.item; break; }
+      if (Date.now() - started > BUDGET_MS) break;
+    }
+    if (t.offset < t.total) {
+      return json({ ok: true, done: false, name: t.name, progress: { offset: t.offset, total: t.total, percent: Math.floor((t.offset / t.total) * 100) }, transfer: sealTransfer(t), note: "call links_fetch again with this transfer to continue" });
+    }
+    const itemId = itemFromPut?.id;
+    if (!itemId) throw new LinkError("upload_incomplete", "the upload finished without a drive item");
+    const v = await verifyItem(s, t.drive_id, itemId, { folderId: t.folder_id, size: t.total });
+    return json({ ok: v.verified, done: true, filed: v.verified, name: t.name, size: t.total, type: t.type, item: v.item, checks: v.checks, source: t.href }, v.verified ? 200 : 502);
+  } catch (e) {
+    if (e instanceof LinkError) return fail(e.code === "access_denied" ? 403 : e.code === "gone" ? 404 : e.code === "too_large" ? 413 : 422, e.code, e.detail, e.extra);
+    throw e;
+  }
+}
+
+/** attachment_fetch: one message attachment (inline images included) into a OneDrive folder, verified. */
+async function opAttachmentFetch(auth, p) {
+  const { box, s, err } = await messageBox(auth, p);
+  if (err) return err;
+  if (!idOk(p.attachment_id)) return fail(400, "bad_attachment_id");
+  if (!idOk(p.drive_id) || !idOk(p.folder_id)) return fail(400, "bad_folder", "drive_id and folder_id are required");
+  let msg, meta;
+  try {
+    msg = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=id,isRead,receivedDateTime,subject`);
+    meta = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments/${enc(p.attachment_id)}?$select=id,name,size,isInline,contentType`);
+  } catch (e) { if (e instanceof GraphError && e.status === 404) return fail(404, "attachment_not_found"); throw e; }
+  const before = !!msg.isRead;
+  try {
+    if (meta.size > MAX_ATTACHMENT_BYTES) return fail(413, "attachment_too_large", `${meta.name} is ${meta.size} bytes; the limit here is ${MAX_ATTACHMENT_BYTES} (the Power Automate flow saves large attachments to staging)`);
+    const r = await fetchWithTimeout(`${box.base}/messages/${enc(p.message_id)}/attachments/${enc(p.attachment_id)}/$value`, { headers: { Authorization: `Bearer ${s.access}` } }, 20000);
+    if (!r.ok) throw new GraphError(r.status, null, "attachment $value");
+    const bytes = Buffer.from(await r.arrayBuffer());
+    const baseName = sanitizeFilename(p.name || meta.name || "attachment");
+    const sniff = sniffType(bytes, baseName);
+    if (sniff.html) return fail(422, "html_page", "the attachment is an HTML page");
+    const name = filingName(baseName, p.received || msg.receivedDateTime || null);
+    const settled = await settleName(s, p.drive_id, p.folder_id, name, bytes.length);
+    if (settled.duplicate) return json({ ok: true, done: true, filed: false, duplicate: true, existing: settled.duplicate, name: settled.duplicate.name, size: bytes.length, read_state: await settleReadState(s, box, p.message_id, before) });
+    const uploadUrl = await createUploadSession(s, p.drive_id, p.folder_id, settled.name, bytes.length);
+    let put, offset = 0, item = null;
+    while (offset < bytes.length) {
+      const chunk = bytes.subarray(offset, Math.min(offset + UPLOAD_CHUNK, bytes.length));
+      put = await putChunk(uploadUrl, chunk, offset, bytes.length);
+      offset += chunk.length;
+      if (put.done) item = put.item;
+    }
+    if (!item?.id) throw new LinkError("upload_incomplete", "the upload finished without a drive item");
+    const v = await verifyItem(s, p.drive_id, item.id, { folderId: p.folder_id, size: bytes.length });
+    const read_state = await settleReadState(s, box, p.message_id, before);
+    return json({ ok: v.verified && read_state.unchanged, done: true, filed: v.verified, name: settled.name, size: bytes.length, type: sniff.type, inline: !!meta.isInline, item: v.item, checks: { ...v.checks, read_state_unchanged: read_state.unchanged }, read_state }, v.verified ? 200 : 502);
+  } catch (e) {
+    if (e instanceof LinkError) return fail(422, e.code, e.detail, e.extra);
+    throw e;
+  }
+}
+
 const OPS = {
   ping: opPing, message_read: opMessageRead, drafts_find: opDraftsFind,
   draft: opDraft, draft_read: opDraftRead, draft_delete: opDraftDelete,
   run_open: opRunOpen, run_items: opRunItems, run_done: opRunDone, run_close: opRunClose, run_qa: opRunQa, quote_draft: opQuoteDraft,
+  read_state: opReadState, links_scan: opLinksScan, links_fetch: opLinksFetch, attachment_fetch: opAttachmentFetch,
 };
 
 export default async (req) => {
