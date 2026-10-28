@@ -2000,7 +2000,7 @@ function VaultPage({ s, accent, session, isMobile }) {
 // render and lose its filters and in-flight state.
 const INBOX_KINDS = [
   { id: "chase", label: "Chase", tone: "#ef4444", blurb: "Promised and overdue, or asked and unanswered" },
-  { id: "reply", label: "Needs your reply", tone: "#f59e0b", blurb: "Drafts are in Outlook — fill the [brackets] and send" },
+  { id: "reply", label: "Needs your reply", tone: "#f59e0b", blurb: "Drafts are in Outlook, signed and ready — check and send" },
   { id: "proposal", label: "Fee proposals", tone: "#0ea5e9", blurb: "Quote requests — draft the quote, check the fee, send" },
   { id: "deadline", label: "Deadlines", tone: "#3b82f6", blurb: "Council, Planning Portal and certifier dates" },
   { id: "money", label: "Money", tone: "#10b981", blurb: "Payments to record, remittances, approvals" },
@@ -2183,6 +2183,12 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
   const runTone = lastRun ? (lastRun.status === "ok" ? "#059669" : lastRun.status === "partial" ? "#d97706" : "#b91c1c") : "#94a3b8";
   const counts = lastRun?.counts && typeof lastRun.counts === "object" ? lastRun.counts : {};
   const countChips = INBOX_KINDS.map((k) => ({ ...k, n: Number(counts[k.id] || 0) })).filter((k) => k.n > 0);
+  // The run's own verification list (migration 0032): what it read back as
+  // completed, partial or failed. Shown so a clean-looking run can't hide a
+  // draft that wasn't created or a file that didn't land.
+  const qaRows = Array.isArray(lastRun?.qa) ? lastRun.qa.filter((q) => q && typeof q === "object") : [];
+  const qaCount = (r) => qaRows.filter((q) => q.result === r).length;
+  const qaFlagged = qaRows.filter((q) => q.result !== "completed");
 
   const pill = (id, label) => {
     const active = kind === id;
@@ -2236,6 +2242,7 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
               {linkBtn("Open draft", it.draft_link)}
               {linkBtn("Open email", it.email_link)}
+              {linkBtn("Open file", it.file_link)}
               {doc && onOpenDoc && actBtn(`Open ${doc.type === "quote" ? "quote" : "invoice"}${doc.number ? ` ${doc.number}` : ""}`, () => onOpenDoc(doc))}
               {it.kind === "money" && !done && onMarkPaid && doc && doc.type !== "quote" && !["paid", "cancelled", "superseded"].includes(doc.status) && <button type="button" disabled={isBusy} onClick={() => markPaid(it, doc)} title="Mark the invoice paid in Bookkeeper — the row closes itself" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4, color: "#059669", borderColor: "#a7f3d0" }}><Icons.Check /> Mark paid</button>}
               {it.kind === "proposal" && !it.invoice_id && !done && <button type="button" disabled={isBusy} onClick={() => draftQuote(it)} title="Create the draft quote in Bookkeeper from the job's quote type" style={{ ...s.btnOutline, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}><Icons.Plus /> {isBusy ? "Drafting…" : "Draft quote"}</button>}
@@ -2299,6 +2306,15 @@ function InboxPage({ s, accent, session, isMobile, division, jobs, docs, onOpenJ
               </div>
               {lastRun.summary && <div style={{ fontSize: 13, color: "#334155", marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.45 }}>{lastRun.summary}</div>}
               {lastRun.error && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastRun.error}</div>}
+              {qaRows.length > 0 && (
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 8 }}>
+                  <span style={{ fontWeight: 600, color: "#0f172a" }}>Checked after the run</span>
+                  <span style={{ color: "#cbd5e1" }}> · </span><span style={{ color: "#059669" }}>{qaCount("completed")} completed</span>
+                  <span style={{ color: "#cbd5e1" }}> · </span><span style={{ color: qaCount("partial") ? "#b45309" : "#94a3b8" }}>{qaCount("partial")} partial</span>
+                  <span style={{ color: "#cbd5e1" }}> · </span><span style={{ color: qaCount("failed") ? "#b91c1c" : "#94a3b8" }}>{qaCount("failed")} failed</span>
+                  {qaFlagged.map((q, i) => <div key={i} style={{ marginTop: 3, color: q.result === "failed" ? "#b91c1c" : "#b45309" }}>{[q.action, q.ref].filter(Boolean).join(" · ")}{q.evidence ? ` — ${q.evidence}` : ""}</div>)}
+                </div>
+              )}
               {countChips.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
                   {countChips.map((k) => <span key={k.id} style={{ ...s.badge(k.tone, "outline"), display: "inline-flex", gap: 5, alignItems: "center" }}><span style={{ width: 6, height: 6, borderRadius: 3, background: k.tone }} />{k.n} {k.label.toLowerCase()}</span>)}

@@ -1,7 +1,7 @@
 # BookKeeper — AI handoff
 
 Current state, work in progress, known bugs and next tasks. Rewrite the
-sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
+sections rather than appending forever. Last updated: 2026-10-28 (Sydney).
 
 ## Status
 
@@ -15,7 +15,7 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   proposal rows); then **items follow their documents** (`0030`: trigger on
   `bk_invoices`, "Mark paid" on money rows, lead folders from the Draft quote
   button).
-- Live database: 0027 to 0031 are applied (27 Oct 2026).
+- Live database: 0027 to 0032 are applied (0032 on 28 Oct 2026).
 - Scheduled runs ("Mworx morning inbox" ~7:12am, "Mworx close-off" ~4:16pm
   Sydney) updated 27 Oct: they set `focus`, raise `proposal` items with a
   holding reply, call `bk_draft_quote_from_proposal` for each open proposal
@@ -45,6 +45,28 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
   closed. `bk_jobs` has unique indexes on (business_id, job_number) and on
   the lower-cased name per business; the draft-quote function now falls back
   to the address, then the number, when a lead name is taken.
+- Quality pass (28 Oct): an audit of the live drafts and run output found
+  (1) no run-made draft carried a signature — the run's TAA chase went out
+  from Michel's phone on 27 Oct 11:40pm with no signature and stray spaces,
+  because Outlook never adds a signature to a Graph-created draft; (2)
+  placeholders ("[day]", "$[fee] + GST", "[Fee proposal attached.]") in three
+  drafts, one claiming an attachment that cannot exist; (3) the TAA chase
+  item said "You chased 27 Oct (7:28am)" for what was only the run's own
+  draft (drafts surface in recipient searches); (4) filed / created / drafted
+  was only ever reported from intention, never read back. Fixes: migration
+  0032 (`file_link`, `qa`, `bk_inbox_run_qa`, null-clearing links) applied
+  live; both prompts rewritten — a DRAFTS section (approved signature from
+  `docs/email-signature.html`, no placeholders, no attachment claims, one
+  draft per thread, read-back of every draft before it is linked, shared-
+  mailbox mail as an item carrying the wording), filing verified at the
+  destination before a `file` item, a QA entry per action as the run's last
+  write, and a "Checked:" line in the message. Live clean-up: the Seda and
+  Sarah holding replies re-made with the signature and no placeholders, the
+  stale TAA draft (a duplicate of what he sent) removed, the chase item
+  corrected. A test draft "Signature test — do not send" is in info@ Drafts
+  for Michel to view in Outlook and delete. The NKD draft of 26 Oct ("$[fee]
+  + GST … [Fee proposal attached.]") belongs to an item he dismissed, so it
+  was left for him.
 
 ## In progress — Inbox
 
@@ -55,6 +77,10 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
 - [ ] First run after the deploy: check the Focus card, that ticking Done stops
       an item being re-raised, and that a proposal item lands with a draft
       quote linked ("Open quote") and a holding reply in Drafts.
+- [ ] First runs on the 28 Oct prompts (morning 29 Oct, close-off 29 Oct):
+      the run row has `qa` entries and the message a "Checked:" line; every
+      new draft ends with the signature once and has no brackets; a filed
+      file has "Open file"; nothing was reported that was not read back.
 
 ## Known issues / debt
 
@@ -74,6 +100,20 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
 - No quote type has a `lump_amount`, so a drafted quote's fee is the run's
   suggestion from comparable accepted / sent quotes (or 0 = "price it").
   Setting `lump_amount` on a quote type makes that fee fixed.
+- The Microsoft 365 connector cannot create a draft in accounts@ or energy@
+  (the draft tools have no mailbox / From parameter — every draft is from
+  info@), cannot attach a file or image to a draft, and rejects `style` /
+  `class` / `id` attributes, so the Outlook signature's logo, fonts and
+  green bar cannot be reproduced; the text signature in
+  `docs/email-signature.html` is the agreed stand-in. Full fidelity (logo,
+  attachments, sending as a shared mailbox) needs a Bookkeeper-side Graph
+  call: the app already holds a delegated token with `Mail.ReadWrite
+  Mail.Send` (`netlify/functions/send-invoice-outlook.mjs`), so an
+  `inbox-draft` function could create the draft with the inline logo and
+  attach the quote PDF from OneDrive, and the runs would call it over HTTPS
+  with a secret. Sending as accounts@ / energy@ also needs "Send As" on each
+  shared mailbox from the Microsoft 365 admin centre. Neither is done:
+  Michel's approval needed.
 
 ## Next tasks (ideas, not committed)
 
@@ -81,3 +121,7 @@ sections rather than appending forever. Last updated: 2026-10-27 (Sydney).
 - Inbox: snooze (hide until a date) for deadlines.
 - Proposals: attach the quote PDF to the holding reply once Michel has
   approved the fee (needs a "fee approved" step; deliberately not automatic).
+- Inbox: `inbox-draft` Netlify function (Graph, Bookkeeper's own token) so
+  run drafts carry the real Outlook signature with the logo and can attach
+  the quote PDF from OneDrive; then Send As for the shared mailboxes. Needs
+  approval.

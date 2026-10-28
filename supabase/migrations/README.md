@@ -45,6 +45,12 @@ These SQL files document the schema/constraints/RLS the app relies on.
   make, as functions called with SELECT. The Supabase connector stops raw
   UPDATE / upsert statements for a confirmation a scheduled run cannot give
   (the 27 Oct close-off wrote nothing because of it). Re-runnable.
+- `0032_inbox_quality.sql` — `bk_inbox_items.file_link` (OneDrive link of a
+  filed file), `bk_inbox_runs.qa` and `bk_inbox_run_qa` (the run's own
+  verification list as its last write — completed / partial / failed per
+  action; moves an `ok` run to `partial` when anything is not completed), and
+  `bk_inbox_write_items` clearing a link passed as JSON null. Re-runnable, no
+  drops.
 
 ## Urgent: apply 0007–0010 to live project
 

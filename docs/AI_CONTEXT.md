@@ -41,7 +41,7 @@ invoices share the table via `type`) · `bk_quote_templates`, `bk_scope_lines` �
 `bk_transactions`, `bk_receipts`, `bk_reconciliations`, `bk_category_rules` ·
 `bk_email_connections` (Outlook OAuth tokens), `bk_oauth_states` ·
 `bk_reminder_log` · `bk_vaults`, `bk_vault_items` (zero-knowledge) ·
-`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0031).
+`bk_myob_connections` · **`bk_inbox_items`, `bk_inbox_runs`** (migrations 0027–0032).
 
 ## Inbox (Oct 2026)
 
@@ -92,8 +92,10 @@ give, and the 27 Oct close-off wrote nothing because of it.
   a quote sent / accepted marks its `proposal` item done (declined →
   dismissed); an invoice sent / paid marks its `money` item done (superseded /
   cancelled → dismissed). "Mark paid" on a money row uses it. The runs close a
-  `reply` / `chase` item only when info@ Sent Items shows a message in that
-  conversation after the item was raised (a vanished draft is not evidence).
+  `reply` item only when info@ Sent Items shows a message in that conversation
+  after the item was raised (a vanished draft is not evidence); a `chase` stays
+  open until what was chased arrives — a chase Michel has sent refreshes the
+  detail ("chased 27 Oct") and drops the draft link.
 - `dedupe_key` is unique per user (`reply:<internetMessageId>`,
   `chase:<conversationId>:<promised_at>`, `file:<OneDrive path>` …). Runs upsert
   on it and only touch rows still `open`.
@@ -104,8 +106,36 @@ give, and the 27 Oct close-off wrote nothing because of it.
   `inboxOpen` list (`fetchInboxOpen`, which falls back to the 0027 columns
   until 0028 is applied) for the badge and dashboard and refreshes it via
   `refreshInbox` after a change. Rows link to the Outlook draft/email
-  (`draft_link`, `email_link`), to the job (`job_id` → opens the project) and
-  to the invoice or quote (`invoice_id` → opens the document).
+  (`draft_link`, `email_link`), to the filed file (`file_link`, "Open file"),
+  to the job (`job_id` → opens the project) and to the invoice or quote
+  (`invoice_id` → opens the document).
+- **Drafts are ready to send** (28 Oct 2026): every run-made draft is a reply
+  draft on the message (full history quoted, threaded), one `<p>` per
+  paragraph, in Michel's voice, and ends with the approved text signature in
+  `docs/email-signature.html` (Regards / Michael T. / mobile / website link /
+  disclaimer) — once, never a bare "Regards, Michael T.". No `[placeholders]`,
+  no fee or date he hasn't written, nothing "attached" (the connector cannot
+  attach), one draft per thread, and the run reads every draft back before it
+  links it. Why text only: the Microsoft 365 connector rejects any `style` /
+  `class` / `id` attribute and any image, so the Outlook signature's green
+  bar, fonts and logo cannot be reproduced; and Outlook never adds a
+  signature to a Graph-created draft, even when it is sent from Outlook
+  (the 27 Oct TAA chase went out with none). Drafts can only be created in
+  info@ (the draft tools have no mailbox / From parameter), so accounts@ /
+  energy@ mail gets a `reply` item with the suggested wording in `detail`,
+  and an email that must carry a document gets an item saying what to attach
+  (with `file_link`) instead of a draft.
+- **Runs verify themselves** (migration 0032): `bk_inbox_items.file_link` (the
+  OneDrive webUrl of a filed file — a file is "filed" only once the run has
+  seen it at its destination), `bk_inbox_runs.qa` (one entry per action —
+  draft, file, folder, quote, items, done — with `completed` / `partial` /
+  `failed` and the evidence read back), written by `bk_inbox_run_qa(run_id,
+  qa)` as the run's last write; it adds its own findings (a proposal with no
+  quote, a draft with no link, a filed item with no file link) and moves an
+  `ok` run to `partial` when anything is not completed. "Last run" on the
+  Inbox page shows the counts and the flagged entries; the run's message
+  carries a "Checked:" line from the same numbers. `bk_inbox_write_items`
+  now clears a link passed as JSON null (omitted or empty keeps it).
 
 ## Numbering
 
