@@ -144,7 +144,10 @@ if (want("drafts") || want("unread")) {
     const att = sc.attachments?.[0];
     if (att && drive && process.env.TEST_SKIPPED_FOLDER_ID) {
       const af = await call({ op: "attachment_fetch", mailbox, message_id: id, attachment_id: att.id, drive_id: drive, folder_id: process.env.TEST_SKIPPED_FOLDER_ID });
-      record(`${mailbox}: attachment_fetch files the test attachment into _Skipped and leaves isRead as found`, af.ok && af.filed && af.read_state?.unchanged, { name: af.name, size: af.size, checks: af.checks, read_state: af.read_state, error: af.error, detail: af.detail });
+      record(`${mailbox}: attachment_fetch files the test attachment into _Skipped and leaves isRead as found`, af.ok && (af.filed || af.duplicate) && af.read_state?.unchanged, { name: af.name, size: af.size, checks: af.checks, read_state: af.read_state, error: af.error, detail: af.detail });
+      // Graph's attachment "size" counts the encoded attachment, not the file: verify against the bytes the API stored.
+      const stored = af.item || af.existing;
+      if (stored?.id) { const v = await call({ op: "file_verify", drive_id: drive, item_id: stored.id, expect_size: af.size, folder_id: process.env.TEST_SKIPPED_FOLDER_ID }); record(`${mailbox}: the stored attachment reads back as a complete file`, v.ok, { checks: v.checks, type: v.type, end_of_file: v.end_of_file }); }
     }
     if (want("drafts")) {
       const dr = await call({ op: "draft", mailbox, mode: "reply", message_id: id, html: "<p>Hi,</p><p>This is an unsent test draft made by the Inbox API to check the signature and the read state. Please do not send it.</p>", allow_existing: true });
