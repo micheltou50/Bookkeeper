@@ -2,7 +2,8 @@
 // checked afterwards. Pure functions (no network), so scripts/inbox-api-test.mjs
 // exercises them offline; inbox-api.mjs is the only other caller.
 
-import { signatureHtml, SIGNATURE_PHONE, LOGO_CID, LINE_CID } from "./signature.mjs";
+import { signatureHtml, signatureAttachments, SIGNATURE_PHONE, LOGO_CID, LINE_CID } from "./signature.mjs";
+const [LOGO_NAME, LINE_NAME] = signatureAttachments().map((a) => a.name);
 
 export const MAX_HTML_CHARS = 20000;
 
@@ -73,13 +74,17 @@ export function verifyDraftBody(body, attachments = []) {
   const top = newPartOf(body);
   const topText = textOf(top);
   const inline = (attachments || []).filter((a) => a && a.isInline);
-  const has = (cid) => inline.some((a) => String(a.contentId || "") === cid);
+  // Graph's attachment listing cannot $select contentId (it lives on the
+  // fileAttachment subtype, and the collection is typed as attachment), so an
+  // inline image is recognised by its content id when the caller has it, else
+  // by the name the signature gives it.
+  const has = (cid, name) => inline.some((a) => String(a.contentId || "") === cid || a.name === name);
   const checks = {
     signature_once: count(top, SIGNATURE_PHONE) === 1,
     logo_referenced: top.includes(`cid:${LOGO_CID}`),
     line_referenced: top.includes(`cid:${LINE_CID}`),
-    logo_attached: has(LOGO_CID),
-    line_attached: has(LINE_CID),
+    logo_attached: has(LOGO_CID, LOGO_NAME),
+    line_attached: has(LINE_CID, LINE_NAME),
     no_placeholders: !/[\[\]]/.test(topText),
     has_text: topText.length > 0,
   };

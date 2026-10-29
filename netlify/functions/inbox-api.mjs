@@ -216,7 +216,7 @@ async function settleReadState(session, box, messageId, before) {
 async function readDraft(session, box, draftId) {
   const batch = await session.call("POST", `${GRAPH}/$batch`, { body: { requests: [
     { id: "m", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${enc(draftId)}?$select=${MESSAGE_SELECT},body` },
-    { id: "a", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${enc(draftId)}/attachments?$select=id,name,size,isInline,contentId,contentType` },
+    { id: "a", method: "GET", url: `${box.base.replace(GRAPH, "")}/messages/${enc(draftId)}/attachments?$select=id,name,size,isInline,contentType` },
   ] } });
   const res = Object.fromEntries((batch?.responses || []).map((r) => [r.id, r]));
   if (!res.m || res.m.status >= 400) throw new GraphError(res.m?.status || 500, res.m?.body, "read draft");
@@ -314,7 +314,7 @@ async function opMessageRead(auth, p) {
   if (s.error) return fail(401, s.error, s.detail);
   if (box.shared && !s.sharedOk) return fail(403, "shared_mailbox_scope_missing", `Reconnect Outlook in Bookkeeper to grant ${SHARED_SCOPE}`);
   const msg = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=${MESSAGE_SELECT},body`);
-  const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentId,contentType`);
+  const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentType`);
   const body = String(msg.body?.content || "");
   const read_state = await settleReadState(s, box, p.message_id, !!msg.isRead);
   return json({ ok: true, message: { id: msg.id, subject: msg.subject, is_draft: msg.isDraft, is_read: !!msg.isRead, conversation_id: msg.conversationId, from: recipients([msg.from])[0], to: recipients(msg.toRecipients), cc: recipients(msg.ccRecipients), received: msg.receivedDateTime, web_link: msg.webLink }, body_html: body.slice(0, MAX_BODY_BYTES), body_truncated: body.length > MAX_BODY_BYTES, attachments: (atts?.value || []).map((a) => ({ id: a.id, name: a.name, size: a.size, inline: !!a.isInline, content_id: a.contentId || null, content_type: a.contentType })), read_state });
@@ -580,7 +580,7 @@ async function opLinksScan(auth, p) {
   let msg;
   try { msg = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}?$select=${MESSAGE_SELECT},body`); }
   catch (e) { if (e instanceof GraphError && e.status === 404) return fail(404, "message_not_found"); throw e; }
-  const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentId,contentType`);
+  const atts = await s.call("GET", `${box.base}/messages/${enc(p.message_id)}/attachments?$select=id,name,size,isInline,contentType`);
   const body = String(msg.body?.content || "");
   const links = extractLinks(body).map((l) => publicLink(classifyLink(l.href, l.text)));
   const attachments = (atts?.value || []).map(classifyAttachment);

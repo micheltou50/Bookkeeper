@@ -73,11 +73,16 @@ function offline() {
     const twice = composeNewPart("<p>Hi</p>") + signatureHtml();
     assert(!verifyDraftBody(twice, atts).checks.signature_once, "two signatures");
     assert(!verifyDraftBody(composeNewPart("<p>Hi</p>"), [atts[0]]).checks.line_attached, "line image not attached");
+    // Graph's listing gives no contentId: the inline images are recognised by name.
+    const byName = verifyDraftBody(composeNewPart("<p>Hi</p>"), signatureAttachments().map((a) => ({ isInline: true, name: a.name })));
+    assert(byName.checks.logo_attached && byName.checks.line_attached, "inline images recognised by name");
+    assert(!verifyDraftBody(composeNewPart("<p>Hi</p>"), [{ isInline: false, name: "mworx-logo.png" }]).checks.logo_attached, "a non-inline file is not the logo");
     assert(!verifyDraftBody(composeNewPart("<p>Hi [day]</p>"), atts).checks.no_placeholders, "placeholder");
     eq(fileAttachmentsOf([...atts, { id: "1", name: "plan.pdf", size: 10, isInline: false }]).map((f) => f.name), ["plan.pdf"]);
   });
   test("the function has no path that sends mail, and never writes a message's read flag", () => {
     const src = fs.readFileSync(path.join(here, "../netlify/functions/inbox-api.mjs"), "utf8");
+    assert(!/\$select=[^"`]*contentId/.test(src), "attachment listings must not $select contentId (Graph rejects it on the attachment collection)");
     for (const s of ["/send", "sendMail", "microsoft.graph.send", "/reply\"", "/forward"]) assert(!src.includes(s), `source contains ${s}`);
     assert(src.includes("never_sends: true"), "ping reports never_sends");
     // isRead is only ever read ($select) and reported; no object literal or
