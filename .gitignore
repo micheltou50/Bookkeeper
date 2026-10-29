@@ -6,3 +6,6 @@ dist
 
 # Local Netlify folder
 .netlify
+
+# browser regression output (scripts/regression/ui-flows.mjs)
+regression-out/

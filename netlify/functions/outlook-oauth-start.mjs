@@ -62,7 +62,11 @@ const handler = async (req) => {
   authUrl.searchParams.set("client_id", CLIENT_ID);
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
-  authUrl.searchParams.set("scope", "offline_access User.Read Mail.Send Mail.ReadWrite Files.ReadWrite");
+  // Mail.ReadWrite.Shared (added 28 Oct 2026) lets the Inbox API draft in the
+  // shared mailboxes accounts@ and energy@; it is granted only when Outlook is
+  // reconnected here, and the invoice/OneDrive functions keep refreshing with
+  // the scopes a connection already holds.
+  authUrl.searchParams.set("scope", "offline_access User.Read Mail.Send Mail.ReadWrite Mail.ReadWrite.Shared Files.ReadWrite");
   authUrl.searchParams.set("response_mode", "query");
   authUrl.searchParams.set("state", nonce);
   authUrl.searchParams.set("prompt", "consent");

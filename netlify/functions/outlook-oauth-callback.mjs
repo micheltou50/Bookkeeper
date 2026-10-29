@@ -54,7 +54,7 @@ export default async (req) => {
         code,
         redirect_uri: REDIRECT_URI,
         grant_type: "authorization_code",
-        scope: "offline_access User.Read Mail.Send Mail.ReadWrite Files.ReadWrite",
+        scope: "offline_access User.Read Mail.Send Mail.ReadWrite Mail.ReadWrite.Shared Files.ReadWrite",
       }),
     });
 
